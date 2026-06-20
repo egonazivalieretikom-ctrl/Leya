@@ -1,0 +1,3 @@
+FROM qwen2.5:14b
+PARAMETER num_ctx 8192
+PARAMETER keep_alive -1
