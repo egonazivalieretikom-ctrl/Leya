@@ -24,7 +24,7 @@ class Goal:
         self.last_strategy: Optional[str] = None
         self.last_strategy_time: float = 0.0
         self.deferred_until: float = 0.0
-        self.source: str = "core"  # core | emergent | user
+        self.source: str = "core"
     
     def to_dict(self) -> Dict:
         return {
@@ -61,6 +61,8 @@ class GoalDirectedPlanner:
     - Базовые цели задают направление
     - Новые цели возникают из контекста (упоминания Влада)
     - Цели сохраняются между сессиями
+    
+    v0.9: Когнитивный замок + тихий режим.
     """
     
     GOALS_FILE = "./leya_goals.json"
@@ -71,14 +73,14 @@ class GoalDirectedPlanner:
         self.llm = LLMClient(model="ollama/qwen2.5:14b")
         self.goals: List[Goal] = []
         
-        # 🆕 Загружаем цели из файла или инициализируем базовые
+        # Загружаем цели из файла или инициализируем базовые
         self._load_goals()
         
         log.info("🎯 Goal-Directed Planner initialized (LLM Reasoning)", 
                  total_goals=len(self.goals))
     
     # ========================================================================
-    # 🆕 ПЕРСИСТЕНТНОСТЬ ЦЕЛЕЙ
+    # ПЕРСИСТЕНТНОСТЬ ЦЕЛЕЙ
     # ========================================================================
     
     def _load_goals(self):
@@ -119,17 +121,11 @@ class GoalDirectedPlanner:
         ]
     
     # ========================================================================
-    # 🆕 ДИНАМИЧЕСКОЕ ДОБАВЛЕНИЕ ЦЕЛЕЙ
+    # ДИНАМИЧЕСКОЕ ДОБАВЛЕНИЕ ЦЕЛЕЙ
     # ========================================================================
     
     async def analyze_context_for_new_goals(self, context: List[Dict]) -> Optional[str]:
-        """
-        Анализирует контекст и предлагает новые цели.
-        
-        Биология: Аналог дофаминергического "хотения" — когда появляется
-        новый стимул, мозг формирует новую цель.
-        """
-        # Берём последние сообщения Влада
+        """Анализирует контекст и предлагает новые цели."""
         user_messages = [
             e.get("content", "") for e in context[-10:]
             if isinstance(e, dict) and e.get("type") == "user_command"
@@ -170,8 +166,7 @@ class GoalDirectedPlanner:
             
             if response.startswith("ДА:"):
                 new_goal_desc = response[3:].strip()
-                # Добавляем новую цель
-                new_goal = Goal(new_goal_desc, priority=7, )
+                new_goal = Goal(new_goal_desc, priority=7)
                 new_goal.source = "emergent"
                 self.goals.append(new_goal)
                 self._save_goals()
@@ -194,13 +189,21 @@ class GoalDirectedPlanner:
     # ========================================================================
     
     async def generate_background_task(self) -> Optional[Dict[str, Any]]:
-
-        # 🆕 ТИХИЙ РЕЖИМ: Если Влад активен, не генерируем фоновые задачи
+        """
+        Генерирует фоновую задачу через LLM-рассуждение.
+        
+        v0.9: Проверка когнитивного замка + тихий режим.
+        """
+        # 🆕 ПРОВЕРКА ЗАМКА: Если идёт генерация ответа — не генерируем задачи
+        if self.state.is_thinking:
+            log.debug("🔒 Planner paused (cognition locked)")
+            return None
+        
+        # Тихий режим: если Влад активен, не генерируем фоновые задачи
         if self.state.is_user_active(window_minutes=5):
             log.debug("🤫 Planner silent mode (user active in last 5 min)")
             return None
-
-        """Генерирует фоновую задачу через LLM-рассуждение."""
+        
         now = time.time()
         
         ready_goals = [

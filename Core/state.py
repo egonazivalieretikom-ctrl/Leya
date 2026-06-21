@@ -1,7 +1,7 @@
 import time
 from enum import Enum
 from typing import Dict, List, Optional
-
+from Core.logger import log
 
 class EmotionalState(str, Enum):
     """Эмерджентные эмоциональные состояния Leya."""
@@ -48,11 +48,16 @@ class LeyaState:
         self.last_update = time.time()
         
         # 🆕 СОЦИАЛЬНЫЙ КОНТЕКСТ (v0.7)
-        self.session_start_time = time.time()       # Время начала текущей сессии
-        self.has_greeted_today = False              # Здоровалась ли уже в этой сессии
-        self.last_user_interaction_time = 0.0       # Когда Влад последний раз писал
-        self.last_response_time = 0.0               # Когда Leya последний раз ответила
-        self.conversation_turn_count = 0            # Количество реплик в диалоге
+        self.session_start_time = time.time()
+        self.has_greeted_today = False
+        self.last_user_interaction_time = 0.0
+        self.last_response_time = 0.0
+        self.conversation_turn_count = 0
+        
+        # 🆕 КОГНИТИВНЫЙ ЗАМОК (v0.9)
+        self.is_thinking = False           # Блокировка фоновых процессов во время генерации
+        self.dialog_mode_active = False    # Жёсткий режим диалога (без приветствий)
+        self.dialog_mode_timeout = 300.0   # 5 минут без сообщений → сброс режима
         
         # ====================================================================
         # НЕЙРОМЕДИАТОРЫ И ГОРМОНЫ
@@ -230,6 +235,39 @@ class LeyaState:
             "endorphins": self.endorphins,
             "gaba": self.gaba,
         }
+
+
+    # ========================================================================
+    # 🆕 КОГНИТИВНЫЙ ЗАМОК (v0.9)
+    # ========================================================================
+    
+    def lock_cognition(self):
+        """Блокирует фоновые процессы (Stream, DMN, Planner) во время генерации."""
+        self.is_thinking = True
+        log.debug("🔒 Cognition locked (generating response)")
+    
+    def unlock_cognition(self):
+        """Разблокирует фоновые процессы после генерации."""
+        self.is_thinking = False
+        log.debug("🔓 Cognition unlocked")
+    
+    def activate_dialog_mode(self):
+        """Активирует жёсткий режим диалога (без приветствий)."""
+        self.dialog_mode_active = True
+        log.info("💬 Dialog mode activated (no greetings)")
+    
+    def check_dialog_mode_timeout(self):
+        """Проверяет, не пора ли сбросить режим диалога."""
+        if not self.dialog_mode_active:
+            return
+        
+        if self.last_user_interaction_time == 0:
+            return
+        
+        elapsed = time.time() - self.last_user_interaction_time
+        if elapsed > self.dialog_mode_timeout:
+            self.dialog_mode_active = False
+            log.info("💬 Dialog mode deactivated (timeout)")
 
     # ========================================================================
     # 🆕 ПЕРСИСТЕНТНОСТЬ ЧЕРТ ЛИЧНОСТИ

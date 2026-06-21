@@ -40,10 +40,14 @@ class StreamOfConsciousness:
         """
         Генерирует одну мысль из потока сознания.
         
-        v0.7: Дедупликация — если мысль похожа на недавние, отменяем генерацию.
-        Биология: Аналог "адаптации нейронов" — мозг не генерирует одинаковые
-        сигналы подряд, это было бы расточительно.
+        v0.9: Проверяет когнитивный замок — если Leya генерирует ответ,
+        поток сознания приостанавливается.
         """
+        # 🆕 ПРОВЕРКА ЗАМКА: Если идёт генерация ответа — не генерируем мысли
+        if self.state.is_thinking:
+            log.debug("🔒 Stream paused (cognition locked)")
+            return None
+        
         now = time.time()
         
         if (now - self.last_stream_time) < self.stream_interval:
@@ -58,21 +62,15 @@ class StreamOfConsciousness:
             if not thought:
                 return None
             
-            # 🆕 ДЕДУПЛИКАЦИЯ: Проверяем схожесть с недавними мыслями
+            # Дедупликация
             if self._is_thought_duplicate(thought):
-                log.debug("🔄 Thought duplicate detected, skipping", thought=thought[:50])
+                log.debug("🔄 Thought duplicate detected, skipping")
                 return None
             
-            # Применяем эмоциональную обратную связь
             await self._apply_emotional_feedback(thought)
-            
-            # Сохраняем в память
             self._save_to_memory(thought)
-            
-            # Публикуем в UI
             await event_bus.publish("stream_thought", {"text": thought})
             
-            # Обновляем историю
             self.recent_thoughts.append(thought)
             if len(self.recent_thoughts) > 10:
                 self.recent_thoughts.pop(0)

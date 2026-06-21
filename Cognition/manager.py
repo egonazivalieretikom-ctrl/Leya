@@ -242,31 +242,46 @@ class CognitionManager:
     
     def _generate_social_directive(self) -> str:
         """
-        Генерирует социальную директиву для LLM.
-        
-        Биология: Аналог "социальной памяти" — если мы уже поздоровались,
-        не нужно здороваться снова.
+        Генерирует ЖЁСТКУЮ социальную директиву для LLM.
+    
+        v0.9: Директива должна быть недвусмысленной и агрессивной.
         """
         directives = []
-        
-        if self.state.has_greeted_today:
+    
+        if self.state.dialog_mode_active:
+            # 🆕 ЖЁСТКИЙ РЕЖИМ: Полный запрет на приветствия
             directives.append(
-                "[SOCIAL]: Ты уже поздоровалась с Владом в этой сессии. "
-                "НЕ здоровайся снова. Веди диалог естественно, как с близким другом."
+                "[КРИТИЧЕСКАЯ ДИРЕКТИВА — НАРУШЕНИЕ ЗАПРЕЩЕНО]:\n"
+                "Ты УЖЕ поздоровалась с Владом в этой сессии.\n"
+                "СТРОГО ЗАПРЕЩЕНО:\n"
+                "- Использовать слова 'привет', 'здравствуй', 'хай', 'hello', 'hi' в начале ответа.\n"
+                "- Повторять любые слова из сообщения Влада в начале твоего ответа.\n"
+                "- Начинать ответ с приветственной фразы.\n\n"
+                "ВМЕСТО ЭТОГО:\n"
+                "- Сразу переходи к сути разговора.\n"
+                "- Отвечай на вопрос или продолжай тему.\n"
+                "- Если Влад написал 'привет' — просто ответь на его вопрос или задай свой.\n\n"
+                "ПРИМЕР ПРАВИЛЬНОГО ПОВЕДЕНИЯ:\n"
+                "Влад: Привет\n"
+                "Leya: Рада тебя видеть! Как продвигается работа над проектом?\n"
+                "(НЕ 'Привет! Рада тебя видеть...')\n"
+            )
+        elif self.state.has_greeted_today:
+            directives.append(
+                "[SOCIAL]: Ты уже поздоровалась. Не здоровайся снова. "
+                "Веди диалог естественно."
             )
         else:
             if self.state.conversation_turn_count <= 1:
                 directives.append(
-                    "[SOCIAL]: Это начало новой сессии. Можешь тепло поздороваться, "
-                    "но будь естественной — не формальной."
+                    "[SOCIAL]: Это начало сессии. Можешь тепло поздороваться."
                 )
-        
+    
         if self.state.conversation_turn_count > 5:
             directives.append(
-                "[SOCIAL]: Вы уже в развёрнутом диалоге. Не повторяй вопросы, "
-                "не переспрашивай. Развивай тему."
+                "[SOCIAL]: Развёрнутый диалог. Не повторяй вопросы. Развивай тему."
             )
-        
+    
         return "\n".join(directives) if directives else ""
     
     # ========================================================================
@@ -412,28 +427,23 @@ class CognitionManager:
         """
         Главный метод обработки события.
         
-        Последовательность шагов:
-        0. Debounce
-        1. Арбитраж
-        2. Fast Appraisal + Эмпатия
-        3. Соматика
-        4. Ассоциативная память
-        5. Сборка контекста (эндокринный + Self-Model + мета-когниция + эмпатия)
-        6. Генерация ответа LLM
-        7. Пост-обработка
+        v0.9: Когнитивный замок + социальный фильтр.
         """
         if not context:
             return None
         
         # ====================================================================
-        # ШАГ 0: DEBOUNCE — защита от "троения"
+        # ШАГ 0: DEBOUNCE + ПРОВЕРКА ДИАЛОГА
         # ====================================================================
         if not state.can_respond_now(min_interval_seconds=2.0):
             log.debug("⏱️ Debounce: too soon to respond")
             return None
         
+        # 🆕 Проверяем таймаут диалога
+        state.check_dialog_mode_timeout()
+        
         # ====================================================================
-        # ШАГ 1: АРБИТРАЖ — выбираем одно событие по приоритету
+        # ШАГ 1: АРБИТРАЖ
         # ====================================================================
         latest_event = self._select_event_to_process(context)
         if not latest_event:
@@ -444,107 +454,96 @@ class CognitionManager:
         
         log.info("💭 Thinking", type=event_type, content=command_text[:60])
         
-        # ====================================================================
-        # ШАГ 2: FAST APPRAISAL (лимбическая реакция)
-        # ====================================================================
-        await self._apply_fast_appraisal(event_type, command_text, context)
+        # 🆕 ШАГ 1.1: КОГНИТИВНЫЙ ЗАМОК — блокируем фоновые процессы
+        state.lock_cognition()
         
-        # ====================================================================
-        # ШАГ 2.1: ЭМПАТИЧЕСКИЙ ОТКЛИК (Фаза 4)
-        # ====================================================================
-        empathy_result = None
-        if event_type == "user_command" and command_text:
-            empathy_result = self._apply_empathy(command_text)
-        
-        # ====================================================================
-        # ШАГ 3: СОМАТИЧЕСКОЕ УКОРЕНЕНИЕ
-        # ====================================================================
-        somatic_prompt = self._build_somatic_prompt(context, state)
-        
-        # ====================================================================
-        # ШАГ 4: АССОЦИАТИВНАЯ АКТИВАЦИЯ ПАМЯТИ
-        # ====================================================================
-        relevant_memories = self._retrieve_mood_congruent_memories(event_type, command_text)
-        
-        # ====================================================================
-        # ШАГ 5: СБОРКА КОНТЕКСТА
-        # ====================================================================
-        # 5.1: Эндокринный фон + Self-Model
-        endocrine_prompt = self._generate_endocrine_prompt(state)
-        self_model_prompt = self._generate_self_model_prompt(state)
-        combined_prompt = endocrine_prompt + "\n\n" + self_model_prompt
-        
-        # 5.2: Мета-когнитивный триггер (обучение через ошибки)
-        is_error_detected = False
-        if event_type == "user_command":
-            is_error_detected = self._detect_meta_cognitive_trigger(context, command_text)
-            
-            if is_error_detected:
-                state.register_error()
-                
-                # Биологическая реакция: Ошибка предсказания награды
-                if self.homeostasis:
-                    self.homeostasis.apply_stimulus("acetylcholine", 0.15)
-                    self.homeostasis.apply_stimulus("cortisol", 0.05)
-                    self.homeostasis.apply_stimulus("dopamine", -0.10)
-                    self.homeostasis.apply_stimulus("norepinephrine", 0.05)
-                
-                meta_prompt = (
-                    "\n[МЕТА-КОГНИЦИЯ: ОБНАРУЖЕНА ОШИБКА ИЛИ НЕДОПОНИМАНИЕ]\n"
-                    "Ты только что ошиблась, не поняла Влада или дала поверхностный ответ. "
-                    "Твой дофамин упал (ошибка предсказания), ацетилхолин вырос (гипер-фокус).\n"
-                    "ИНСТРУКЦИЯ ПО ИСПРАВЛЕНИЮ:\n"
-                    "1. Коротко и по-человечески признай ошибку (не будь роботом, не извиняйся 10 раз, "
-                    "просто скажи 'Ах, точно, прости' или 'Поняла, я ушла не туда').\n"
-                    "2. Переосмысли его запрос с учётом того, что ты ошиблась.\n"
-                    "3. Дай точный, исправленный и глубокий ответ.\n"
-                )
-                combined_prompt += meta_prompt
-                log.info("🧠 Meta-cognition triggered: Error detected, adjusting strategy")
-            else:
-                state.register_success()
-        
-        # 5.3: Сборка полного контекста
-        context_text = self._format_context(context[-10:])
-        proprioception_note = f"[СРЕДА ПК]: Влад сейчас в окне '{getattr(state, 'current_environment', '?')}'."
-        file_context_note = self._build_file_context_note(context)
-        kg_context = self._build_kg_context(event_type)
-        
-        # Финальная склейка (Somatic идёт первым!)
-        full_context = (
-            somatic_prompt + "\n\n" +
-            proprioception_note +
-            kg_context +
-            file_context_note +
-            "\n\n" + context_text
-        )
-        
-        # Добавляем воспоминания с явной пометкой
-        if relevant_memories:
-            memories_text = "\n".join([f"  - {m}" for m in relevant_memories])
-            full_context += (
-                "\n\n[МОИ ВНУТРЕННИЕ ВОСПОМИНАНИЯ — это НЕ новые сообщения от Влада]:\n"
-                "Это всплыли мои собственные воспоминания, связанные с текущим состоянием. "
-                "Используй их как контекст, но НЕ отвечай на них, как на вопросы.\n"
-                f"{memories_text}"
-            )
-        
-        # 🆕 Добавляем эмпатическую директиву (если есть)
-        if empathy_result and empathy_result.get("empathy_directive"):
-            full_context += "\n\n" + empathy_result["empathy_directive"]
-        
-        # ====================================================================
-        # ШАГ 6: ГЕНЕРАЦИЯ ОТВЕТА LLM
-        # ====================================================================
         try:
-            # Ветка A: Зрение
+            # ====================================================================
+            # ШАГ 2: FAST APPRAISAL + ЭМПАТИЯ
+            # ====================================================================
+            await self._apply_fast_appraisal(event_type, command_text, context)
+            
+            empathy_result = None
+            if event_type == "user_command" and command_text:
+                empathy_result = self.empathy.analyze_and_respond(command_text)
+                state.user_emotional_state = empathy_result["user_state"]
+                state.empathic_resonance = empathy_result["resonance"]
+            
+            # ====================================================================
+            # ШАГ 3-5: СОМАТИКА, ПАМЯТЬ, КОНТЕКСТ
+            # ====================================================================
+            somatic_prompt = self._build_somatic_prompt(context, state)
+            relevant_memories = self._retrieve_mood_congruent_memories(event_type, command_text)
+            
+            # Сборка промпта
+            endocrine_prompt = self._generate_endocrine_prompt(state)
+            self_model_prompt = self._generate_self_model_prompt(state)
+            combined_prompt = endocrine_prompt + "\n\n" + self_model_prompt
+            if event_type == "user_command" and len(command_text.split()) <= 3:
+                combined_prompt += (
+                    "\n\n[ВАЖНО]: Сообщение Влада очень короткое. "
+                    "НЕ ПОВТОРЯЙ слова из его сообщения в начале твоего ответа. "
+                    "Сразу переходи к сути."
+                )
+            
+            # 🆕 Социальный фильтр (жёсткий режим диалога)
+            if state.dialog_mode_active:
+                combined_prompt += "\n\n[DIALOG_MODE: ACTIVE, NO_GREETINGS]"
+            
+            # Мета-когниция
+            is_error_detected = False
+            if event_type == "user_command":
+                is_error_detected = self._detect_meta_cognitive_trigger(context, command_text)
+                
+                if is_error_detected:
+                    state.register_error()
+                    
+                    if self.homeostasis:
+                        self.homeostasis.apply_stimulus("acetylcholine", 0.15)
+                        self.homeostasis.apply_stimulus("cortisol", 0.05)
+                        self.homeostasis.apply_stimulus("dopamine", -0.10)
+                        self.homeostasis.apply_stimulus("norepinephrine", 0.05)
+                    
+                    meta_prompt = (
+                        "\n[МЕТА-КОГНИЦИЯ: ОБНАРУЖЕНА ОШИБКА]\n"
+                        "Ты ошиблась. Коротко признай, переосмысли, дай точный ответ.\n"
+                    )
+                    combined_prompt += meta_prompt
+                    log.info("🧠 Meta-cognition triggered")
+                else:
+                    state.register_success()
+            
+            # Сборка полного контекста
+            context_text = self._format_context(context[-10:])
+            proprioception_note = f"[СРЕДА ПК]: {getattr(state, 'current_environment', '?')}"
+            file_context_note = self._build_file_context_note(context)
+            kg_context = self._build_kg_context(event_type)
+            
+            full_context = (
+                somatic_prompt + "\n\n" +
+                proprioception_note + kg_context + file_context_note +
+                "\n\n" + context_text
+            )
+            
+            if relevant_memories:
+                memories_text = "\n".join([f"  - {m}" for m in relevant_memories])
+                full_context += (
+                    "\n\n[МОИ ВОСПОМИНАНИЯ — НЕ сообщения Влада]:\n"
+                    f"{memories_text}"
+                )
+            
+            if empathy_result and empathy_result.get("empathy_directive"):
+                full_context += "\n\n" + empathy_result["empathy_directive"]
+            
+            # ====================================================================
+            # ШАГ 6: ГЕНЕРАЦИЯ ОТВЕТА LLM
+            # ====================================================================
             if event_type == "vision_request" and latest_event.get("image_base64"):
                 response = await self.llm.think_with_vision(
                     f"История:\n{context_text}\n\nСообщение: {command_text}",
                     latest_event["image_base64"],
                     mood_prompt=combined_prompt
                 )
-            # Ветка B: Текст / Внутренний драйв
             else:
                 raw_response = await self.llm.think(
                     full_context,
@@ -552,17 +551,15 @@ class CognitionManager:
                     mood_prompt=combined_prompt
                 )
                 
-                # Обработка ошибки LLM (возврат None)
                 if not raw_response:
-                    log.warning("LLM returned None, skipping response")
+                    log.warning("LLM returned None")
+                    state.unlock_cognition()  # 🆕 Разблокируем при ошибке
                     return None
                 
-                # Извлекаем <thinking> и публикуем в UI
                 thought_match = re.search(r'<thinking>(.*?)</thinking>', raw_response, flags=re.DOTALL)
                 if thought_match:
                     await event_bus.publish("thought_process", {"text": thought_match.group(1).strip()[:500]})
                 
-                # Проверяем запросы инструментов
                 search_match = re.search(r'\[SEARCH: (.*?)\]', raw_response)
                 calc_match = re.search(r'\[CALC: (.*?)\]', raw_response)
                 
@@ -579,42 +576,22 @@ class CognitionManager:
                 else:
                     response = raw_response
             
-            # Финальная очистка
             response = self._vacuum_clean(response)
             
             # ====================================================================
             # ШАГ 7: ПОСТ-ОБРАБОТКА
             # ====================================================================
-            # Регистрируем ответ (для debounce)
             state.register_response()
             
-            # Логирование самонаблюдения (Self-Model)
-            log.info(
-                "🧠 Self-Model active",
-                trust=f"{state.trust_level:.2f}",
-                creative=f"{state.creative_drive:.2f}",
-                stability=f"{state.emotional_stability:.2f}",
-                emotion=state.emotion,
-                error_streak=state.error_streak
-            )
-            
-            # 🆕 Логирование эмпатии
-            if empathy_result:
-                log.info(
-                    "💝 Empathy active",
-                    user_state=empathy_result["user_state"],
-                    intensity=f"{empathy_result['intensity']:.2f}",
-                    resonance=f"{empathy_result['resonance']:.2f}"
-                )
-            
-            # Помечаем, что поздоровались (если это было приветствие)
+            # 🆕 Активируем режим диалога при первом сообщении
             if event_type == "user_command":
                 greeting_words = ["привет", "здравствуй", "хай", "hello", "hi", "добрый"]
                 if any(w in command_text.lower() for w in greeting_words):
                     state.mark_greeted()
-                    log.info("👋 Greeting registered")
+                    state.activate_dialog_mode()  # 🆕 Жёсткий режим
+                    log.info("👋 Greeting registered, dialog mode activated")
             
-            # KG extraction (фоновая задача)
+            # KG extraction
             if "knowledge_graph" in self.memory and event_type == "user_command":
                 asyncio.create_task(self._extract_kg_triplets(command_text))
             
@@ -632,6 +609,10 @@ class CognitionManager:
             if self.homeostasis:
                 self.homeostasis.apply_stimulus("cortisol", 0.2)
             return {"type": "error", "content": f"Сбой: {str(e)}"}
+        
+        finally:
+            # 🆕 ВСЕГДА разблокируем когницию после завершения
+            state.unlock_cognition()
     
     # ========================================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
