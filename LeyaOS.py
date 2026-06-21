@@ -5,12 +5,24 @@ from Core.logger import log
 
 # 🆕 КРИТИЧНО: Отключаем телеметрию ДО импорта chromadb
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_DISABLED"] = "True"
+os.environ["POSTHOG_DISABLED"] = "True"
+
+# 🆕 Заглушка для PostHog (полностью убивает ошибки телеметрии ChromaDB)
+try:
+    import posthog
+    posthog.capture = lambda *args, **kwargs: None
+    posthog.disabled = True
+    log.debug("✅ PostHog telemetry disabled via monkey-patch")
+except ImportError:
+    pass  # PostHog не установлен — отлично!
+except Exception as e:
+    log.debug("PostHog monkey-patch failed", error=str(e))
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from Core.brain import Brain
-from Core.homeostasis import HomeostaticEngine
 from Core.event_bus import event_bus
 from UI.server import app
 import uvicorn
@@ -30,7 +42,7 @@ async def main():
     # ========================================================================
     brain = Brain()
     
-    # 🆕 Получаем homeostasis из brain (а не создаём новый)
+    # Получаем homeostasis из brain (единое сердце)
     homeostasis = brain.homeostasis
     
     # Регистрируем обработчик потребностей
@@ -67,7 +79,7 @@ async def main():
     # ========================================================================
     try:
         await asyncio.gather(
-            homeostasis.start(),           # 🆕 Один homeostasis из brain
+            homeostasis.start(),           # Единое сердце из brain
             server.serve(),                # Web UI
             brain.start(cycle_interval=2.0) # Когнитивный цикл
         )

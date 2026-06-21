@@ -3,7 +3,13 @@ from chromadb.config import Settings
 from typing import List, Dict, Any, Optional
 import time
 import uuid
+import os
 from Core.logger import log
+
+# 🆕 Агрессивное отключение телеметрии
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_DISABLED"] = "True"
+os.environ["POSTHOG_DISABLED"] = "True"
 
 
 class LongTermMemory:
@@ -21,13 +27,18 @@ class LongTermMemory:
         self.persist_directory = persist_directory
         self.collection_name = collection_name
         
-        # Инициализация ChromaDB с отключённой телеметрией (убирает ошибки PostHog)
-        self.client = chromadb.PersistentClient(
-            path=persist_directory,
-            settings=Settings(anonymized_telemetry=False)
+        # Инициализация ChromaDB с отключённой телеметрией
+        settings = Settings(
+            anonymized_telemetry=False,
+            allow_reset=True,
+            is_persistent=True
         )
         
-        # Получаем или создаём коллекцию
+        self.client = chromadb.PersistentClient(
+            path=persist_directory,
+            settings=settings
+        )
+        
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={"description": "Leya's episodic long-term memory"}
@@ -45,24 +56,18 @@ class LongTermMemory:
         """
         Сохраняет воспоминание в долговременную память.
         
-        Args:
-            text: Текст воспоминания
-            metadata: Дополнительные данные (mood, type, strength, etc.)
-        
         Returns:
             ID сохранённого воспоминания (для последующей реконструкции)
         """
         if metadata is None:
             metadata = {}
         
-        # Генерируем уникальный ID
         memory_id = str(uuid.uuid4())
         
-        # Добавляем служебные метаданные
         metadata["id"] = memory_id
         metadata["created_at"] = time.time()
         if "strength" not in metadata:
-            metadata["strength"] = 0.5  # Базовая сила воспоминания
+            metadata["strength"] = 0.5
         
         try:
             self.collection.add(
@@ -88,6 +93,17 @@ class LongTermMemory:
             Список воспоминаний с полными метаданными (включая ID)
         """
         try:
+            # 🆕 КРИТИЧНО: Проверяем количество записей в коллекции
+            # Это убирает WARNING "Number of requested results X is greater than number of elements"
+            count = self.collection.count()
+            
+            if count == 0:
+                log.debug("Memory search: collection is empty")
+                return []
+            
+            # 🆕 Ограничиваем n_results реальным количеством записей
+            n_results = min(n_results, count)
+            
             results = self.collection.query(
                 query_texts=[query],
                 n_results=n_results
@@ -117,7 +133,7 @@ class LongTermMemory:
             return []
     
     # ========================================================================
-    # 🆕 ОБНОВЛЕНИЕ МЕТАДАННЫХ (для реконструкции памяти)
+    # ОБНОВЛЕНИЕ МЕТАДАННЫХ (для реконструкции памяти)
     # ========================================================================
     
     def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
@@ -126,16 +142,9 @@ class LongTermMemory:
         
         Биология: Аналог reconsolidation — при каждом извлечении память
         становится лабильной и может быть модифицирована.
-        
-        Args:
-            memory_id: ID воспоминания
-            metadata: Новые метаданные (будут объединены с существующими)
-        
-        Returns:
-            True если обновление прошло успешно
         """
         try:
-            # Сначала получаем текущие метаданные
+            # Получаем текущие метаданные
             existing = self.collection.get(ids=[memory_id])
             if not existing or not existing.get("metadatas"):
                 log.warning("Memory not found for update", id=memory_id)
@@ -144,7 +153,7 @@ class LongTermMemory:
             # Объединяем старые и новые метаданные
             old_metadata = existing["metadatas"][0]
             merged_metadata = {**old_metadata, **metadata}
-            merged_metadata["id"] = memory_id  # Сохраняем ID
+            merged_metadata["id"] = memory_id
             
             # Обновляем в ChromaDB
             self.collection.update(
