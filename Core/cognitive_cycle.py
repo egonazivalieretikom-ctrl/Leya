@@ -29,15 +29,18 @@ class CognitivePhase:
 
 class CognitiveCycle:
     """
-    Когнитивный цикл Leya.
+    Когнитивный цикл Leya v0.9.
     
     Эволюция: от реактивного (отвечает на стимулы) к непрерывному
     (генерирует поток сознания даже в тишине).
     
+    v0.9: Интеграция Таламуса (фильтрация + объединение сигналов)
+    и Sleep Consolidation (формирование личности во сне).
+    
     Архитектура:
     - При наличии событий: PERCEIVE → THINK → ACT → LEARN
-    - При отсутствии событий: PERCEIVE → STREAM или REFLECT
-    - STREAM генерирует субъективные мысли, влияющие на состояние
+    - При отсутствии событий: PERCEIVE → THALAMUS → STREAM или REFLECT
+    - Во сне: REST + SLEEP CONSOLIDATION
     """
     
     def __init__(self, state: LeyaState):
@@ -60,23 +63,26 @@ class CognitiveCycle:
         self.learning_system = None
         self.dmn = None
         self.planner = None
-        self.stream = None  # Поток сознания
+        self.stream = None
+        self.sleep_consolidation = None
+        self.thalamus = None
         
-        log.info("Cognitive Cycle initialized (Stream of Consciousness Edition)")
+        log.info("Cognitive Cycle initialized (v0.9 - Thalamus + Sleep Integration)")
 
     def attach_systems(self, perception=None, thinking=None, action=None,
                        learning=None, dmn=None, planner=None, stream=None,
-                       sleep_consolidation=None, thalamus=None): 
+                       sleep_consolidation=None, thalamus=None):
+        """Привязывает все подсистемы к когнитивному циклу."""
         self.perception_system = perception
         self.thinking_system = thinking
         self.action_system = action
         self.learning_system = learning
         self.dmn = dmn
         self.planner = planner
-        self.stream = stream  
-        self.sleep_consolidation = sleep_consolidation  
-        self.thalamus = thalamus 
-        log.info("Cognitive systems attached (incl. Stream of Consciousness)")
+        self.stream = stream
+        self.sleep_consolidation = sleep_consolidation
+        self.thalamus = thalamus
+        log.info("Cognitive systems attached (v0.9 - All Phases)")
 
     # ========================================================================
     # ЗАПУСК ФАЗЫ
@@ -102,7 +108,7 @@ class CognitiveCycle:
             elif phase == CognitivePhase.REFLECT:
                 await self._reflect(duration_budget)
             elif phase == CognitivePhase.STREAM:
-                await self._stream(duration_budget)  # 🆕
+                await self._stream(duration_budget)
                 
         except Exception as e:
             log.error(f"Error in phase {phase}", error=str(e), exc_info=True)
@@ -134,7 +140,7 @@ class CognitiveCycle:
                 
                 data_type = data.get("type")
                 
-                # 🆕 Обрабатываем ВСЕ типы сенсорных данных
+                # Обрабатываем ВСЕ типы сенсорных данных
                 if data_type == "proprioception":
                     # Проприоцепция — знание о среде ПК
                     self.state.current_environment = data.get("active_window", "Неизвестно")
@@ -143,7 +149,7 @@ class CognitiveCycle:
                     log.debug("🖥️ Environment updated", window=self.state.current_environment)
                 
                 elif data_type == "file_context":
-                    # 🆕 Файловый контекст — Leya видит код
+                    # Файловый контекст — Leya видит код
                     self.state.add_to_context(data)
                     await event_bus.publish("file_context", data)
                     log.info(
@@ -164,6 +170,7 @@ class CognitiveCycle:
             await asyncio.sleep(0.1)
 
     async def _think(self, budget: float):
+        """Обработка событий и генерация ответа."""
         log.debug("🧠 Thinking...", context_size=len(self.state.short_term_context))
         if self.thinking_system:
             decision = await self.thinking_system.process(
@@ -177,6 +184,7 @@ class CognitiveCycle:
             await asyncio.sleep(0.2)
 
     async def _act(self, budget: float):
+        """Выполнение действий."""
         log.debug("⚡ Acting on decisions...")
         if self.action_system:
             energy_cost = await self.action_system.execute(budget)
@@ -185,6 +193,7 @@ class CognitiveCycle:
             await asyncio.sleep(0.1)
 
     async def _learn(self, budget: float):
+        """Консолидация памяти."""
         log.debug("📚 Learning from cycle...")
         if self.learning_system:
             await self.learning_system.consolidate(
@@ -204,16 +213,13 @@ class CognitiveCycle:
 
     async def _stream(self, budget: float):
         """
-        🆕 Фаза потока сознания.
+        Фаза потока сознания.
         
         Генерирует субъективную мысль, которая:
         - Зависит от текущего настроения
         - Влияет на состояние (эмоциональная обратная связь)
         - Сохраняется в память
         - Публикуется в UI
-        
-        Это не DMN (который ищет паттерны в памяти), а спонтанный
-        внутренний монолог — как "голос в голове" у человека.
         """
         log.debug("🌊 Stream of consciousness...")
         if self.stream:
@@ -231,12 +237,14 @@ class CognitiveCycle:
         """
         Непрерывный когнитивный цикл.
         
+        v0.9: Интеграция Таламуса и Sleep Consolidation.
+        
         Логика:
         - Если есть необработанные события → активный режим (PERCEIVE → THINK → ACT → LEARN)
-        - Если событий нет → пассивный режим (PERCEIVE → STREAM или REFLECT)
-        - STREAM и REFLECT чередуются, создавая непрерывный внутренний опыт
+        - Если событий нет → пассивный режим (PERCEIVE → THALAMUS → STREAM или REFLECT)
+        - Во сне → REST + SLEEP CONSOLIDATION
         """
-        log.info("🔄 Starting continuous cognitive cycle (Stream of Consciousness Mode)", 
+        log.info("🔄 Starting continuous cognitive cycle (v0.9 - Thalamus + Sleep)", 
                  interval=cycle_interval)
         
         # Счётчик для чередования STREAM и REFLECT
@@ -245,9 +253,6 @@ class CognitiveCycle:
         while True:
             cycle_start = time.time()
             self.cycle_count += 1
-            
-            # Биологический гомеостаз теперь работает в отдельном двигателе (10Hz)
-            # Здесь мы только читаем состояние
             
             log.info(
                 f"🌟 Cycle #{self.cycle_count} begins",
@@ -284,7 +289,7 @@ class CognitiveCycle:
                 self.current_phase = CognitivePhase.REST
                 
                 # 🆕 Запускаем консолидацию опыта (если ещё не запускали недавно)
-                if hasattr(self, 'sleep_consolidation') and self.sleep_consolidation:
+                if self.sleep_consolidation:
                     consolidation_result = await self.sleep_consolidation.consolidate_experience()
                     if consolidation_result:
                         log.info(
@@ -319,7 +324,7 @@ class CognitiveCycle:
                 passive_cycle_counter = 0
             else:
                 # ============================================================
-                # ПАССИВНЫЙ РЕЖИМ: Global Workspace + Таламус
+                # ПАССИВНЫЙ РЕЖИМ: Таламус + непрерывный внутренний опыт
                 # ============================================================
                 await self.run_phase(CognitivePhase.PERCEIVE, duration_budget=0.5)
                 
@@ -336,7 +341,7 @@ class CognitiveCycle:
                             "timestamp": time.time()
                         })
                 
-                # DMN инсайты
+                # DMN инсайты (каждый 3-й цикл)
                 passive_cycle_counter += 1
                 if passive_cycle_counter % 3 == 0:
                     if self.dmn:
@@ -348,17 +353,18 @@ class CognitiveCycle:
                                 "timestamp": time.time()
                             })
                 
-                # 🆕 ШАГ 2: Фильтрация через Таламус
+                # 🆕 ШАГ 2: Фильтрация + Объединение через Таламус
                 if self.thalamus and background_signals:
-                    filtered_signals = self.thalamus.filter_signals(background_signals)
+                    merged_signals = self.thalamus.filter_and_merge(background_signals)
                     
-                    # Добавляем отфильтрованные сигналы в контекст
-                    for signal in filtered_signals:
+                    # Добавляем объединённые сигналы в контекст
+                    for signal in merged_signals:
                         self.state.add_to_context(signal)
                         log.info(
                             "🚦 Signal passed to Workspace",
                             type=signal.get("type"),
-                            importance=f"{signal.get('importance', 0):.2f}"
+                            importance=f"{signal.get('importance', 0):.2f}",
+                            has_merged_contexts="merged_contexts" in signal
                         )
                 else:
                     # Если таламуса нет — добавляем всё (старое поведение)
@@ -371,7 +377,7 @@ class CognitiveCycle:
                     if task:
                         # 🆕 Пропускаем задачу через Таламус
                         if self.thalamus:
-                            filtered_task = self.thalamus.filter_signals([task])
+                            filtered_task = self.thalamus.filter_and_merge([task])
                             if filtered_task:
                                 self.state.add_to_context(filtered_task[0])
                                 log.info(

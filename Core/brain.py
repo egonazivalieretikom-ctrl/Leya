@@ -9,10 +9,16 @@ from Core.event_bus import event_bus
 
 class Brain:
     """
-    Центральный орган управления Leya.
+    Центральный орган управления Leya v0.9.
     
     Биология: Brain — это префронтальная кора + лимбическая система.
     Он создаёт HomeostaticEngine (сердце) и передаёт его всем подсистемам.
+    
+    Архитектура:
+    - Единое сердце (HomeostaticEngine) для всех модулей
+    - Knowledge Graph для долгосрочных фактов
+    - Sleep Consolidation для формирования личности
+    - Thalamus для фильтрации и объединения сигналов
     """
     
     def __init__(self):
@@ -24,15 +30,17 @@ class Brain:
         
         self.cycle: CognitiveCycle = CognitiveCycle(self.state)
         
-        # Подсистемы
+        # Подсистемы (инициализируются в _load_subsystems)
         self.perception = None
         self.cognition = None
         self.action = None
         self.dmn = None
         self.planner = None
         self.stream = None
+        self.sleep_consolidation = None
+        self.thalamus = None
         
-        log.info("🧠 Brain initialized")
+        log.info("🧠 Brain initialized (v0.9 - Full Integration)")
     
     def _load_subsystems(self):
         """Загружает все когнитивные подсистемы."""
@@ -40,21 +48,24 @@ class Brain:
         log.info("Loading subsystems...")
         
         # ====================================================================
-        # 1. ПАМЯТЬ
+        # 1. ПАМЯТЬ (LTM + Working Memory + Knowledge Graph)
         # ====================================================================
         try:
             from Memory.long_term import LongTermMemory
             from Memory.working import WorkingMemory
+            from Memory.knowledge_graph import KnowledgeGraph
             
             self.memory["long_term"] = LongTermMemory()
             self.memory["working"] = WorkingMemory(capacity=50)
-            log.info("✅ Memory systems loaded")
+            self.memory["knowledge_graph"] = KnowledgeGraph()
+            
+            log.info("✅ Memory systems loaded (LTM + Working + KG)")
         except Exception as e:
             log.error("Failed to load memory systems", error=str(e))
             raise
         
         # ====================================================================
-        # 2. ВОСПРИЯТИЕ
+        # 2. ВОСПРИЯТИЕ (Perception)
         # ====================================================================
         try:
             from Perception.manager import PerceptionManager
@@ -65,14 +76,14 @@ class Brain:
             raise
         
         # ====================================================================
-        # 3. ПОЗНАНИЕ (передаём homeostasis)
+        # 3. ПОЗНАНИЕ (Cognition с передачей homeostasis)
         # ====================================================================
         try:
             from Cognition.manager import CognitionManager
             self.cognition = CognitionManager(
                 state=self.state,
                 memory=self.memory,
-                homeostasis=self.homeostasis  # 🆕 Единое сердце
+                homeostasis=self.homeostasis
             )
             log.info("✅ Cognition system loaded")
         except Exception as e:
@@ -80,25 +91,25 @@ class Brain:
             raise
         
         # ====================================================================
-        # 4. ДЕЙСТВИЕ
+        # 4. ДЕЙСТВИЕ (Action)
         # ====================================================================
         try:
             from Action.executor import ActionExecutor
-            self.action = ActionExecutor(self.state)
+            self.action = ActionExecutor(self.state, self.memory)
             log.info("✅ Action system loaded")
         except Exception as e:
             log.error("Failed to load Action", error=str(e))
             raise
         
         # ====================================================================
-        # 5. ПОТОК СОЗНАНИЯ (передаём homeostasis)
+        # 5. ПОТОК СОЗНАНИЯ (Stream of Consciousness)
         # ====================================================================
         try:
             from Cognition.stream_of_consciousness import StreamOfConsciousness
             self.stream = StreamOfConsciousness(
                 self.state, 
                 self.memory, 
-                homeostasis=self.homeostasis  # 🆕 Единое сердце
+                homeostasis=self.homeostasis
             )
             log.info("✅ Stream of Consciousness loaded")
         except Exception as e:
@@ -106,7 +117,7 @@ class Brain:
             self.stream = None
         
         # ====================================================================
-        # 6. DMN
+        # 6. DEFAULT MODE NETWORK (DMN)
         # ====================================================================
         try:
             from Cognition.dmn import DefaultModeNetwork
@@ -117,7 +128,7 @@ class Brain:
             self.dmn = None
         
         # ====================================================================
-        # 7. ПЛАНИРОВЩИК
+        # 7. ПЛАНИРОВЩИК (Planner)
         # ====================================================================
         try:
             from Cognition.planner import GoalDirectedPlanner
@@ -128,7 +139,7 @@ class Brain:
             self.planner = None
         
         # ====================================================================
-        # 🆕 8. КОНСОЛИДАЦИЯ СНА
+        # 8. КОНСОЛИДАЦИЯ СНА (Sleep Consolidation)
         # ====================================================================
         try:
             from Cognition.sleep_consolidation import SleepConsolidation
@@ -137,10 +148,9 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Sleep Consolidation", error=str(e))
             self.sleep_consolidation = None
-
-
+        
         # ====================================================================
-        # 🆕 8.5 ТАЛАМУС (фильтр сигналов)
+        # 9. ТАЛАМУС (Thalamus — фильтр и объединитель сигналов)
         # ====================================================================
         try:
             from Core.thalamus import Thalamus
@@ -149,9 +159,9 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Thalamus", error=str(e))
             self.thalamus = None
-
+        
         # ====================================================================
-        # 9. ПЕРЕДАЧА ПОДСИСТЕМ В ЦИКЛ
+        # 10. ПЕРЕДАЧА ВСЕХ ПОДСИСТЕМ В ЦИКЛ
         # ====================================================================
         self.cycle.attach_systems(
             perception=self.perception,
@@ -162,19 +172,17 @@ class Brain:
             planner=self.planner,
             stream=self.stream,
             sleep_consolidation=self.sleep_consolidation,
-            thalamus=self.thalamus  # 🆕
+            thalamus=self.thalamus
         )
-
-        # 10. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
+        
+        # ====================================================================
+        # 11. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
+        # ====================================================================
         if self.homeostasis and self.cognition:
             self.cognition.homeostasis = self.homeostasis
             log.info("🔗 Homeostasis linked to Cognition Manager")
-    
-        log.info("✅ All subsystems loaded and attached")
-
-
         
-        log.info("✅ All subsystems loaded and attached")
+        log.info("✅ All subsystems loaded and attached (v0.9)")
     
     async def start(self, cycle_interval: float = 2.0):
         """Запускает мозг и все его подсистемы."""
