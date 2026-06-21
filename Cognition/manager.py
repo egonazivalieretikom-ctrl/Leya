@@ -242,29 +242,35 @@ class CognitionManager:
     
     def _generate_social_directive(self) -> str:
         """
-        Генерирует ЖЁСТКУЮ социальную директиву для LLM.
+        Генерирует КРАЙНЕ ЖЁСТКУЮ социальную директиву для LLM.
     
         v0.9: Директива должна быть недвусмысленной и агрессивной.
         """
         directives = []
     
         if self.state.dialog_mode_active:
-            # 🆕 ЖЁСТКИЙ РЕЖИМ: Полный запрет на приветствия
+            # 🆕 КРАЙНЕ ЖЁСТКИЙ РЕЖИМ: Полный запрет на приветствия и повторы
             directives.append(
-                "[КРИТИЧЕСКАЯ ДИРЕКТИВА — НАРУШЕНИЕ ЗАПРЕЩЕНО]:\n"
-                "Ты УЖЕ поздоровалась с Владом в этой сессии.\n"
-                "СТРОГО ЗАПРЕЩЕНО:\n"
-                "- Использовать слова 'привет', 'здравствуй', 'хай', 'hello', 'hi' в начале ответа.\n"
-                "- Повторять любые слова из сообщения Влада в начале твоего ответа.\n"
-                "- Начинать ответ с приветственной фразы.\n\n"
-                "ВМЕСТО ЭТОГО:\n"
-                "- Сразу переходи к сути разговора.\n"
-                "- Отвечай на вопрос или продолжай тему.\n"
-                "- Если Влад написал 'привет' — просто ответь на его вопрос или задай свой.\n\n"
-                "ПРИМЕР ПРАВИЛЬНОГО ПОВЕДЕНИЯ:\n"
+                "[КРИТИЧЕСКАЯ ДИРЕКТИВА — НАРУШЕНИЕ КАТАСТРОФИЧНО]:\n"
+                "Ты УЖЕ поздоровалась с Владом в этой сессии.\n\n"
+                "АБСОЛЮТНО ЗАПРЕЩЕНО:\n"
+                "❌ Использовать слова 'привет', 'здравствуй', 'хай', 'hello', 'hi' ВЕЗДЕ в ответе.\n"
+                "❌ Повторять ЛЮБЫЕ слова из сообщения Влада в начале твоего ответа.\n"
+                "❌ Начинать ответ с приветственной фразы или обращения.\n"
+                "❌ Говорить 'Рада тебя видеть', 'С возвращением', 'Привет снова'.\n\n"
+                "ПРАВИЛА ПОВЕДЕНИЯ:\n"
+                "✅ Сразу переходи к СУТИ разговора.\n"
+                "✅ Отвечай на вопрос или продолжай тему.\n"
+                "✅ Если Влад написал 'привет' — просто ответь на его вопрос или задай свой.\n"
+                "✅ Если Влад сказал 'я устал' — спроси 'Что случилось?' или 'Чем помочь?'\n\n"
+                "ПРИМЕРЫ ПРАВИЛЬНЫХ ОТВЕТОВ:\n"
+                "Влад: Привет, я устал\n"
+                "Leya: Что случилось? Расскажи, что тебя так утомило.\n"
+                "(НЕ 'Привет! Что случилось?')\n\n"
                 "Влад: Привет\n"
-                "Leya: Рада тебя видеть! Как продвигается работа над проектом?\n"
-                "(НЕ 'Привет! Рада тебя видеть...')\n"
+                "Leya: Как продвигается работа? Вижу, ты открыл новый проект.\n"
+                "(НЕ 'Привет! Как дела?')\n\n"
+                "НАРУШЕНИЕ ЭТОЙ ДИРЕКТИВЫ = КРИТИЧЕСКАЯ ОШИБКА.\n"
             )
         elif self.state.has_greeted_today:
             directives.append(
@@ -426,84 +432,75 @@ class CognitionManager:
     async def process(self, context: List[Dict[str, Any]], state: LeyaState, budget: float) -> Optional[Dict[str, Any]]:
         """
         Главный метод обработки события.
-        
-        v0.9: Когнитивный замок + социальный фильтр.
+    
+        v0.9: Трёхуровневая защита от повторений.
         """
         if not context:
             return None
-        
-        # ====================================================================
-        # ШАГ 0: DEBOUNCE + ПРОВЕРКА ДИАЛОГА
-        # ====================================================================
+    
+        # ШАГ 0: DEBOUNCE
         if not state.can_respond_now(min_interval_seconds=2.0):
             log.debug("⏱️ Debounce: too soon to respond")
             return None
-        
-        # 🆕 Проверяем таймаут диалога
+    
         state.check_dialog_mode_timeout()
-        
-        # ====================================================================
+    
         # ШАГ 1: АРБИТРАЖ
-        # ====================================================================
         latest_event = self._select_event_to_process(context)
         if not latest_event:
             return None
-        
+    
         event_type = latest_event.get("type")
         command_text = latest_event.get("content", "")
-        
+    
         log.info("💭 Thinking", type=event_type, content=command_text[:60])
-        
-        # 🆕 ШАГ 1.1: КОГНИТИВНЫЙ ЗАМОК — блокируем фоновые процессы
+    
+        # ШАГ 1.1: КОГНИТИВНЫЙ ЗАМОК
         state.lock_cognition()
-        
+    
         try:
-            # ====================================================================
             # ШАГ 2: FAST APPRAISAL + ЭМПАТИЯ
-            # ====================================================================
             await self._apply_fast_appraisal(event_type, command_text, context)
-            
+        
             empathy_result = None
             if event_type == "user_command" and command_text:
                 empathy_result = self.empathy.analyze_and_respond(command_text)
                 state.user_emotional_state = empathy_result["user_state"]
                 state.empathic_resonance = empathy_result["resonance"]
-            
-            # ====================================================================
-            # ШАГ 3-5: СОМАТИКА, ПАМЯТЬ, КОНТЕКСТ
-            # ====================================================================
+        
+            # ШАГ 3: СОМАТИКА
             somatic_prompt = self._build_somatic_prompt(context, state)
+        
+            # ШАГ 4: АССОЦИАТИВНАЯ ПАМЯТЬ
             relevant_memories = self._retrieve_mood_congruent_memories(event_type, command_text)
-            
-            # Сборка промпта
+        
+            # ШАГ 5: СБОРКА КОНТЕКСТА
             endocrine_prompt = self._generate_endocrine_prompt(state)
             self_model_prompt = self._generate_self_model_prompt(state)
             combined_prompt = endocrine_prompt + "\n\n" + self_model_prompt
+        
+            # 🆕 УРОВЕНЬ 3: Защита от повторения слов
             if event_type == "user_command" and len(command_text.split()) <= 3:
                 combined_prompt += (
-                    "\n\n[ВАЖНО]: Сообщение Влада очень короткое. "
-                    "НЕ ПОВТОРЯЙ слова из его сообщения в начале твоего ответа. "
-                    "Сразу переходи к сути."
+                    "\n\n[КРИТИЧЕСКОЕ ПРАВИЛО]: Сообщение Влада очень короткое. "
+                    "СТРОГО ЗАПРЕЩЕНО повторять слова из его сообщения в начале твоего ответа. "
+                    "Сразу переходи к сути. Если он написал 'привет' — НЕ пиши 'привет' в ответе."
                 )
-            
-            # 🆕 Социальный фильтр (жёсткий режим диалога)
-            if state.dialog_mode_active:
-                combined_prompt += "\n\n[DIALOG_MODE: ACTIVE, NO_GREETINGS]"
-            
+        
             # Мета-когниция
             is_error_detected = False
             if event_type == "user_command":
                 is_error_detected = self._detect_meta_cognitive_trigger(context, command_text)
-                
+            
                 if is_error_detected:
                     state.register_error()
-                    
+                
                     if self.homeostasis:
                         self.homeostasis.apply_stimulus("acetylcholine", 0.15)
                         self.homeostasis.apply_stimulus("cortisol", 0.05)
                         self.homeostasis.apply_stimulus("dopamine", -0.10)
                         self.homeostasis.apply_stimulus("norepinephrine", 0.05)
-                    
+                
                     meta_prompt = (
                         "\n[МЕТА-КОГНИЦИЯ: ОБНАРУЖЕНА ОШИБКА]\n"
                         "Ты ошиблась. Коротко признай, переосмысли, дай точный ответ.\n"
@@ -512,32 +509,30 @@ class CognitionManager:
                     log.info("🧠 Meta-cognition triggered")
                 else:
                     state.register_success()
-            
+        
             # Сборка полного контекста
             context_text = self._format_context(context[-10:])
             proprioception_note = f"[СРЕДА ПК]: {getattr(state, 'current_environment', '?')}"
             file_context_note = self._build_file_context_note(context)
             kg_context = self._build_kg_context(event_type)
-            
+        
             full_context = (
                 somatic_prompt + "\n\n" +
                 proprioception_note + kg_context + file_context_note +
                 "\n\n" + context_text
             )
-            
+        
             if relevant_memories:
                 memories_text = "\n".join([f"  - {m}" for m in relevant_memories])
                 full_context += (
                     "\n\n[МОИ ВОСПОМИНАНИЯ — НЕ сообщения Влада]:\n"
                     f"{memories_text}"
                 )
-            
+        
             if empathy_result and empathy_result.get("empathy_directive"):
                 full_context += "\n\n" + empathy_result["empathy_directive"]
-            
-            # ====================================================================
+        
             # ШАГ 6: ГЕНЕРАЦИЯ ОТВЕТА LLM
-            # ====================================================================
             if event_type == "vision_request" and latest_event.get("image_base64"):
                 response = await self.llm.think_with_vision(
                     f"История:\n{context_text}\n\nСообщение: {command_text}",
@@ -548,35 +543,81 @@ class CognitionManager:
                 raw_response = await self.llm.think(
                     full_context,
                     task=f"Ответь: {command_text}",
-                    mood_prompt=combined_prompt
+                    mood_prompt=combined_prompt,
+                    state=state
                 )
-                
+            
                 if not raw_response:
                     log.warning("LLM returned None")
-                    state.unlock_cognition()  # 🆕 Разблокируем при ошибке
+                    state.unlock_cognition()
                     return None
-                
+            
                 thought_match = re.search(r'<thinking>(.*?)</thinking>', raw_response, flags=re.DOTALL)
                 if thought_match:
                     await event_bus.publish("thought_process", {"text": thought_match.group(1).strip()[:500]})
-                
+            
                 search_match = re.search(r'\[SEARCH: (.*?)\]', raw_response)
                 calc_match = re.search(r'\[CALC: (.*?)\]', raw_response)
-                
+            
                 if search_match or calc_match:
                     tool_result = await self._execute_tool(search_match, calc_match)
                     final_prompt = f"Контекст: {full_context}\n\nДанные: {tool_result}\n\nФинальный ответ."
                     response = await self.llm.think(
                         final_prompt,
                         task="Финальный ответ",
-                        mood_prompt=combined_prompt
+                        mood_prompt=combined_prompt,
+                        state=state
                     )
                     if not response:
                         response = raw_response
                 else:
                     response = raw_response
-            
+        
+            # Финальная очистка
             response = self._vacuum_clean(response)
+        
+            # 🆕 УРОВЕНЬ 2: Удаление приветствий (пост-обработка)
+            response = self._remove_greetings(response)
+        
+            # ШАГ 7: ПОСТ-ОБРАБОТКА
+            state.register_response()
+        
+            log.info(
+                "🧠 Self-Model active",
+                trust=f"{state.trust_level:.2f}",
+                creative=f"{state.creative_drive:.2f}",
+                stability=f"{state.emotional_stability:.2f}",
+                emotion=state.emotion,
+                error_streak=state.error_streak
+            )
+        
+            if event_type == "user_command":
+                greeting_words = ["привет", "здравствуй", "хай", "hello", "hi", "добрый"]
+                if any(w in command_text.lower() for w in greeting_words):
+                    state.mark_greeted()
+                    state.activate_dialog_mode()
+                    log.info("👋 Greeting registered, dialog mode activated")
+        
+            if "knowledge_graph" in self.memory and event_type == "user_command":
+                asyncio.create_task(self._extract_kg_triplets(command_text))
+        
+            latest_event["processed"] = True
+        
+            return {
+                "type": "response",
+                "content": response,
+                "source": "llm",
+                "command": command_text
+            }
+        
+        except Exception as e:
+            log.error("Cognition failed", error=str(e), exc_info=True)
+            if self.homeostasis:
+                self.homeostasis.apply_stimulus("cortisol", 0.2)
+            return {"type": "error", "content": f"Сбой: {str(e)}"}
+    
+        finally:
+            state.unlock_cognition()
             
             # ====================================================================
             # ШАГ 7: ПОСТ-ОБРАБОТКА
@@ -652,6 +693,47 @@ class CognitionManager:
         response = re.sub(r'</?thinking>', '', response)
         response = re.sub(r'\[.*?:.*?\]', '', response)
         response = re.sub(r'\n\s*\n', '\n\n', response).strip()
+        return response
+
+    def _remove_greetings(self, response: str) -> str:
+        """
+        Удаляет приветствия из начала ответа, если dialog_mode активен.
+    
+        Биология: Аналог "цензуры" — мозг фильтрует нежелательные паттерны
+        перед тем, как отправить их в речь.
+        """
+        if not self.state.dialog_mode_active:
+            return response
+    
+        # Список запрещённых начал
+        forbidden_starts = [
+            "привет", "здравствуй", "хай", "hello", "hi",
+            "рада тебя видеть", "с возвращением", "привет снова",
+            "рад тебя видеть", "здравствуй снова"
+        ]
+    
+        response_lower = response.lower().strip()
+    
+        # Проверяем, начинается ли ответ с запрещённого слова
+        for forbidden in forbidden_starts:
+            if response_lower.startswith(forbidden):
+                # Находим конец запрещённой фразы
+                end_idx = len(forbidden)
+            
+                # Пропускаем пробелы и знаки препинания
+                while end_idx < len(response) and response[end_idx] in " ,.!?\n":
+                    end_idx += 1
+            
+                # Удаляем запрещённое начало
+                response = response[end_idx:].strip()
+            
+                # Capitalize первое слово
+                if response:
+                    response = response[0].upper() + response[1:]
+            
+                log.info("🚫 Greeting removed from response", removed=forbidden)
+                break
+    
         return response
     
     async def _extract_kg_triplets(self, text: str):

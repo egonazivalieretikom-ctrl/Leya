@@ -184,13 +184,51 @@ class CognitiveCycle:
             await asyncio.sleep(0.2)
 
     async def _act(self, budget: float):
-        """Выполнение действий."""
+        """
+        Выполнение действий.
+    
+        v0.9: Теперь ищет действия в контексте и передаёт их в ActionExecutor.
+        """
         log.debug("⚡ Acting on decisions...")
-        if self.action_system:
-            energy_cost = await self.action_system.execute(budget)
-            self.state.consume_energy(energy_cost)
-        else:
+    
+        if not self.action_system:
             await asyncio.sleep(0.1)
+            return
+    
+        # 🆕 Ищем действия в контексте (например, запросы на поиск/вычисления)
+        actions_to_execute = []
+    
+        for event in self.state.short_term_context[-5:]:
+            if not isinstance(event, dict):
+                continue
+        
+            # Ищем события с типом "action_request"
+            if event.get("type") == "action_request":
+                actions_to_execute.append(event)
+    
+        # Выполняем найденные действия
+        total_energy_cost = 0.0
+    
+        for action in actions_to_execute:
+            try:
+                result = await self.action_system.execute(action)
+                log.info("⚡ Action executed", type=action.get("type"), result=result[:50])
+            
+                # Энергетическая стоимость действия
+                energy_cost = 0.05  # Базовая стоимость
+                total_energy_cost += energy_cost
+            
+                # Помечаем действие как выполненное
+                action["processed"] = True
+            
+            except Exception as e:
+                log.error("Action execution failed", error=str(e), action=action)
+    
+        # Если не было действий — просто тратим немного энергии на "думание"
+        if total_energy_cost == 0.0:
+            total_energy_cost = 0.01
+    
+        self.state.consume_energy(total_energy_cost)
 
     async def _learn(self, budget: float):
         """Консолидация памяти."""
