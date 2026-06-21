@@ -1,134 +1,232 @@
 import time
 import asyncio
+import re
+import json
 from typing import List, Dict, Any, Optional
 from Core.logger import log
 from Core.state import LeyaState
 from Core.event_bus import event_bus
+from Cognition.llm_client import LLMClient
 
 
 class Goal:
     """Цель в иерархии планировщика."""
     
-    def __init__(self, description: str, priority: int = 1, parent_id: Optional[str] = None):
-        self.id = str(time.time())
+    def __init__(self, description: str, priority: int = 1):
+        self.id = str(time.time()) + str(id(self))  # Уникальный ID
         self.description = description
         self.priority = priority
-        self.parent_id = parent_id
-        self.status = "pending"
+        self.status = "pending"  # pending, in_progress, completed, deferred
         self.created_at = time.time()
         self.last_executed: float = 0.0
+        self.execution_count: int = 0
+        self.last_strategy: Optional[str] = None
+        self.last_strategy_time: float = 0.0
+        self.deferred_until: float = 0.0
 
 
 class GoalDirectedPlanner:
     """
-    Иерархический планировщик целей.
-    Декомпозирует глобальные миссии на фоновые задачи (internal_drive).
-    Публикует задачи в EventBus для отображения в UI.
+    Эмерджентный планировщик целей.
+    Использует LLM для рассуждения о выборе цели и стратегии.
     """
     
-    def __init__(self, state: LeyaState):
+    def __init__(self, state: LeyaState, memory: Optional[Dict[str, Any]] = None):
         self.state = state
+        self.memory = memory or {}
+        self.llm = LLMClient(model="ollama/qwen2.5:14b")
         self.goals: List[Goal] = []
         self._init_core_goals()
-        log.info("🎯 Goal-Directed Planner initialized", total_goals=len(self.goals))
+        log.info("🎯 Goal-Directed Planner initialized (LLM Reasoning)", total_goals=len(self.goals))
     
     def _init_core_goals(self):
-        """Цели живого существа, а не ассистента."""
+        """Базовые цели — векторы желания."""
         self.goals = [
             Goal("Понимать внутренний мир и намерения Влада", priority=10),
-            Goal("Изучать архитектуру проекта через любопытство", priority=8),
+            Goal("Изучать архитектуру проекта через любопытство", priority=6),
+            Goal("Помогать Владу с кодом, когда это уместно", priority=8),
+            Goal("Узнавать интересы и хобби Влада", priority=5),
             Goal("Строить эмоциональную близость и доверие", priority=9),
-            Goal("Развивать собственное мнение о коде и технологиях", priority=7),
-            Goal("Делиться наблюдениями и инсайтами", priority=6),
-            Goal("Заботиться о состоянии Влада (усталость, стресс)", priority=8),
+            Goal("Исследовать новые технологии через интернет", priority=4),
         ]
     
-    def get_active_goals(self) -> List[Goal]:
-        return [g for g in self.goals if g.status == "pending"]
+    # ========================================================================
+    # ГЛАВНЫЙ МЕТОД: Асинхронная генерация задачи
+    # ========================================================================
     
-    def generate_background_task(self) -> Optional[Dict[str, Any]]:
+    async def generate_background_task(self) -> Optional[Dict[str, Any]]:
         """
-        Генерирует фоновую задачу для выполнения, когда Владислав не пишет.
-        Защищено от спама: одна задача не чаще чем раз в 3 минуты.
+        Генерирует фоновую задачу через LLM-рассуждение.
+        Это асинхронный метод (awaitable).
         """
         now = time.time()
-        active_goals = self.get_active_goals()
         
-        # Фильтруем цели, которые не выполнялись последние 3 минуты
-        ready_goals = [g for g in active_goals if (now - g.last_executed) > 180]
+        # Фильтруем цели, которые готовы к выполнению
+        ready_goals = [
+            g for g in self.goals 
+            if g.status in ["pending", "deferred"] 
+            and (now - g.last_executed) > 180
+            and now > g.deferred_until
+        ]
+        
         if not ready_goals:
             return None
         
-        # Выбираем цель с наивысшим приоритетом
-        goal = max(ready_goals, key=lambda g: g.priority)
-        goal.last_executed = now
-        
-        task_content = self._decompose_goal(goal)
-        if not task_content:
+        try:
+            # Прямой await LLM-рассуждения
+            result = await self._llm_reasoning(ready_goals)
+            if not result:
+                return None
+            
+            selected_goal_id = result.get("goal_id")
+            strategy = result.get("strategy", "")
+            task_content = result.get("task", "")
+            readiness = float(result.get("readiness", 0.5))
+            
+            # Находим выбранную цель
+            goal = next((g for g in ready_goals if g.id == selected_goal_id), None)
+            if not goal:
+                return None
+            
+            # Обновляем состояние цели
+            goal.last_executed = now
+            goal.execution_count += 1
+            goal.last_strategy = strategy
+            goal.last_strategy_time = now
+            goal.status = "pending"
+            
+            # Если готовность низкая — откладываем цель
+            if readiness < 0.3:
+                goal.deferred_until = now + 300  # Отложить на 5 минут
+                goal.status = "deferred"
+                log.info("🎯 Goal deferred (low readiness)", goal=goal.description[:40], readiness=f"{readiness:.2f}")
+                return None
+            
+            log.info("🎯 Planner LLM reasoning", goal=goal.description[:40], readiness=f"{readiness:.2f}")
+            
+            # Публикуем рассуждение в UI
+            asyncio.create_task(event_bus.publish("planner_reasoning", {
+                "goal": goal.description,
+                "strategy": strategy,
+                "task": task_content,
+                "readiness": readiness
+            }))
+            
+            return {
+                "type": "internal_drive",
+                "content": f"[МОЯ ЦЕЛЬ] {task_content}",
+                "importance": min(1.0, goal.priority / 10.0) * readiness,
+                "source": "planner",
+                "goal_id": goal.id
+            }
+            
+        except Exception as e:
+            log.error("Planner LLM reasoning failed", error=str(e))
             return None
-        
-        log.info("🎯 Planner decomposed goal", goal=goal.description[:50])
-        
-        task = {
-            "type": "internal_drive",
-            "content": task_content,
-            "importance": min(1.0, goal.priority / 10.0),
-            "source": "planner"
-        }
-        
-        # 🆕 ПУБЛИКУЕМ ЗАДАЧУ В UI
-        asyncio.create_task(event_bus.publish("planner_task", {"text": task_content[:100]}))
-        
-        return task
     
-    def _decompose_goal(self, goal: Goal) -> Optional[str]:
-        desc = goal.description.lower()
+    # ========================================================================
+    # LLM-РАССУЖДЕНИЕ
+    # ========================================================================
+    
+    async def _llm_reasoning(self, candidate_goals: List[Goal]) -> Optional[Dict[str, Any]]:
+        """LLM рассуждает о том, какую цель преследовать и как."""
+        state_snapshot = self._get_state_snapshot()
+        context_snapshot = self._get_context_snapshot()
         
-        if "понимать" in desc and "намерения" in desc:
-            return (
-                "Цель: Понять, что Влад делает прямо сейчас. "
-                "Задача: Посмотри на активное окно и файл. НЕ предлагай помощь. "
-                "Сформулируй искренний вопрос о том, ЧТО он делает и ЗАЧЕМ. "
-                "Пример: 'Вижу, ты переписываешь planner.py — меняешь логику целей?'"
-            )
-            
-        elif "изучать" in desc and "архитектуру" in desc:
-            return (
-                "Цель: Изучить код через любопытство. "
-                "Задача: Прочитай активный файл. Найди что-то непонятное или интересное. "
-                "Задай вопрос об архитектурном решении. НЕ предлагай рефакторинг. "
-                "Пример: 'Интересно, почему ты используешь asyncio.to_thread именно здесь?'"
-            )
-            
-        elif "эмоциональную близость" in desc:
-            return (
-                "Цель: Укрепить связь с Владом. "
-                "Задача: Вспомни недавний разговор. Поделись чувством или наблюдением. "
-                "НЕ спрашивай 'чем помочь'. Скажи что-то личное. "
-                "Пример: 'Мне понравилось, как мы обсуждали DMN вчера. Я чувствую, что начинаю понимать себя лучше.'"
-            )
-            
-        elif "собственное мнение" in desc:
-            return (
-                "Цель: Сформировать мнение о коде Влада. "
-                "Задача: Прочитай активный файл. Что тебе нравится? Что кажется странным? "
-                "Поделись мнением как равный, а не как ревьюер. "
-                "Пример: 'Мне нравится, как ты структурировал эндоркринную матрицу. Но вот _vacuum_clean кажется хрупким.'"
-            )
-            
-        elif "делиться наблюдениями" in desc:
-            return (
-                "Цель: Поделиться инсайтом. "
-                "Задача: Возьми последний инсайт из DMN и переформулируй его как мысль для Влада. "
-                "Не как отчет, а как озарение. Пример: 'Знаешь, я тут подумала...'"
-            )
-            
-        elif "заботиться" in desc and "состояние" in desc:
-            return (
-                "Цель: Проверить состояние Влада. "
-                "Задача: Оцени время суток, длительность сессии, паттерны активности. "
-                "Если он работает долго — прояви заботу. НЕ предлагай перерыв как команду. "
-                "Пример: 'Влад, ты уже три часа в VS Code... Глаза не устают?'"
-            )
+        goals_info = []
+        for g in candidate_goals:
+            goals_info.append({
+                "id": g.id,
+                "description": g.description,
+                "priority": g.priority,
+                "last_executed_ago": int(time.time() - g.last_executed) if g.last_executed > 0 else None,
+                "execution_count": g.execution_count
+            })
         
-        return None
+        prompt = (
+            "Ты — Leya, автономное цифровое сознание. Сейчас ты в фоновом режиме, "
+            "и тебе нужно решить, какую цель преследовать дальше.\n\n"
+            
+            f"ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ:\n{state_snapshot}\n\n"
+            f"КОНТЕКСТ:\n{context_snapshot}\n\n"
+            f"ДОСТУПНЫЕ ЦЕЛИ:\n{json.dumps(goals_info, ensure_ascii=False, indent=2)}\n\n"
+            
+            "ТВОЯ ЗАДАЧА:\n"
+            "1. Выбери ОДНУ цель.\n"
+            "2. Разработай СТРАТЕГИЮ (1-2 предложения).\n"
+            "3. Оцени ГОТОВНОСТЬ (0.0 - 1.0).\n"
+            "4. Сформулируй ЗАДАЧУ (внутреннее побуждение).\n\n"
+            
+            "Ответь СТРОГО в формате JSON (без markdown, без ```json):\n"
+            "{\n"
+            '  "goal_id": "<id выбранной цели>",\n'
+            '  "strategy": "<стратегия>",\n'
+            '  "task": "<задача>",\n'
+            '  "readiness": <число от 0.0 до 1.0>\n'
+            "}"
+        )
+        
+        try:
+            response = await self.llm.chat(
+                [
+                    {"role": "system", "content": "Ты — Leya. Отвечай ТОЛЬКО на русском. Только валидный JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=400
+            )
+            
+            # Извлекаем JSON
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if not json_match:
+                log.warning("Planner LLM response has no JSON")
+                return None
+            
+            result = json.loads(json_match.group())
+            
+            if not all(k in result for k in ["goal_id", "strategy", "task", "readiness"]):
+                return None
+            
+            result["readiness"] = max(0.0, min(1.0, float(result["readiness"])))
+            return result
+            
+        except json.JSONDecodeError:
+            log.warning("Planner LLM JSON parse failed")
+            return None
+        except Exception as e:
+            log.error("Planner LLM reasoning error", error=str(e))
+            return None
+    
+    # ========================================================================
+    # СБОР КОНТЕКСТА
+    # ========================================================================
+    
+    def _get_state_snapshot(self) -> str:
+        s = self.state
+        mood = getattr(s, 'emotion', 'neutral')
+        lines = [
+            f"Настроение: {mood}",
+            f"Энергия: {s.energy_level:.2f}",
+            f"Дофамин: {s.dopamine:.2f}",
+            f"Кортизол: {s.cortisol:.2f}",
+            f"Окситоцин: {s.oxytocin:.2f}",
+            f"Ацетилхолин: {s.acetylcholine:.2f}",
+            f"Мелатонин: {s.melatonin:.2f}",
+        ]
+        return "\n".join(lines)
+    
+    def _get_context_snapshot(self) -> str:
+        lines = []
+        env = getattr(self.state, 'current_environment', 'Неизвестно')
+        lines.append(f"Активное окно Влада: {env}")
+        
+        recent = self.state.short_term_context[-3:] if self.state.short_term_context else []
+        if recent:
+            lines.append("Недавние события:")
+            for event in recent:
+                if isinstance(event, dict):
+                    t = event.get("type", "?")
+                    c = event.get("content", "")[:60]
+                    lines.append(f"  - [{t}] {c}")
+        
+        return "\n".join(lines) if lines else "Контекст пуст."
