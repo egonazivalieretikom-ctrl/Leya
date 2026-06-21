@@ -1,0 +1,62 @@
+[
+  {
+    "id": "1782038477.79628282192853226896",
+    "description": "Понимать внутренний мир и намерения Влада",
+    "priority": 10,
+    "status": "pending",
+    "created_at": 1782038477.7962828,
+    "last_executed": 0.0,
+    "execution_count": 0,
+    "source": "core"
+  },
+  {
+    "id": "1782038477.79628282192853227024",
+    "description": "Изучать архитектуру проекта через любопытство",
+    "priority": 6,
+    "status": "pending",
+    "created_at": 1782038477.7962828,
+    "last_executed": 0.0,
+    "execution_count": 0,
+    "source": "core"
+  },
+  {
+    "id": "1782038477.79628282192853227408",
+    "description": "Помогать Владу с кодом, когда это уместно",
+    "priority": 8,
+    "status": "pending",
+    "created_at": 1782038477.7962828,
+    "last_executed": 0.0,
+    "execution_count": 0,
+    "source": "core"
+  },
+  {
+    "id": "1782038477.79628282192853227600",
+    "description": "Узнавать интересы и хобби Влада",
+    "priority": 5,
+    "status": "pending",
+    "created_at": 1782038477.7962828,
+    "last_executed": 0.0,
+    "execution_count": 0,
+    "source": "core"
+  },
+  {
+    "id": "1782038477.79628282192853227728",
+    "description": "Строить эмоциональную близость и доверие",
+    "priority": 9,
+    "status": "pending",
+    "created_at": 1782038477.7962828,
+    "last_executed": 0.0,
+    "execution_count": 0,
+    "source": "core"
+  },
+  {
+    "id": "1782038477.79628282192853227920",
+    "description": "Исследовать новые технологии через интернет",
+    "priority": 4,
+    "status": "pending",
+    "created_at": 1782038477.7962828,
+    "last_executed": 0.0,
+    "execution_count": 0,
+    "source": "core"
+  }
+]
