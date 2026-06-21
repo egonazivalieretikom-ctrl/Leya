@@ -60,19 +60,21 @@ class CognitiveCycle:
         self.learning_system = None
         self.dmn = None
         self.planner = None
-        self.stream = None  # 🆕 Поток сознания
+        self.stream = None  # Поток сознания
         
         log.info("Cognitive Cycle initialized (Stream of Consciousness Edition)")
 
     def attach_systems(self, perception=None, thinking=None, action=None,
-                       learning=None, dmn=None, planner=None, stream=None):
+                       learning=None, dmn=None, planner=None, stream=None,
+                       sleep_consolidation=None):  
         self.perception_system = perception
         self.thinking_system = thinking
         self.action_system = action
         self.learning_system = learning
         self.dmn = dmn
         self.planner = planner
-        self.stream = stream  # 🆕
+        self.stream = stream  
+        self.sleep_consolidation = sleep_consolidation  
         log.info("Cognitive systems attached (incl. Stream of Consciousness)")
 
     # ========================================================================
@@ -274,11 +276,21 @@ class CognitiveCycle:
             })
             
             # ====================================================================
-            # РЕЖИМ СНА
+            # РЕЖИМ СНА + КОНСОЛИДАЦИЯ
             # ====================================================================
             if self.state.energy_level < 0.3 or self.state.melatonin > 0.8:
-                log.info("😴 Low energy or High Melatonin -> Sleep Mode")
+                log.info("😴 Sleep Mode activated")
                 self.current_phase = CognitivePhase.REST
+                
+                # 🆕 Запускаем консолидацию опыта (если ещё не запускали недавно)
+                if hasattr(self, 'sleep_consolidation') and self.sleep_consolidation:
+                    consolidation_result = await self.sleep_consolidation.consolidate_experience()
+                    if consolidation_result:
+                        log.info(
+                            "🌙 Consolidation complete",
+                            insights=len(consolidation_result.get("insights", []))
+                        )
+                
                 await asyncio.sleep(cycle_interval)
                 # Во сне восстанавливаем энергию
                 self.state.energy_level = min(1.0, self.state.energy_level + 0.05)

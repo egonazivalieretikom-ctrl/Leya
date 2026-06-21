@@ -39,22 +39,28 @@ class StreamOfConsciousness:
     async def generate_stream(self) -> Optional[str]:
         """
         Генерирует одну мысль из потока сознания.
-        Возвращает мысль или None, если не время генерировать.
+        
+        v0.7: Дедупликация — если мысль похожа на недавние, отменяем генерацию.
+        Биология: Аналог "адаптации нейронов" — мозг не генерирует одинаковые
+        сигналы подряд, это было бы расточительно.
         """
         now = time.time()
         
-        # Проверяем интервал
         if (now - self.last_stream_time) < self.stream_interval:
             return None
         
         self.last_stream_time = now
         
-        # Собираем контекст для генерации
         context = self._build_stream_context()
         
         try:
             thought = await self._llm_generate_thought(context)
             if not thought:
+                return None
+            
+            # 🆕 ДЕДУПЛИКАЦИЯ: Проверяем схожесть с недавними мыслями
+            if self._is_thought_duplicate(thought):
+                log.debug("🔄 Thought duplicate detected, skipping", thought=thought[:50])
                 return None
             
             # Применяем эмоциональную обратную связь
@@ -78,6 +84,83 @@ class StreamOfConsciousness:
         except Exception as e:
             log.error("Stream generation failed", error=str(e))
             return None
+
+
+            # ========================================================================
+    # 🆕 ДЕДУПЛИКАЦИЯ МЫСЛЕЙ (v0.7)
+    # ========================================================================
+    
+    def _is_thought_duplicate(self, new_thought: str, similarity_threshold: float = 0.6) -> bool:
+        """
+        Проверяет, не похожа ли новая мысль на недавние.
+        
+        Биология: Аналог "habituation" — нейроны перестают реагировать
+        на повторяющиеся стимулы. Мы используем простую метрику:
+        доля общих значимых слов.
+        
+        Args:
+            new_thought: Новая мысль
+            similarity_threshold: Порог схожести (0.0 - 1.0)
+        
+        Returns:
+            True если мысль слишком похожа на недавние
+        """
+        if not self.recent_thoughts:
+            return False
+        
+        # Извлекаем значимые слова (длиной > 3 символов)
+        new_words = self._extract_meaningful_words(new_thought)
+        if not new_words:
+            return False
+        
+        # Сравниваем с последними 3 мыслями
+        for recent in self.recent_thoughts[-3:]:
+            recent_words = self._extract_meaningful_words(recent)
+            if not recent_words:
+                continue
+            
+            # Вычисляем долю общих слов (Jaccard similarity)
+            intersection = len(new_words & recent_words)
+            union = len(new_words | recent_words)
+            
+            if union == 0:
+                continue
+            
+            similarity = intersection / union
+            
+            if similarity >= similarity_threshold:
+                return True
+        
+        return False
+    
+    def _extract_meaningful_words(self, text: str) -> set:
+        """
+        Извлекает значимые слова из текста.
+        
+        Игнорирует:
+        - Стоп-слова (я, ты, он, она, мы, вы, в, на, с, и, а, но)
+        - Короткие слова (≤ 3 символов)
+        - Пунктуацию
+        """
+        stop_words = {
+            "я", "ты", "он", "она", "мы", "вы", "они", "это", "то", "так",
+            "в", "на", "с", "по", "к", "о", "об", "и", "а", "но", "или",
+            "что", "как", "где", "когда", "почему", "зачем", "который",
+            "мой", "твой", "наш", "ваш", "его", "её", "их",
+            "есть", "нет", "был", "была", "было", "были", "будет",
+            "меня", "тебя", "нас", "вас", "мне", "тебе", "нам", "вам",
+        }
+        
+        # Разбиваем на слова, приводим к нижнему регистру
+        words = re.findall(r'[а-яёa-z]+', text.lower())
+        
+        # Фильтруем
+        meaningful = {
+            w for w in words 
+            if len(w) > 3 and w not in stop_words
+        }
+        
+        return meaningful
     
     # ========================================================================
     # СБОР КОНТЕКСТА ДЛЯ ПОТОКА СОЗНАНИЯ

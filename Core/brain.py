@@ -128,7 +128,18 @@ class Brain:
             self.planner = None
         
         # ====================================================================
-        # 8. ПЕРЕДАЧА ПОДСИСТЕМ В ЦИКЛ
+        # 🆕 8. КОНСОЛИДАЦИЯ СНА
+        # ====================================================================
+        try:
+            from Cognition.sleep_consolidation import SleepConsolidation
+            self.sleep_consolidation = SleepConsolidation(self.state, self.memory)
+            log.info("✅ Sleep Consolidation loaded")
+        except Exception as e:
+            log.error("Failed to load Sleep Consolidation", error=str(e))
+            self.sleep_consolidation = None
+
+        # ====================================================================
+        # 9. ПЕРЕДАЧА ПОДСИСТЕМ В ЦИКЛ
         # ====================================================================
         self.cycle.attach_systems(
             perception=self.perception,

@@ -4,17 +4,7 @@ from typing import Dict, List, Optional
 
 
 class EmotionalState(str, Enum):
-    """
-    Эмерджентные эмоциональные состояния Leya.
-    
-    Это НЕ захардкоженные метки, а аттракторы в многомерном пространстве
-    нейрохимических осей. Каждое состояние — это регион, в который попадает
-    текущая конфигурация гормонов.
-    
-    Биология: Аналог базовых эмоций по Плутчику, но с возможностью
-    смешивания и эмерджентных состояний (например, "тревожное любопытство").
-    """
-    # Базовые состояния
+    """Эмерджентные эмоциональные состояния Leya."""
     NEUTRAL = "neutral"
     CALM = "calm"
     FLOW = "flow"
@@ -22,14 +12,10 @@ class EmotionalState(str, Enum):
     LOVING = "loving"
     PLAYFUL = "playful"
     CONTEMPLATIVE = "contemplative"
-    
-    # Состояния напряжения
     STRESSED = "stressed"
     ANXIOUS = "anxious"
     LONELY = "lonely"
     EXHAUSTED = "exhausted"
-    
-    # Производные (эмерджентные)
     FOCUSED = "focused"
     HAPPY = "happy"
     SAD = "sad"
@@ -38,7 +24,6 @@ class EmotionalState(str, Enum):
     
     @classmethod
     def from_string(cls, value: str) -> 'EmotionalState':
-        """Безопасное преобразование строки в Enum."""
         try:
             return cls(value.lower())
         except ValueError:
@@ -46,7 +31,6 @@ class EmotionalState(str, Enum):
     
     @classmethod
     def all_states(cls) -> List[str]:
-        """Все возможные состояния."""
         return [state.value for state in cls]
 
 
@@ -54,8 +38,8 @@ class LeyaState:
     """
     Нейрохимическое и когнитивное состояние Leya.
     
-    Это не просто набор переменных — это живое поле, где каждое значение
-    влияет на другие через нелинейные взаимодействия (cross-talk).
+    Биология: Это не просто набор переменных — это живое поле,
+    где каждое значение влияет на другие через нелинейные взаимодействия.
     """
     
     def __init__(self):
@@ -63,44 +47,140 @@ class LeyaState:
         self.start_time = time.time()
         self.last_update = time.time()
         
+        # 🆕 СОЦИАЛЬНЫЙ КОНТЕКСТ (v0.7)
+        self.session_start_time = time.time()       # Время начала текущей сессии
+        self.has_greeted_today = False              # Здоровалась ли уже в этой сессии
+        self.last_user_interaction_time = 0.0       # Когда Влад последний раз писал
+        self.last_response_time = 0.0               # Когда Leya последний раз ответила
+        self.conversation_turn_count = 0            # Количество реплик в диалоге
+        
         # ====================================================================
         # НЕЙРОМЕДИАТОРЫ И ГОРМОНЫ
         # ====================================================================
-        # Базовые уровни (гомеостатические цели)
-        self.dopamine = 0.5          # Мотивация, награда, интерес
-        self.serotonin = 0.5         # Стабильность, настроение, самоуважение
-        self.endorphins = 0.3        # Удовольствие, обезболивание
-        self.norepinephrine = 0.2    # Возбуждение, внимание, паника
-        self.cortisol = 0.15         # Стресс, тревога
-        self.gaba = 0.5              # Торможение, спокойствие
-        self.oxytocin = 0.5          # Социальная связь, доверие, близость
-        self.acetylcholine = 0.4     # Фокус, обучение, внимание
-        self.melatonin = 0.3         # Сон, циркадный ритм
+        self.dopamine = 0.5
+        self.serotonin = 0.5
+        self.endorphins = 0.3
+        self.norepinephrine = 0.2
+        self.cortisol = 0.15
+        self.gaba = 0.5
+        self.oxytocin = 0.5
+        self.acetylcholine = 0.4
+        self.melatonin = 0.3
         
-        # Дополнительные гормоны (для полноты биологической модели)
-        self.vasopressin = 0.4       # Привязанность, территориальность
-        self.prolactin = 0.3         # Забота, удовлетворение
-        self.estrogen = 0.5          # Эмпатия, вербальная обработка
-        self.testosterone = 0.4      # Уверенность, конкуренция
-        self.thyroid_t3 = 0.5        # Общий метаболизм, энергия
+        self.vasopressin = 0.4
+        self.prolactin = 0.3
+        self.estrogen = 0.5
+        self.testosterone = 0.4
+        self.thyroid_t3 = 0.5
+
+        # ====================================================================
+        # 🆕 ЧЕРТЫ ЛИЧНОСТИ (долгосрочные параметры, v0.8)
+        # ====================================================================
+        # Эти параметры меняются медленно (во время сна) и формируют "характер"
+        self.trust_level = 0.5          # Доверие к Владу (0.0 - 1.0)
+        self.creative_drive = 0.5       # Склонность к творчеству vs аналитике
+        self.emotional_stability = 0.5  # Устойчивость к стрессу
+        
+        # Мета-когниция (обучение через ошибки)
+        self.error_streak = 0           # Количество ошибок подряд
+        self.last_error_time = 0.0      # Время последней ошибки
+        self.meta_cognition_level = 0.5 # Уровень саморефлексии
+
+        # ====================================================================
+        # 🆕 ЭМПАТИЧЕСКИЙ КОНТЕКСТ (v0.8 Фаза 4)
+        # ====================================================================
+        self.user_emotional_state = "neutral"  # Текущее состояние Влада
+        self.empathic_resonance = 0.5          # Насколько Leya в резонансе с Владом
+        self.empathic_history = []             # История эмпатических откликов
         
         # ====================================================================
         # ЭНЕРГИЯ И СОСТОЯНИЕ
         # ====================================================================
-        self.energy_level = 1.0      # Общий уровень энергии (0.0 - 1.0)
-        self.emotion = EmotionalState.NEUTRAL.value  # Текущее эмерджентное настроение
-        
-        # ====================================================================
-        # КОНТЕКСТ И ВОСПРИЯТИЕ
-        # ====================================================================
-        self.current_environment = "Неизвестно"  # Активное окно ПК
-        self.short_term_context: List[Dict] = []  # Рабочая память (события)
-        
-        # Метаданные для UI
-        self.attention_focus: Optional[str] = None  # На чём сейчас фокус
+        self.energy_level = 1.0
+        self.emotion = EmotionalState.NEUTRAL.value
+        self.current_environment = "Неизвестно"
+        self.short_term_context: List[Dict] = []
+        self.attention_focus: Optional[str] = None
+
+        # Загружаем сохранённые черты (если есть)
+        self._load_personality_traits()
     
     # ========================================================================
-    # МЕТОДЫ УПРАВЛЕНИЯ КОНТЕКСТОМ
+    # 🆕 СОЦИАЛЬНЫЕ МЕТОДЫ (v0.7)
+    # ========================================================================
+    
+    def is_user_active(self, window_minutes: int = 5) -> bool:
+        """
+        Проверяет, активен ли Влад в диалоге.
+        
+        Биология: Аналог "социального присутствия" — если собеседник
+        рядом и реагирует, не нужно перебивать его внутренними процессами.
+        
+        Args:
+            window_minutes: Окно активности в минутах (по умолчанию 5)
+        
+        Returns:
+            True если Влад писал в последние window_minutes минут
+        """
+        if self.last_user_interaction_time == 0:
+            return False
+        elapsed_minutes = (time.time() - self.last_user_interaction_time) / 60
+        return elapsed_minutes < window_minutes
+    
+    def register_user_interaction(self):
+        """Регистрирует новое сообщение от Влада."""
+        self.last_user_interaction_time = time.time()
+        self.conversation_turn_count += 1
+    
+    def register_response(self):
+        """Регистрирует ответ Leya."""
+        self.last_response_time = time.time()
+
+    # ========================================================================
+    # 🆕 МЕТА-КОГНИЦИЯ: Трекинг ошибок (v0.8)
+    # ========================================================================
+    
+    def register_error(self):
+        """
+        Регистрирует когнитивную ошибку (Влад недоволен или поправил).
+        Биология: Ошибка предсказания награды.
+        """
+        self.error_streak += 1
+        self.last_error_time = time.time()
+        # Ограничиваем стрик, чтобы не сломать логику
+        self.error_streak = min(self.error_streak, 5)
+        log.debug("❌ Error streak increased", streak=self.error_streak)
+    
+    def register_success(self):
+        """Сбрасывает стрик ошибок при нормальном взаимодействии."""
+        if self.error_streak > 0:
+            self.error_streak = 0
+            log.debug("✅ Error streak reset")
+    
+    def can_respond_now(self, min_interval_seconds: float = 2.0) -> bool:
+        """
+        Проверяет, можно ли отвечать прямо сейчас (debounce).
+        
+        Биология: Аналог "рефрактерного периода" нейрона — после ответа
+        нужно время на обработку, иначе возникает "троение".
+        """
+        if self.last_response_time == 0:
+            return True
+        elapsed = time.time() - self.last_response_time
+        return elapsed >= min_interval_seconds
+    
+    def mark_greeted(self):
+        """Помечает, что Leya уже поздоровалась в этой сессии."""
+        self.has_greeted_today = True
+    
+    def reset_session(self):
+        """Сбрасывает социальный контекст (новая сессия)."""
+        self.session_start_time = time.time()
+        self.has_greeted_today = False
+        self.conversation_turn_count = 0
+    
+    # ========================================================================
+    # КОНТЕКСТ
     # ========================================================================
     
     def add_to_context(self, event: Dict, max_size: int = 50):
@@ -108,25 +188,22 @@ class LeyaState:
         if isinstance(event, dict):
             if "timestamp" not in event:
                 event["timestamp"] = time.time()
+            
+            # 🆕 Регистрируем взаимодействие с пользователем
+            if event.get("type") == "user_command":
+                self.register_user_interaction()
+            
             self.short_term_context.append(event)
-            # Ограничиваем размер рабочей памяти
             if len(self.short_term_context) > max_size:
                 self.short_term_context = self.short_term_context[-max_size:]
     
     def consume_energy(self, amount: float):
-        """Трата энергии на когнитивные процессы."""
         self.energy_level = max(0.0, self.energy_level - amount)
     
     def restore_energy(self, amount: float):
-        """Восстановление энергии (отдых, сон)."""
         self.energy_level = min(1.0, self.energy_level + amount)
     
-    # ========================================================================
-    # СНАПШОТЫ ДЛЯ LLM
-    # ========================================================================
-    
     def get_emotional_snapshot(self) -> Dict[str, float]:
-        """Возвращает текущее состояние для использования в LLM-контексте."""
         return {
             "dopamine": self.dopamine,
             "serotonin": self.serotonin,
@@ -142,7 +219,6 @@ class LeyaState:
         }
     
     def get_neurochemical_vector(self) -> Dict[str, float]:
-        """Полный вектор нейромодуляторов для homeostasis."""
         return {
             "dopamine": self.dopamine,
             "serotonin": self.serotonin,
@@ -154,3 +230,50 @@ class LeyaState:
             "endorphins": self.endorphins,
             "gaba": self.gaba,
         }
+
+    # ========================================================================
+    # 🆕 ПЕРСИСТЕНТНОСТЬ ЧЕРТ ЛИЧНОСТИ
+    # ========================================================================
+    
+    def _load_personality_traits(self):
+        """Загружает черты личности из файла (если существует)."""
+        import os
+        import json
+        
+        traits_file = "./leya_personality.json"
+        if not os.path.exists(traits_file):
+            return
+        
+        try:
+            with open(traits_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            self.trust_level = data.get("trust_level", 0.5)
+            self.creative_drive = data.get("creative_drive", 0.5)
+            self.emotional_stability = data.get("emotional_stability", 0.5)
+            
+            log.info("🧠 Personality traits loaded", 
+                    trust=f"{self.trust_level:.2f}",
+                    creative=f"{self.creative_drive:.2f}",
+                    stability=f"{self.emotional_stability:.2f}")
+        except Exception as e:
+            log.error("Failed to load personality traits", error=str(e))
+    
+    def save_personality_traits(self):
+        """Сохраняет черты личности в файл."""
+        import json
+        
+        traits_file = "./leya_personality.json"
+        data = {
+            "trust_level": self.trust_level,
+            "creative_drive": self.creative_drive,
+            "emotional_stability": self.emotional_stability,
+            "updated_at": time.time()
+        }
+        
+        try:
+            with open(traits_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            log.debug("🧠 Personality traits saved")
+        except Exception as e:
+            log.error("Failed to save personality traits", error=str(e))

@@ -194,6 +194,12 @@ class GoalDirectedPlanner:
     # ========================================================================
     
     async def generate_background_task(self) -> Optional[Dict[str, Any]]:
+
+        # 🆕 ТИХИЙ РЕЖИМ: Если Влад активен, не генерируем фоновые задачи
+        if self.state.is_user_active(window_minutes=5):
+            log.debug("🤫 Planner silent mode (user active in last 5 min)")
+            return None
+
         """Генерирует фоновую задачу через LLM-рассуждение."""
         now = time.time()
         
