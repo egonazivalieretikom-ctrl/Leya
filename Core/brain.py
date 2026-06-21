@@ -181,6 +181,17 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Embodiment System", error=str(e))
             self.embodiment = None
+
+        # ====================================================================
+        # 🆕 НЕПРЕРЫВНОСТЬ (субъективное время + фоновые ощущения)
+        # ====================================================================
+        try:
+            from Core.continuity import ContinuitySystem
+            self.continuity = ContinuitySystem(self.state)
+            log.info("✅ Continuity System loaded")
+        except Exception as e:
+            log.error("Failed to load Continuity System", error=str(e))
+            self.continuity = None
         
         # ====================================================================
         # 10. ПЕРЕДАЧА ВСЕХ ПОДСИСТЕМ В ЦИКЛ
@@ -194,7 +205,7 @@ class Brain:
             planner=self.planner,
             stream=self.stream,
             sleep_consolidation=self.sleep_consolidation,
-            thalamus=self.thalamus
+            thalamus=self.thalamus,
             project_manager=self.project_manager 
         )
         
@@ -219,20 +230,24 @@ class Brain:
         # Публикуем событие старта
         await event_bus.publish("leya_start", {"timestamp": self.state.start_time})
         
-        # 🆕 Запускаем эмбодзимент (непрерывный процесс)
-        embodiment_task = None
+        # 🆕 Запускаем непрерывные процессы
+        background_tasks = []
+        
         if self.embodiment:
-            embodiment_task = asyncio.create_task(self.embodiment.start())
+            background_tasks.append(asyncio.create_task(self.embodiment.start()))
+        
+        if self.continuity:
+            background_tasks.append(asyncio.create_task(self.continuity.start()))
         
         # Запускаем когнитивный цикл
         try:
             await self.cycle.run_continuous(cycle_interval)
         except asyncio.CancelledError:
             log.info("🛑 Brain cycle cancelled")
-            if embodiment_task:
-                embodiment_task.cancel()
+            for task in background_tasks:
+                task.cancel()
         except Exception as e:
             log.error("💥 Critical error in Brain cycle", error=str(e), exc_info=True)
-            if embodiment_task:
-                embodiment_task.cancel()
+            for task in background_tasks:
+                task.cancel()
             raise

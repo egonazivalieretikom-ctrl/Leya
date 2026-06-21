@@ -74,15 +74,11 @@ class EmbodimentSystem:
     # ========================================================================
     
     async def _update_sensory_input(self):
-        """
-        Считывает системные метрики и преобразует в телесные ощущения.
-        
-        Биология: Аналог интероцепции — мозг постоянно мониторит состояние тела.
-        """
+        """Считывает системные метрики и преобразует в телесные ощущения."""
         # 1. Считываем метрики
         metrics = self._read_system_metrics()
         
-        # 2. Сглаживаем (скользящее среднее)
+        # 2. Сглаживаем
         smoothed = self._smooth_metrics(metrics)
         
         # 3. Преобразуем в телесные ощущения
@@ -91,10 +87,10 @@ class EmbodimentSystem:
         # 4. Обновляем состояние Леи
         self._update_state(sensations, smoothed)
         
-        # 5. Логируем (раз в 5 секунд, чтобы не засорять логи)
-        if int(time.time()) % 5 == 0:
-            log.debug(
-                "🖥️ Embodiment update",
+        # 🆕 Логируем чаще (раз в 2 секунды, а не 5)
+        if int(time.time()) % 2 == 0:
+            log.info(
+                "🖥️ Embodiment",
                 temp=f"{smoothed['temperature']:.1f}°C",
                 cpu=f"{smoothed['cpu_load']*100:.0f}%",
                 ram=f"{smoothed['ram_load']*100:.0f}%",

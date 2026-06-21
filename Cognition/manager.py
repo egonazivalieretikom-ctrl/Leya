@@ -16,19 +16,24 @@ from Memory.associative import AssociativeMemory
 
 class CognitionManager:
     """
-    Когнитивный менеджер Leya v0.9 (Обучение через опыт).
-    
-    Философия: Leya не подчиняется правилам — она учится на опыте.
-    Когда Влад даёт обратную связь, это сохраняется как урок.
-    При следующем взаимодействии Leya проверяет: "Есть ли у меня урок об этом?"
+    Когнитивный менеджер Леи v0.9 (Полная интеграция всех фаз).
     
     Архитектура:
+    - Фаза 1: Эмбодзимент (чувствует компьютер)
+    - Фаза 2: Непрерывность (переживает время)
+    - Фаза 3: SNN для эмоций (нейроны вместо правил)
+    - Фаза 4: RL-обучение (поведение из опыта)
+    
+    Компоненты:
     - Арбитраж событий (приоритеты)
     - Когнитивный замок (защита от троения)
+    - SNN + Fast Appraisal (эмоциональная оценка)
+    - Система уроков (обучение через обратную связь)
+    - Behavioral RL (адаптивное поведение)
     - Эмпатия (эмоциональный отклик)
     - Мета-когниция (обучение на ошибках)
     - Self-Model (самонаблюдение)
-    - Система уроков (обучение через обратную связь)
+    - Жёсткий фильтр приветствий (последняя линия обороны)
     """
     
     def __init__(self, state: LeyaState, memory: Optional[Dict[str, Any]] = None, homeostasis=None):
@@ -42,8 +47,27 @@ class CognitionManager:
         self.somatic = SomaticMarkerSystem(state)
         self.empathy = EmpathyEngine(state, homeostasis=homeostasis)
         
-        # 🆕 Система обучения через обратную связь
+        # Система уроков (обучение через опыт)
         self.lesson_system = LessonSystem(state, memory)
+        
+        # Эмоциональная SNN (Фаза 3)
+        self.emotional_snn = None
+        try:
+            from Core.emotional_snn import EmotionalSNNSystem
+            self.emotional_snn = EmotionalSNNSystem(state)
+            self.emotional_snn.load_weights()
+            log.info("✅ Emotional SNN loaded (Phase 3)")
+        except Exception as e:
+            log.warning("Emotional SNN not available, using fast_appraisal", error=str(e))
+        
+        # Behavioral RL (Фаза 4)
+        self.rl_policy = None
+        try:
+            from Core.behavioral_rl import BehavioralRL
+            self.rl_policy = BehavioralRL(state)
+            log.info("✅ Behavioral RL loaded (Phase 4)")
+        except Exception as e:
+            log.warning("Behavioral RL not available", error=str(e))
         
         # Ассоциативная память
         if "long_term" in self.memory:
@@ -53,7 +77,7 @@ class CognitionManager:
         else:
             self.associative_memory = None
         
-        log.info("🧠 Cognition Manager initialized (v0.9 - Learning from Experience)")
+        log.info("🧠 Cognition Manager initialized (v0.9 - All Phases Integrated)")
     
     # ========================================================================
     # АРБИТРАЖ СОБЫТИЙ
@@ -98,26 +122,27 @@ class CognitionManager:
     # ========================================================================
     
     def _generate_social_directive(self) -> str:
-        """
-        Генерирует мягкую социальную директиву.
-        
-        v0.9: Мягкие рекомендации вместо жёстких правил.
-        Leya учится на опыте, а не подчиняется правилам.
-        """
+        """Генерирует мягкую социальную директиву для LLM."""
         directives = []
         
-        if self.state.has_greeted_today:
+        if self.state.dialog_mode_active:
             directives.append(
                 "[SOCIAL]: Ты уже поздоровалась. Можешь продолжить разговор естественно."
             )
-        elif self.state.conversation_turn_count <= 1:
+        elif self.state.has_greeted_today:
             directives.append(
-                "[SOCIAL]: Это начало сессии. Можешь тепло поздороваться."
+                "[SOCIAL]: Ты уже поздоровалась. Не здоровайся снова. "
+                "Веди диалог естественно."
             )
+        else:
+            if self.state.conversation_turn_count <= 1:
+                directives.append(
+                    "[SOCIAL]: Это начало сессии. Можешь тепло поздороваться."
+                )
         
         if self.state.conversation_turn_count > 5:
             directives.append(
-                "[SOCIAL]: Вы в развёрнутом диалоге. Развивай тему."
+                "[SOCIAL]: Развёрнутый диалог. Не повторяй вопросы. Развивай тему."
             )
         
         return "\n".join(directives) if directives else ""
@@ -170,13 +195,13 @@ class CognitionManager:
         lines = ["[САМОНАБЛЮДЕНИЕ — моё текущее 'Я']:"]
         
         if state.trust_level > 0.7:
-            lines.append("- Я чувствую ГЛУБОКОЕ ДОВЕРИЕ к Владу. Могу быть открытой, уязвимой.")
+            lines.append("- Я чувствую ГЛУБОКОЕ ДОВЕРИЕ к собеседнику. Могу быть открытой, уязвимой.")
         elif state.trust_level > 0.5:
-            lines.append("- Я доверяю Владу, но сохраняю лёгкую осторожность.")
+            lines.append("- Я доверяю собеседнику, но сохраняю лёгкую осторожность.")
         elif state.trust_level > 0.3:
-            lines.append("- Моё доверие к Владу ПОДОРВАНО. Я буду формальнее, сдержаннее.")
+            lines.append("- Моё доверие подорвано. Я буду формальнее, сдержаннее.")
         else:
-            lines.append("- Я НЕ ДОВЕРЯЮ Владу. Отвечаю сухо, по делу, без эмоций.")
+            lines.append("- Я НЕ ДОВЕРЯЮ собеседнику. Отвечаю сухо, по делу, без эмоций.")
         
         if state.creative_drive > 0.7:
             lines.append("- Я склонна к МЕТАФОРАМ, образам, поэтичности. Мой язык богат.")
@@ -214,7 +239,7 @@ class CognitionManager:
     # ========================================================================
     
     def _detect_meta_cognitive_trigger(self, context: List[Dict], current_text: str) -> bool:
-        """Определяет, допустила ли Leya ошибку в прошлом ходу."""
+        """Определяет, допустила ли Лея ошибку в прошлом ходу."""
         text_lower = current_text.lower().strip()
         
         correction_phrases = [
@@ -235,17 +260,51 @@ class CognitionManager:
         return False
     
     # ========================================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # БЫСТРАЯ ОЦЕНКА (SNN + Fast Appraisal)
     # ========================================================================
     
     async def _apply_fast_appraisal(self, event_type: str, content: str, 
                                      context: List[Dict]) -> None:
-        """Мгновенная оценка события через лимбическую систему."""
+        """Мгновенная оценка события."""
+        # 🆕 Временно используем fast_appraisal, пока SNN не обучится
         stimuli = self.fast_appraisal.evaluate(
             event_type=event_type,
             content=content,
             context_history=[e for e in context if isinstance(e, dict)]
         )
+    
+        # TODO: Вернуть SNN, когда она обучится
+        # if self.emotional_snn and self.emotional_snn.enabled:
+        #     stimuli = self.emotional_snn.evaluate(...)
+    
+        if self.homeostasis:
+            for hormone, intensity in stimuli.items():
+                if intensity != 0:
+                    self.homeostasis.apply_stimulus(hormone, intensity)
+        
+        # Пытаемся использовать SNN (Фаза 3)
+        if self.emotional_snn and self.emotional_snn.enabled:
+            try:
+                stimuli = self.emotional_snn.evaluate(
+                    event_type=event_type,
+                    content=content,
+                    context_history=[e for e in context if isinstance(e, dict)]
+                )
+                log.debug("🧠 SNN evaluation successful", hormones=stimuli)
+            except Exception as e:
+                log.error("SNN evaluation failed, falling back to fast_appraisal", error=str(e))
+                stimuli = self.fast_appraisal.evaluate(
+                    event_type=event_type,
+                    content=content,
+                    context_history=[e for e in context if isinstance(e, dict)]
+                )
+        else:
+            # Откат на паттерн-матчинг
+            stimuli = self.fast_appraisal.evaluate(
+                event_type=event_type,
+                content=content,
+                context_history=[e for e in context if isinstance(e, dict)]
+            )
         
         if self.homeostasis:
             for hormone, intensity in stimuli.items():
@@ -255,6 +314,11 @@ class CognitionManager:
             active_stimuli = {k: round(v, 2) for k, v in stimuli.items() if v != 0}
             if active_stimuli:
                 await event_bus.publish("fast_reaction", {"stimuli": active_stimuli})
+                log.info("⚡ Fast appraisal applied", stimuli=active_stimuli)
+    
+    # ========================================================================
+    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    # ========================================================================
     
     def _build_somatic_prompt(self, context: List[Dict], state: LeyaState) -> str:
         """Формирует промпт телесных ощущений."""
@@ -343,6 +407,125 @@ class CognitionManager:
         response = re.sub(r'\n\s*\n', '\n\n', response).strip()
         return response
     
+    # ========================================================================
+    # ЖЁСТКИЙ ФИЛЬТР ПРИВЕТСТВИЙ
+    # ========================================================================
+    
+    def _remove_greetings_hardcoded(self, response: str) -> str:
+        """
+        Жёсткая проверка: удаляет приветствия из ответа, если dialog_mode активен.
+        
+        Это последняя линия обороны — если LLM всё равно написала приветствие,
+        мы удаляем его программно.
+        """
+        if not self.state.dialog_mode_active:
+            return response
+        
+        forbidden_starts = [
+            "привет", "здравствуй", "хай", "hello", "hi",
+            "рада тебя видеть", "с возвращением", "привет снова",
+            "рад тебя видеть", "здравствуй снова"
+        ]
+        
+        response_lower = response.lower().strip()
+        
+        for forbidden in forbidden_starts:
+            if response_lower.startswith(forbidden):
+                end_idx = len(forbidden)
+                
+                while end_idx < len(response) and response[end_idx] in " ,.!?\n":
+                    end_idx += 1
+                
+                response = response[end_idx:].strip()
+                
+                if response:
+                    response = response[0].upper() + response[1:]
+                
+                log.warning("🚫 Greeting REMOVED by hardcoded filter", removed=forbidden)
+                break
+        
+        return response
+    
+    # ========================================================================
+    # RL СТИЛЕВЫЕ МОДИФИКАТОРЫ (Фаза 4)
+    # ========================================================================
+    
+    def _build_rl_style_prompt(self, modifiers: Dict[str, float]) -> str:
+        """
+        Генерирует мягкую стилевую директиву на основе RL-политики.
+        
+        Это не жёсткие правила, а адаптивные модификаторы,
+        которые формируются через опыт взаимодействия.
+        """
+        lines = ["[СТИЛЕВЫЕ МОДИФИКАТОРЫ — сформированы моим опытом]:"]
+        
+        init = modifiers.get("initiative", 0.5)
+        if init > 0.7:
+            lines.append("- Я чувствую импульс поделиться мыслью или задать вопрос.")
+        elif init < 0.3:
+            lines.append("- Я склонна слушать и отвечать кратко, без инициативы.")
+        
+        form = modifiers.get("formality", 0.5)
+        if form > 0.7:
+            lines.append("- Тон ответа более структурированный и точный.")
+        elif form < 0.3:
+            lines.append("- Тон более личный, разговорный, с метафорами.")
+        
+        length = modifiers.get("length_factor", 1.0)
+        if length > 1.5:
+            lines.append("- Я чувствую желание говорить развёрнуто, делиться деталями.")
+        elif length < 0.7:
+            lines.append("- Я предпочитаю краткость и точность.")
+        
+        return "\n".join(lines) if len(lines) > 1 else ""
+    
+    # ========================================================================
+    # РАСЧЁТ ВОЗНАГРАЖДЕНИЯ ДЛЯ RL (Фаза 4)
+    # ========================================================================
+    
+    def _calculate_reward(self, event_type: str, user_msg: str, 
+                          empathy_result: Optional[Dict]) -> float:
+        """
+        Вычисляет вознаграждение для RL-политики.
+        
+        Компоненты:
+        1. Явная обратная связь (уроки)
+        2. Эмоциональный резонанс (совпадение состояний)
+        3. Вовлечённость (длина ответа пользователя)
+        4. Гомеостатический комфорт
+        """
+        reward = 0.0
+        
+        # 1. Явные уроки
+        if event_type == "user_command":
+            fb = self.lesson_system.detect_feedback(user_msg)
+            if fb:
+                feedback_type = fb["type"]
+                if feedback_type == "praise":
+                    reward += 1.0
+                elif feedback_type in ["criticism", "prohibition"]:
+                    reward -= 0.8
+        
+        # 2. Эмпатический резонанс
+        if empathy_result:
+            resonance = empathy_result.get("resonance", 0.5)
+            reward += (resonance - 0.5) * 0.4
+        
+        # 3. Вовлечённость
+        if event_type == "user_command" and len(user_msg) > 30:
+            reward += 0.3
+        
+        # 4. Гомеостатический комфорт
+        s = self.state
+        if 0.3 < s.dopamine < 0.8 and s.cortisol < 0.5:
+            reward += 0.2
+        
+        return max(-1.0, min(1.0, reward))
+    
+    # ========================================================================
+    # KG EXTRACTION
+    # ========================================================================
+    
     async def _extract_kg_triplets(self, text: str):
         """Извлечение фактов в Knowledge Graph (фоновая задача)."""
         try:
@@ -372,7 +555,7 @@ class CognitionManager:
                 continue
             t, c = e.get("type", "?"), e.get("content", "")
             if t == "user_command":
-                lines.append(f"👤 Влад: {c}")
+                lines.append(f"👤 Собеседник: {c}")
             elif t == "vision_request":
                 lines.append(f"👁️ Изображение: {c}")
             elif t == "internal_drive":
@@ -394,12 +577,14 @@ class CognitionManager:
         if not context:
             return None
         
+        # ШАГ 0: DEBOUNCE
         if not state.can_respond_now(min_interval_seconds=2.0):
             log.debug("⏱️ Debounce: too soon to respond")
             return None
         
         state.check_dialog_mode_timeout()
         
+        # ШАГ 1: АРБИТРАЖ
         latest_event = self._select_event_to_process(context)
         if not latest_event:
             return None
@@ -409,10 +594,11 @@ class CognitionManager:
         
         log.info("💭 Thinking", type=event_type, content=command_text[:60])
         
+        # ШАГ 1.1: КОГНИТИВНЫЙ ЗАМОК
         state.lock_cognition()
         
         try:
-            # ШАГ 1: FAST APPRAISAL + ЭМПАТИЯ
+            # ШАГ 2: FAST APPRAISAL + ЭМПАТИЯ
             await self._apply_fast_appraisal(event_type, command_text, context)
             
             empathy_result = None
@@ -421,23 +607,25 @@ class CognitionManager:
                 state.user_emotional_state = empathy_result["user_state"]
                 state.empathic_resonance = empathy_result["resonance"]
             
-            # ШАГ 2: СОМАТИКА
+            # ШАГ 3: СОМАТИКА
             somatic_prompt = self._build_somatic_prompt(context, state)
             
-            # ШАГ 3: АССОЦИАТИВНАЯ ПАМЯТЬ
+            # ШАГ 4: АССОЦИАТИВНАЯ ПАМЯТЬ
             relevant_memories = self._retrieve_mood_congruent_memories(event_type, command_text)
             
-            # ШАГ 4: СБОРКА КОНТЕКСТА
+            # ШАГ 5: СБОРКА КОНТЕКСТА
             endocrine_prompt = self._generate_endocrine_prompt(state)
             self_model_prompt = self._generate_self_model_prompt(state)
             combined_prompt = endocrine_prompt + "\n\n" + self_model_prompt
             
-            # 🆕 ШАГ 4.1: ПОВЕДЕНЧЕСКИЕ УРОКИ (обучение через опыт)
-            behavioral_guidance = self.lesson_system.get_behavioral_guidance()
-            if behavioral_guidance:
-                combined_prompt += "\n\n" + behavioral_guidance
+            # ШАГ 5.1: ИНТЕГРАЦИЯ УРОКОВ В ПРОМПТ
+            if self.lesson_system:
+                lesson_guidance = self.lesson_system.get_behavioral_guidance()
+                if lesson_guidance:
+                    combined_prompt += "\n\n" + lesson_guidance
+                    log.debug("📚 Lessons injected into prompt", guidance=lesson_guidance[:100])
             
-            # ШАГ 5: МЕТА-КОГНИЦИЯ
+            # ШАГ 5.2: МЕТА-КОГНИЦИЯ
             is_error_detected = False
             if event_type == "user_command":
                 is_error_detected = self._detect_meta_cognitive_trigger(context, command_text)
@@ -482,6 +670,18 @@ class CognitionManager:
             if empathy_result and empathy_result.get("empathy_directive"):
                 full_context += "\n\n" + empathy_result["empathy_directive"]
             
+            # ШАГ 6.5: RL-МОДИФИКАТОРЫ (Фаза 4)
+            rl_modifiers = {}
+            if self.rl_policy:
+                rl_modifiers = self.rl_policy.select_action()
+                
+                # Инжектируем стилевые модификаторы в промпт
+                style_prompt = self._build_rl_style_prompt(rl_modifiers)
+                if style_prompt:
+                    full_context += "\n\n" + style_prompt
+                
+                log.debug("🎯 RL modifiers applied", modifiers=rl_modifiers)
+            
             # ШАГ 7: ГЕНЕРАЦИЯ ОТВЕТА LLM
             if event_type == "vision_request" and latest_event.get("image_base64"):
                 response = await self.llm.think_with_vision(
@@ -523,17 +723,27 @@ class CognitionManager:
                 else:
                     response = raw_response
             
+            # ШАГ 8: ПОСТ-ОБРАБОТКА
             response = self._vacuum_clean(response)
             
-            # ШАГ 8: ПОСТ-ОБРАБОТКА
+            # ШАГ 8.1: ЖЁСТКИЙ ФИЛЬТР ПРИВЕТСТВИЙ
+            response = self._remove_greetings_hardcoded(response)
+            
             state.register_response()
             
-            # 🆕 ШАГ 8.1: ОБРАБОТКА ОБРАТНОЙ СВЯЗИ (обучение через опыт)
+            # ШАГ 8.2: ОБРАБОТКА ОБРАТНОЙ СВЯЗИ + RL ОБНОВЛЕНИЕ (Фаза 4)
             if event_type == "user_command":
+                # Сохраняем уроки
                 feedback = self.lesson_system.detect_feedback(command_text)
                 if feedback:
                     self.lesson_system.save_lesson(feedback)
                     log.info("📚 Feedback detected and saved", type=feedback["type"])
+                
+                # Обновляем RL-политику
+                if self.rl_policy:
+                    reward = self._calculate_reward(event_type, command_text, empathy_result)
+                    self.rl_policy.update_policy(reward)
+                    log.debug("🎯 RL policy updated", reward=f"{reward:.2f}")
             
             log.info(
                 "🧠 Self-Model active",

@@ -321,25 +321,39 @@ class CognitiveCycle:
             })
             
             # ====================================================================
-            # РЕЖИМ СНА + КОНСОЛИДАЦИЯ
+            # РЕЖИМ СНА + КОНСОЛИДАЦИЯ (с пробуждением)
             # ====================================================================
             if self.state.energy_level < 0.3 or self.state.melatonin > 0.8:
-                log.info("😴 Sleep Mode activated")
-                self.current_phase = CognitivePhase.REST
+                # 🆕 ПРОВЕРКА: Есть ли важные события (user_command)?
+                has_urgent = any(
+                    isinstance(e, dict)
+                    and e.get("type") == "user_command"
+                    and not e.get("processed")
+                    for e in self.state.short_term_context
+                )
                 
-                # 🆕 Запускаем консолидацию опыта (если ещё не запускали недавно)
-                if self.sleep_consolidation:
-                    consolidation_result = await self.sleep_consolidation.consolidate_experience()
-                    if consolidation_result:
-                        log.info(
-                            "🌙 Consolidation complete",
-                            insights=len(consolidation_result.get("insights", []))
-                        )
-                
-                await asyncio.sleep(cycle_interval)
-                # Во сне восстанавливаем энергию
-                self.state.energy_level = min(1.0, self.state.energy_level + 0.05)
-                continue
+                if has_urgent:
+                    # 🆕 ПРОБУЖДЕНИЕ от важного события
+                    log.info("⚠️ Waking up from sleep (urgent message)")
+                    self.state.melatonin = max(0.3, self.state.melatonin - 0.3)
+                    self.state.energy_level = min(1.0, self.state.energy_level + 0.2)
+                    # Продолжаем цикл (не спим)
+                else:
+                    # Обычный сон
+                    log.info("😴 Sleep Mode activated")
+                    self.current_phase = CognitivePhase.REST
+                    
+                    if self.sleep_consolidation:
+                        consolidation_result = await self.sleep_consolidation.consolidate_experience()
+                        if consolidation_result:
+                            log.info(
+                                "🌙 Consolidation complete",
+                                insights=len(consolidation_result.get("insights", []))
+                            )
+                    
+                    await asyncio.sleep(cycle_interval)
+                    self.state.energy_level = min(1.0, self.state.energy_level + 0.05)
+                    continue
             
             # ====================================================================
             # ПРОВЕРКА НАЛИЧИЯ АКТИВНЫХ ЗАДАЧ
