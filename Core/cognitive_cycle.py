@@ -116,14 +116,47 @@ class CognitiveCycle:
     # ========================================================================
     
     async def _perceive(self, budget: float):
+        """
+        Сбор сенсорных данных из окружения.
+        
+        Биология: Аналог зрительной коры — обработка всех типов сенсорных входов.
+        """
         log.debug("👁️ Perceiving environment...")
         if self.perception_system:
             sensory_data = await self.perception_system.gather(budget)
+            
             for data in sensory_data:
-                if data.get("type") == "proprioception":
+                if not isinstance(data, dict):
+                    continue
+                
+                data_type = data.get("type")
+                
+                # 🆕 Обрабатываем ВСЕ типы сенсорных данных
+                if data_type == "proprioception":
+                    # Проприоцепция — знание о среде ПК
                     self.state.current_environment = data.get("active_window", "Неизвестно")
                     self.state.add_to_context(data)
                     await event_bus.publish("environment_changed", data)
+                    log.debug("🖥️ Environment updated", window=self.state.current_environment)
+                
+                elif data_type == "file_context":
+                    # 🆕 Файловый контекст — Leya видит код
+                    self.state.add_to_context(data)
+                    await event_bus.publish("file_context", data)
+                    log.info(
+                        "📄 File perceived",
+                        name=data.get("file_name", "?"),
+                        language=data.get("language", "?")
+                    )
+                
+                elif data_type == "vision":
+                    # Визуальный вход (камера)
+                    self.state.add_to_context(data)
+                    await event_bus.publish("vision_input", data)
+                
+                else:
+                    # Другие типы сенсорных данных
+                    self.state.add_to_context(data)
         else:
             await asyncio.sleep(0.1)
 

@@ -11,27 +11,26 @@ class Brain:
     """
     Центральный орган управления Leya.
     
-    Инициализирует все подсистемы и координирует их работу.
-    Версия v0.6 — с полным стеком эмерджентного сознания:
-    - Нелинейный гомеостаз (Фаза 1)
-    - LLM-рассуждения в Planner (Фаза 2)
-    - Поток сознания (Фаза 3)
-    - Ассоциативная память (Фаза 4)
+    Биология: Brain — это префронтальная кора + лимбическая система.
+    Он создаёт HomeostaticEngine (сердце) и передаёт его всем подсистемам.
     """
     
     def __init__(self):
         self.state = LeyaState()
         self.memory: Dict[str, Any] = {}
-        self.homeostasis: Optional[HomeostaticEngine] = None
+        
+        # 🆕 Создаём homeostasis СРАЗУ (единое сердце)
+        self.homeostasis = HomeostaticEngine(self.state)
+        
         self.cycle: CognitiveCycle = CognitiveCycle(self.state)
         
-        # Подсистемы (инициализируются в _load_subsystems)
+        # Подсистемы
         self.perception = None
         self.cognition = None
         self.action = None
         self.dmn = None
         self.planner = None
-        self.stream = None  # 🆕 Поток сознания
+        self.stream = None
         
         log.info("🧠 Brain initialized")
     
@@ -55,7 +54,7 @@ class Brain:
             raise
         
         # ====================================================================
-        # 2. ВОСПРИЯТИЕ (Perception)
+        # 2. ВОСПРИЯТИЕ
         # ====================================================================
         try:
             from Perception.manager import PerceptionManager
@@ -66,14 +65,14 @@ class Brain:
             raise
         
         # ====================================================================
-        # 3. ПОЗНАНИЕ (Cognition)
+        # 3. ПОЗНАНИЕ (передаём homeostasis)
         # ====================================================================
         try:
             from Cognition.manager import CognitionManager
             self.cognition = CognitionManager(
                 state=self.state,
                 memory=self.memory,
-                homeostasis=self.homeostasis  # Может быть None на этом этапе
+                homeostasis=self.homeostasis  # 🆕 Единое сердце
             )
             log.info("✅ Cognition system loaded")
         except Exception as e:
@@ -81,7 +80,7 @@ class Brain:
             raise
         
         # ====================================================================
-        # 4. ДЕЙСТВИЕ (Action)
+        # 4. ДЕЙСТВИЕ
         # ====================================================================
         try:
             from Action.executor import ActionExecutor
@@ -92,18 +91,22 @@ class Brain:
             raise
         
         # ====================================================================
-        # 5. ПОТОК СОЗНАНИЯ (Stream of Consciousness) — Фаза 3
+        # 5. ПОТОК СОЗНАНИЯ (передаём homeostasis)
         # ====================================================================
         try:
             from Cognition.stream_of_consciousness import StreamOfConsciousness
-            self.stream = StreamOfConsciousness(self.state, self.memory, homeostasis=self.homeostasis)
+            self.stream = StreamOfConsciousness(
+                self.state, 
+                self.memory, 
+                homeostasis=self.homeostasis  # 🆕 Единое сердце
+            )
             log.info("✅ Stream of Consciousness loaded")
         except Exception as e:
             log.error("Failed to load Stream of Consciousness", error=str(e))
             self.stream = None
         
         # ====================================================================
-        # 6. DEFAULT MODE NETWORK (DMN)
+        # 6. DMN
         # ====================================================================
         try:
             from Cognition.dmn import DefaultModeNetwork
@@ -114,7 +117,7 @@ class Brain:
             self.dmn = None
         
         # ====================================================================
-        # 7. ПЛАНИРОВЩИК (Planner) — Фаза 2
+        # 7. ПЛАНИРОВЩИК
         # ====================================================================
         try:
             from Cognition.planner import GoalDirectedPlanner
@@ -131,40 +134,16 @@ class Brain:
             perception=self.perception,
             thinking=self.cognition,
             action=self.action,
-            learning=None,  # 🆕 Learning-модуль не реализован отдельно
+            learning=None,
             dmn=self.dmn,
             planner=self.planner,
-            stream=self.stream  # 🆕 Поток сознания
+            stream=self.stream
         )
-        
-        # ====================================================================
-        # 9. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
-        # ====================================================================
-        if self.homeostasis and self.cognition:
-            self.cognition.homeostasis = self.homeostasis
-            log.info("🔗 Homeostasis linked to Cognition Manager")
         
         log.info("✅ All subsystems loaded and attached")
     
     async def start(self, cycle_interval: float = 2.0):
         """Запускает мозг и все его подсистемы."""
-        # Инициализируем гомеостаз
-        self.homeostasis = HomeostaticEngine(self.state)
-        
-        # Регистрируем обработчик потребностей
-        def on_needs(needs):
-            """Синхронный колбэк для генерации потребностей."""
-            for need in needs:
-                log.info("🫀 Need generated", type=need["type"], urgency=f"{need['urgency']:.2f}")
-                self.state.add_to_context({
-                    "type": "internal_drive",
-                    "content": need["description"],
-                    "importance": need["urgency"],
-                    "source": "homeostasis"
-                })
-        
-        self.homeostasis.on_need_generated(on_needs)
-        
         # Загружаем подсистемы
         try:
             self._load_subsystems()
