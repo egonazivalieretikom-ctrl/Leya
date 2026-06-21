@@ -138,6 +138,18 @@ class Brain:
             log.error("Failed to load Sleep Consolidation", error=str(e))
             self.sleep_consolidation = None
 
+
+        # ====================================================================
+        # 🆕 8.5 ТАЛАМУС (фильтр сигналов)
+        # ====================================================================
+        try:
+            from Core.thalamus import Thalamus
+            self.thalamus = Thalamus(self.state)
+            log.info("✅ Thalamus loaded")
+        except Exception as e:
+            log.error("Failed to load Thalamus", error=str(e))
+            self.thalamus = None
+
         # ====================================================================
         # 9. ПЕРЕДАЧА ПОДСИСТЕМ В ЦИКЛ
         # ====================================================================
@@ -148,8 +160,19 @@ class Brain:
             learning=None,
             dmn=self.dmn,
             planner=self.planner,
-            stream=self.stream
+            stream=self.stream,
+            sleep_consolidation=self.sleep_consolidation,
+            thalamus=self.thalamus  # 🆕
         )
+
+        # 10. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
+        if self.homeostasis and self.cognition:
+            self.cognition.homeostasis = self.homeostasis
+            log.info("🔗 Homeostasis linked to Cognition Manager")
+    
+        log.info("✅ All subsystems loaded and attached")
+
+
         
         log.info("✅ All subsystems loaded and attached")
     

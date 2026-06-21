@@ -66,7 +66,7 @@ class CognitiveCycle:
 
     def attach_systems(self, perception=None, thinking=None, action=None,
                        learning=None, dmn=None, planner=None, stream=None,
-                       sleep_consolidation=None):  
+                       sleep_consolidation=None, thalamus=None): 
         self.perception_system = perception
         self.thinking_system = thinking
         self.action_system = action
@@ -75,6 +75,7 @@ class CognitiveCycle:
         self.planner = planner
         self.stream = stream  
         self.sleep_consolidation = sleep_consolidation  
+        self.thalamus = thalamus 
         log.info("Cognitive systems attached (incl. Stream of Consciousness)")
 
     # ========================================================================
@@ -318,34 +319,73 @@ class CognitiveCycle:
                 passive_cycle_counter = 0
             else:
                 # ============================================================
-                # ПАССИВНЫЙ РЕЖИМ: непрерывный внутренний опыт
+                # ПАССИВНЫЙ РЕЖИМ: Global Workspace + Таламус
                 # ============================================================
                 await self.run_phase(CognitivePhase.PERCEIVE, duration_budget=0.5)
                 
-                # Чередование STREAM и REFLECT
-                # STREAM — 70% времени (спонтанные мысли)
-                # REFLECT — 30% времени (глубокие инсайты DMN)
+                # 🆕 ШАГ 1: Сбор всех фоновых сигналов
+                background_signals = []
+                
+                # Поток сознания
+                if self.stream:
+                    stream_thought = await self.stream.generate_stream()
+                    if stream_thought:
+                        background_signals.append({
+                            "type": "stream_thought",
+                            "content": stream_thought,
+                            "timestamp": time.time()
+                        })
+                
+                # DMN инсайты
                 passive_cycle_counter += 1
-                
                 if passive_cycle_counter % 3 == 0:
-                    # Каждое третье чередование — DMN (глубокая рефлексия)
-                    await self.run_phase(CognitivePhase.REFLECT, duration_budget=2.0)
-                    log.debug("🌊 Passive mode: DMN reflection")
-                else:
-                    # Остальное — поток сознания
-                    await self.run_phase(CognitivePhase.STREAM, duration_budget=1.5)
-                    log.debug("🌊 Passive mode: Stream of consciousness")
+                    if self.dmn:
+                        dmn_insight = await self.dmn.reflect()
+                        if dmn_insight:
+                            background_signals.append({
+                                "type": "dmn_insight",
+                                "content": dmn_insight,
+                                "timestamp": time.time()
+                            })
                 
-                # Генерация фоновых задач от Planner (LLM-рассуждение)
+                # 🆕 ШАГ 2: Фильтрация через Таламус
+                if self.thalamus and background_signals:
+                    filtered_signals = self.thalamus.filter_signals(background_signals)
+                    
+                    # Добавляем отфильтрованные сигналы в контекст
+                    for signal in filtered_signals:
+                        self.state.add_to_context(signal)
+                        log.info(
+                            "🚦 Signal passed to Workspace",
+                            type=signal.get("type"),
+                            importance=f"{signal.get('importance', 0):.2f}"
+                        )
+                else:
+                    # Если таламуса нет — добавляем всё (старое поведение)
+                    for signal in background_signals:
+                        self.state.add_to_context(signal)
+                
+                # Генерация фоновых задач от Planner
                 if self.planner:
                     task = await self.planner.generate_background_task()
                     if task:
-                        self.state.add_to_context(task)
-                        log.info(
-                            "🎯 Planner injected background task",
-                            task=task["content"][:60],
-                            importance=f"{task['importance']:.2f}"
-                        )
+                        # 🆕 Пропускаем задачу через Таламус
+                        if self.thalamus:
+                            filtered_task = self.thalamus.filter_signals([task])
+                            if filtered_task:
+                                self.state.add_to_context(filtered_task[0])
+                                log.info(
+                                    "🎯 Planner task passed to Workspace",
+                                    task=filtered_task[0]["content"][:60],
+                                    importance=f"{filtered_task[0].get('importance', 0):.2f}"
+                                )
+                        else:
+                            self.state.add_to_context(task)
+                            log.info(
+                                "🎯 Planner injected background task",
+                                task=task["content"][:60],
+                                importance=f"{task['importance']:.2f}"
+                            )
             
             # ====================================================================
             # ПАУЗА МЕЖДУ ЦИКЛАМИ
