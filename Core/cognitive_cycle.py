@@ -7,15 +7,39 @@ from Core.event_bus import event_bus
 
 
 class CognitivePhase:
+    """
+    Фазы когнитивного цикла.
+    
+    PERCEIVE — сбор сенсорных данных
+    THINK — обработка событий, генерация ответа
+    ACT — выполнение действий
+    LEARN — консолидация памяти
+    REFLECT — DMN (инсайты, рефлексия)
+    STREAM — поток сознания (непрерывный внутренний монолог)
+    REST — сон/отдых
+    """
     PERCEIVE = "perceive"
     THINK = "think"
     ACT = "act"
     LEARN = "learn"
     REFLECT = "reflect"
+    STREAM = "stream"
     REST = "rest"
 
 
 class CognitiveCycle:
+    """
+    Когнитивный цикл Leya.
+    
+    Эволюция: от реактивного (отвечает на стимулы) к непрерывному
+    (генерирует поток сознания даже в тишине).
+    
+    Архитектура:
+    - При наличии событий: PERCEIVE → THINK → ACT → LEARN
+    - При отсутствии событий: PERCEIVE → STREAM или REFLECT
+    - STREAM генерирует субъективные мысли, влияющие на состояние
+    """
+    
     def __init__(self, state: LeyaState):
         self.state = state
         self.current_phase = CognitivePhase.REST
@@ -26,32 +50,41 @@ class CognitiveCycle:
             CognitivePhase.ACT: 0.0,
             CognitivePhase.LEARN: 0.0,
             CognitivePhase.REFLECT: 0.0,
+            CognitivePhase.STREAM: 0.0,
         }
         
+        # Подсистемы
         self.perception_system = None
         self.thinking_system = None
         self.action_system = None
         self.learning_system = None
         self.dmn = None
         self.planner = None
+        self.stream = None  # 🆕 Поток сознания
         
-        log.info("Cognitive Cycle initialized (AGI Dashboard Edition)")
+        log.info("Cognitive Cycle initialized (Stream of Consciousness Edition)")
 
-    def attach_systems(self, perception=None, thinking=None, action=None, 
-                      learning=None, dmn=None, planner=None):
+    def attach_systems(self, perception=None, thinking=None, action=None,
+                       learning=None, dmn=None, planner=None, stream=None):
         self.perception_system = perception
         self.thinking_system = thinking
         self.action_system = action
         self.learning_system = learning
         self.dmn = dmn
         self.planner = planner
-        log.info("Cognitive systems attached (incl. DMN & Planner)")
+        self.stream = stream  # 🆕
+        log.info("Cognitive systems attached (incl. Stream of Consciousness)")
 
+    # ========================================================================
+    # ЗАПУСК ФАЗЫ
+    # ========================================================================
+    
     async def run_phase(self, phase: str, duration_budget: float = 1.0):
+        """Запускает одну фазу когнитивного цикла."""
         self.current_phase = phase
         start_time = time.time()
         
-        # 🆕 ПУБЛИКУЕМ СМЕНУ ФАЗЫ В UI
+        # Публикуем смену фазы в UI
         await event_bus.publish("phase_start", {"phase": phase, "cycle": self.cycle_count})
         
         try:
@@ -65,15 +98,23 @@ class CognitiveCycle:
                 await self._learn(duration_budget)
             elif phase == CognitivePhase.REFLECT:
                 await self._reflect(duration_budget)
+            elif phase == CognitivePhase.STREAM:
+                await self._stream(duration_budget)  # 🆕
                 
         except Exception as e:
             log.error(f"Error in phase {phase}", error=str(e), exc_info=True)
-            self.state.shift_hormones(cortisol=0.15, norepinephrine=0.2)
+            # При ошибке — стрессовый стимул через гомеостаз
+            if hasattr(self, 'homeostasis') and self.homeostasis:
+                self.homeostasis.apply_stimulus("cortisol", 0.1)
         
         elapsed = time.time() - start_time
         self.cycle_times[phase] = elapsed
         await event_bus.publish("phase_end", {"phase": phase, "duration": elapsed})
 
+    # ========================================================================
+    # РЕАЛИЗАЦИЯ ФАЗ
+    # ========================================================================
+    
     async def _perceive(self, budget: float):
         log.debug("👁️ Perceiving environment...")
         if self.perception_system:
@@ -125,23 +166,63 @@ class CognitiveCycle:
         else:
             await asyncio.sleep(0.5)
 
+    async def _stream(self, budget: float):
+        """
+        🆕 Фаза потока сознания.
+        
+        Генерирует субъективную мысль, которая:
+        - Зависит от текущего настроения
+        - Влияет на состояние (эмоциональная обратная связь)
+        - Сохраняется в память
+        - Публикуется в UI
+        
+        Это не DMN (который ищет паттерны в памяти), а спонтанный
+        внутренний монолог — как "голос в голове" у человека.
+        """
+        log.debug("🌊 Stream of consciousness...")
+        if self.stream:
+            thought = await self.stream.generate_stream()
+            if thought:
+                log.info("🌊 Stream generated", thought=thought[:80])
+        else:
+            await asyncio.sleep(0.3)
+
+    # ========================================================================
+    # ГЛАВНЫЙ НЕПРЕРЫВНЫЙ ЦИКЛ
+    # ========================================================================
+    
     async def run_continuous(self, cycle_interval: float = 2.0):
-        log.info("🔄 Starting continuous cognitive cycle (AGI Mode)", interval=cycle_interval)
+        """
+        Непрерывный когнитивный цикл.
+        
+        Логика:
+        - Если есть необработанные события → активный режим (PERCEIVE → THINK → ACT → LEARN)
+        - Если событий нет → пассивный режим (PERCEIVE → STREAM или REFLECT)
+        - STREAM и REFLECT чередуются, создавая непрерывный внутренний опыт
+        """
+        log.info("🔄 Starting continuous cognitive cycle (Stream of Consciousness Mode)", 
+                 interval=cycle_interval)
+        
+        # Счётчик для чередования STREAM и REFLECT
+        passive_cycle_counter = 0
         
         while True:
             cycle_start = time.time()
             self.cycle_count += 1
             
-            # Гомеостаз теперь работает непрерывно в HomeostaticEngine
-            # Когнитивный цикл только читает текущее состояние
-                        
+            # Биологический гомеостаз теперь работает в отдельном двигателе (10Hz)
+            # Здесь мы только читаем состояние
+            
             log.info(
                 f"🌟 Cycle #{self.cycle_count} begins",
                 energy=f"{self.state.energy_level:.2f}",
-                neuro=f"D:{self.state.dopamine:.2f} N:{self.state.norepinephrine:.2f} C:{self.state.cortisol:.2f} O:{self.state.oxytocin:.2f} M:{self.state.melatonin:.2f}"
+                mood=str(getattr(self.state, 'emotion', 'neutral')),
+                neuro=f"D:{self.state.dopamine:.2f} N:{self.state.norepinephrine:.2f} "
+                      f"C:{self.state.cortisol:.2f} O:{self.state.oxytocin:.2f} "
+                      f"A:{self.state.acetylcholine:.2f} M:{self.state.melatonin:.2f}"
             )
             
-            # 🆕 ПУБЛИКУЕМ ТЕКУЩЕЕ СОСТОЯНИЕ ГОРМОНОВ В UI
+            # Публикуем текущее состояние в UI (для Dashboard)
             await event_bus.publish("state_update", {
                 "hormones": {
                     "dopamine": self.state.dopamine,
@@ -153,70 +234,79 @@ class CognitiveCycle:
                     "testosterone": self.state.testosterone,
                     "estrogen": self.state.estrogen,
                     "endorphins": self.state.endorphins,
-                    "gaba": self.state.gaba
+                    "gaba": self.state.gaba,
                 },
-                "emotion": self._compute_emotion(),
-                "environment": getattr(self.state, "current_environment", "")
+                "emotion": str(getattr(self.state, 'emotion', 'neutral')),
+                "environment": getattr(self.state, 'current_environment', '')
             })
             
-            # Режим сна
+            # ====================================================================
+            # РЕЖИМ СНА
+            # ====================================================================
             if self.state.energy_level < 0.3 or self.state.melatonin > 0.8:
                 log.info("😴 Low energy or High Melatonin -> Sleep Mode")
                 self.current_phase = CognitivePhase.REST
                 await asyncio.sleep(cycle_interval)
-                self.state.shift_hormones(cortisol=-0.02, gaba=0.05)
+                # Во сне восстанавливаем энергию
                 self.state.energy_level = min(1.0, self.state.energy_level + 0.05)
                 continue
             
-            # Проверка наличия активных задач
+            # ====================================================================
+            # ПРОВЕРКА НАЛИЧИЯ АКТИВНЫХ ЗАДАЧ
+            # ====================================================================
             has_pending = any(
-                isinstance(e, dict) 
-                and e.get("type") in ["user_command", "vision_request", "internal_drive"] 
+                isinstance(e, dict)
+                and e.get("type") in ["user_command", "vision_request", "internal_drive"]
                 and not e.get("processed")
                 for e in self.state.short_term_context
             )
             
             if has_pending:
-                # АКТИВНЫЙ РЕЖИМ
+                # ============================================================
+                # АКТИВНЫЙ РЕЖИМ: обработка событий
+                # ============================================================
                 await self.run_phase(CognitivePhase.PERCEIVE, duration_budget=0.5)
                 await self.run_phase(CognitivePhase.THINK, duration_budget=2.0)
                 await self.run_phase(CognitivePhase.ACT, duration_budget=0.5)
                 await self.run_phase(CognitivePhase.LEARN, duration_budget=0.3)
+                # Сбрасываем счётчик пассивного режима
+                passive_cycle_counter = 0
             else:
-                # ПАССИВНЫЙ РЕЖИМ (AGI Autonomy: DMN + Planner)
+                # ============================================================
+                # ПАССИВНЫЙ РЕЖИМ: непрерывный внутренний опыт
+                # ============================================================
                 await self.run_phase(CognitivePhase.PERCEIVE, duration_budget=0.5)
-                await self.run_phase(CognitivePhase.REFLECT, duration_budget=2.0)
                 
-                # Генерация фоновых задач от Planner
+                # Чередование STREAM и REFLECT
+                # STREAM — 70% времени (спонтанные мысли)
+                # REFLECT — 30% времени (глубокие инсайты DMN)
+                passive_cycle_counter += 1
+                
+                if passive_cycle_counter % 3 == 0:
+                    # Каждое третье чередование — DMN (глубокая рефлексия)
+                    await self.run_phase(CognitivePhase.REFLECT, duration_budget=2.0)
+                    log.debug("🌊 Passive mode: DMN reflection")
+                else:
+                    # Остальное — поток сознания
+                    await self.run_phase(CognitivePhase.STREAM, duration_budget=1.5)
+                    log.debug("🌊 Passive mode: Stream of consciousness")
+                
+                # Генерация фоновых задач от Planner (LLM-рассуждение)
                 if self.planner:
-                    task = self.planner.generate_background_task()
+                    task = await self.planner.generate_background_task()
                     if task:
                         self.state.add_to_context(task)
-                        log.info("🎯 Planner injected background task", task=task["content"][:50])
+                        log.info(
+                            "🎯 Planner injected background task",
+                            task=task["content"][:60],
+                            importance=f"{task['importance']:.2f}"
+                        )
             
+            # ====================================================================
+            # ПАУЗА МЕЖДУ ЦИКЛАМИ
+            # ====================================================================
             cycle_duration = time.time() - cycle_start
             sleep_time = max(0, cycle_interval - cycle_duration)
             
             if sleep_time > 0:
                 await asyncio.sleep(sleep_time)
-    
-    def _compute_emotion(self) -> str:
-        """Определяет эмоцию для аватара на основе гормонов."""
-        s = self.state
-        if s.melatonin > 0.7:
-            return "SLEEPY"
-        if s.cortisol > 0.7:
-            return "STRESSED"
-        if s.cortisol > 0.5 and s.dopamine < 0.3:
-            return "SAD"
-        if s.endorphins > 0.7 and s.dopamine > 0.7:
-            return "FLOW"
-        if s.oxytocin > 0.7:
-            return "LOVING"
-        if s.testosterone > 0.7 and s.norepinephrine > 0.5:
-            return "FOCUSED"
-        if s.dopamine > 0.6:
-            return "HAPPY"
-        if self.current_phase == "think":
-            return "THINKING"
-        return "NEUTRAL"
