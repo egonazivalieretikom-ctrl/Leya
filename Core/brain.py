@@ -159,6 +159,28 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Thalamus", error=str(e))
             self.thalamus = None
+
+        # ====================================================================
+        # 🆕 9.5 МЕНЕДЖЕР СОБСТВЕННЫХ ПРОЕКТОВ
+        # ====================================================================
+        try:
+            from Cognition.projects import ProjectManager
+            self.project_manager = ProjectManager(self.state, self.memory)
+            log.info("✅ Project Manager loaded")
+        except Exception as e:
+            log.error("Failed to load Project Manager", error=str(e))
+            self.project_manager = None
+
+        # ====================================================================
+        # 🆕 ЭМБОДЗИМЕНТ (телесные ощущения)
+        # ====================================================================
+        try:
+            from Core.embodiment import EmbodimentSystem
+            self.embodiment = EmbodimentSystem(self.state)
+            log.info("✅ Embodiment System loaded")
+        except Exception as e:
+            log.error("Failed to load Embodiment System", error=str(e))
+            self.embodiment = None
         
         # ====================================================================
         # 10. ПЕРЕДАЧА ВСЕХ ПОДСИСТЕМ В ЦИКЛ
@@ -173,6 +195,7 @@ class Brain:
             stream=self.stream,
             sleep_consolidation=self.sleep_consolidation,
             thalamus=self.thalamus
+            project_manager=self.project_manager 
         )
         
         # ====================================================================
@@ -196,11 +219,20 @@ class Brain:
         # Публикуем событие старта
         await event_bus.publish("leya_start", {"timestamp": self.state.start_time})
         
+        # 🆕 Запускаем эмбодзимент (непрерывный процесс)
+        embodiment_task = None
+        if self.embodiment:
+            embodiment_task = asyncio.create_task(self.embodiment.start())
+        
         # Запускаем когнитивный цикл
         try:
             await self.cycle.run_continuous(cycle_interval)
         except asyncio.CancelledError:
             log.info("🛑 Brain cycle cancelled")
+            if embodiment_task:
+                embodiment_task.cancel()
         except Exception as e:
             log.error("💥 Critical error in Brain cycle", error=str(e), exc_info=True)
+            if embodiment_task:
+                embodiment_task.cancel()
             raise

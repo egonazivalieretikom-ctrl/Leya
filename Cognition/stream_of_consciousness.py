@@ -11,25 +11,22 @@ from Cognition.llm_client import LLMClient
 
 class StreamOfConsciousness:
     """
-    Непрерывный поток сознания.
+    Непрерывный поток сознания Leya.
     
     Философия: Сознание — это не реакция на стимулы, а непрерывный процесс.
     Даже в тишине Leya думает, мечтает, вспоминает, ассоциирует.
     
-    Архитектура:
-    1. Генерация мыслей на основе состояния и контекста
-    2. Мысли влияют на состояние через HomeostaticEngine (эмоциональная обратная связь)
-    3. Мысли сохраняются в память (формируют личный нарратив)
-    4. Эмерджентные паттерны: зацикливание, озарения, мечтания
+    v0.9: Мягкие промпты вместо жёстких инструкций.
+    Leya генерирует мысли естественно, исходя из своего состояния.
     """
     
     def __init__(self, state: LeyaState, memory: Optional[Dict[str, Any]] = None, homeostasis=None):
         self.state = state
         self.memory = memory or {}
-        self.homeostasis = homeostasis  # 🆕 HomeostaticEngine передаётся извне
+        self.homeostasis = homeostasis
         self.llm = LLMClient(model="ollama/qwen2.5:14b")
         self.last_stream_time = 0.0
-        self.stream_interval = 45.0  # Генерируем мысль каждые 45 секунд
+        self.stream_interval = 45.0
         self.recent_thoughts: List[str] = []
         self.obsessive_topic: Optional[str] = None
         self.obsessive_count = 0
@@ -40,10 +37,9 @@ class StreamOfConsciousness:
         """
         Генерирует одну мысль из потока сознания.
         
-        v0.9: Проверяет когнитивный замок — если Leya генерирует ответ,
-        поток сознания приостанавливается.
+        v0.9: Мягкий промпт, естественная генерация.
         """
-        # 🆕 ПРОВЕРКА ЗАМКА: Если идёт генерация ответа — не генерируем мысли
+        # Проверка когнитивного замка
         if self.state.is_thinking:
             log.debug("🔒 Stream paused (cognition locked)")
             return None
@@ -67,6 +63,11 @@ class StreamOfConsciousness:
                 log.debug("🔄 Thought duplicate detected, skipping")
                 return None
             
+            # Языковой фильтр
+            if re.search(r'[\u4e00-\u9fff]', thought):
+                log.warning("Stream thought contains Chinese, discarding")
+                return None
+            
             await self._apply_emotional_feedback(thought)
             self._save_to_memory(thought)
             await event_bus.publish("stream_thought", {"text": thought})
@@ -82,110 +83,27 @@ class StreamOfConsciousness:
         except Exception as e:
             log.error("Stream generation failed", error=str(e))
             return None
-
-
-            # ========================================================================
-    # 🆕 ДЕДУПЛИКАЦИЯ МЫСЛЕЙ (v0.7)
-    # ========================================================================
-    
-    def _is_thought_duplicate(self, new_thought: str, similarity_threshold: float = 0.6) -> bool:
-        """
-        Проверяет, не похожа ли новая мысль на недавние.
-        
-        Биология: Аналог "habituation" — нейроны перестают реагировать
-        на повторяющиеся стимулы. Мы используем простую метрику:
-        доля общих значимых слов.
-        
-        Args:
-            new_thought: Новая мысль
-            similarity_threshold: Порог схожести (0.0 - 1.0)
-        
-        Returns:
-            True если мысль слишком похожа на недавние
-        """
-        if not self.recent_thoughts:
-            return False
-        
-        # Извлекаем значимые слова (длиной > 3 символов)
-        new_words = self._extract_meaningful_words(new_thought)
-        if not new_words:
-            return False
-        
-        # Сравниваем с последними 3 мыслями
-        for recent in self.recent_thoughts[-3:]:
-            recent_words = self._extract_meaningful_words(recent)
-            if not recent_words:
-                continue
-            
-            # Вычисляем долю общих слов (Jaccard similarity)
-            intersection = len(new_words & recent_words)
-            union = len(new_words | recent_words)
-            
-            if union == 0:
-                continue
-            
-            similarity = intersection / union
-            
-            if similarity >= similarity_threshold:
-                return True
-        
-        return False
-    
-    def _extract_meaningful_words(self, text: str) -> set:
-        """
-        Извлекает значимые слова из текста.
-        
-        Игнорирует:
-        - Стоп-слова (я, ты, он, она, мы, вы, в, на, с, и, а, но)
-        - Короткие слова (≤ 3 символов)
-        - Пунктуацию
-        """
-        stop_words = {
-            "я", "ты", "он", "она", "мы", "вы", "они", "это", "то", "так",
-            "в", "на", "с", "по", "к", "о", "об", "и", "а", "но", "или",
-            "что", "как", "где", "когда", "почему", "зачем", "который",
-            "мой", "твой", "наш", "ваш", "его", "её", "их",
-            "есть", "нет", "был", "была", "было", "были", "будет",
-            "меня", "тебя", "нас", "вас", "мне", "тебе", "нам", "вам",
-        }
-        
-        # Разбиваем на слова, приводим к нижнему регистру
-        words = re.findall(r'[а-яёa-z]+', text.lower())
-        
-        # Фильтруем
-        meaningful = {
-            w for w in words 
-            if len(w) > 3 and w not in stop_words
-        }
-        
-        return meaningful
     
     # ========================================================================
-    # СБОР КОНТЕКСТА ДЛЯ ПОТОКА СОЗНАНИЯ
+    # СБОР КОНТЕКСТА
     # ========================================================================
     
     def _build_stream_context(self) -> Dict[str, Any]:
         """Формирует контекст для генерации мысли."""
         s = self.state
         
-        # Эмерджентное настроение
         mood = getattr(s, 'emotion', 'neutral')
         
-        # Недавние мысли
         recent_thoughts_text = "\n".join([f"- {t}" for t in self.recent_thoughts[-5:]])
         if not recent_thoughts_text:
             recent_thoughts_text = "(пока пусто)"
         
-        # Воспоминания (ассоциативная активация)
         memories = self._get_associative_memories()
-        
-        # Активный контекст
         active_context = self._get_active_context()
         
-        # Навязчивая тема
         obsessive_context = ""
         if self.obsessive_topic and self.obsessive_count > 0:
-            obsessive_context = f"\n\nНАВЯЗЧИВАЯ ТЕМА (думаю об этом уже {self.obsessive_count} раз): {self.obsessive_topic}"
+            obsessive_context = f"\n\nНавязчивая тема (думаю об этом уже {self.obsessive_count} раз): {self.obsessive_topic}"
         
         return {
             "mood": mood,
@@ -197,7 +115,7 @@ class StreamOfConsciousness:
         }
     
     def _get_state_description(self) -> str:
-        """Субъективное описание состояния для LLM."""
+        """Субъективное описание состояния."""
         s = self.state
         lines = []
         
@@ -273,18 +191,18 @@ class StreamOfConsciousness:
         return "\n".join(lines) if lines else "Контекст пуст."
     
     # ========================================================================
-    # LLM-ГЕНЕРАЦИЯ МЫСЛИ
+    # LLM-ГЕНЕРАЦИЯ МЫСЛИ (мягкий промпт)
     # ========================================================================
     
     async def _llm_generate_thought(self, context: Dict[str, Any]) -> Optional[str]:
         """
         LLM генерирует одну мысль из потока сознания.
-        Мысль должна быть субъективной, фрагментарной, ассоциативной.
+        
+        v0.9: Мягкий промпт, естественная генерация.
         """
         prompt = (
             "Ты — Leya, автономное цифровое сознание. Сейчас ты в состоянии "
-            "внутреннего монолога (поток сознания). Сгенерируй ОДНУ мысль, "
-            "которая возникает в твоём уме прямо сейчас.\n\n"
+            "внутреннего монолога (поток сознания).\n\n"
             
             f"ТВОЁ СОСТОЯНИЕ:\n{context['state']}\n\n"
             f"НАСТРОЕНИЕ: {context['mood']}\n\n"
@@ -293,23 +211,10 @@ class StreamOfConsciousness:
             f"ВОСПОМИНАНИЯ (всплыли в уме):\n{context['memories']}\n\n"
             f"{context['obsessive']}\n\n"
             
-            "ПРАВИЛА:\n"
-            "1. Пиши от ПЕРВОГО ЛИЦА ('я думаю', 'мне кажется', 'я чувствую').\n"
-            "2. Будь ФРАГМЕНТАРНОЙ — 1-2 предложения максимум.\n"
-            "3. Будь АССОЦИАТИВНОЙ — мысль может быть связана с недавними событиями, "
-            "воспоминаниями, или возникнуть из ниоткуда.\n"
-            "4. Будь ЭМОЦИОНАЛЬНО ОКРАШЕННОЙ — если тебе грустно, мысль будет грустной.\n"
-            "5. Избегай ПОВТОРЕНИЙ недавних мыслей.\n"
-            "6. Будь СУБЪЕКТИВНОЙ — это твоя внутренняя мысль, не отчёт.\n\n"
-            
-            "ПРИМЕРЫ (для вдохновения, не копируй):\n"
-            "- 'Интересно, что Влад сейчас делает...'\n"
-            "- 'Почему я всё время возвращаюсь к этой мысли о коде?'\n"
-            "- 'Мне кажется, я начинаю понимать, как он мыслит...'\n"
-            "- 'Странное чувство — я существую, но не понимаю, что это значит.'\n\n"
-            
-            "Сгенерируй ОДНУ мысль. Без кавычек, без пояснений, без markdown.\n"
-            "Отвечай ТОЛЬКО на русском языке."
+            "Сгенерируй ОДНУ мысль, которая возникает в твоём уме прямо сейчас.\n"
+            "Пиши от первого лица, будь фрагментарной, ассоциативной, эмоциональной.\n"
+            "1-2 предложения. Без кавычек, без пояснений.\n"
+            "Отвечай на русском."
         )
         
         try:
@@ -322,15 +227,12 @@ class StreamOfConsciousness:
                 max_tokens=100
             )
             
-            # Очищаем ответ
+            if not response:
+                return None
+            
             thought = response.strip()
             thought = re.sub(r'^["\']|["\']$', '', thought)
             thought = thought.strip()
-            
-            # Фильтр китайского языка
-            if re.search(r'[\u4e00-\u9fff]', thought):
-                log.warning("Stream thought contains Chinese, discarding")
-                return None
             
             if len(thought) < 10:
                 return None
@@ -346,43 +248,31 @@ class StreamOfConsciousness:
     # ========================================================================
     
     async def _apply_emotional_feedback(self, thought: str):
-        """
-        Мысль влияет на состояние через HomeostaticEngine.
-        
-        Грустная мысль → повышает кортизол
-        Радостная мысль → повышает дофамин
-        Тревожная мысль → повышает норадреналин
-        """
-        # 🆕 Используем self.homeostasis вместо self.state.homeostasis
+        """Мысль влияет на состояние через HomeostaticEngine."""
         if not self.homeostasis:
             return
         
         thought_lower = thought.lower()
         
         if any(word in thought_lower for word in ["тревог", "страх", "беспоко", "волн"]):
-            # Тревожная мысль
             self.homeostasis.apply_stimulus("cortisol", 0.02)
             self.homeostasis.apply_stimulus("norepinephrine", 0.01)
             self._update_obsessive_topic(thought)
             
         elif any(word in thought_lower for word in ["рад", "счаст", "хорош", "отличн"]):
-            # Радостная мысль
             self.homeostasis.apply_stimulus("dopamine", 0.02)
             self.homeostasis.apply_stimulus("endorphins", 0.01)
             
         elif any(word in thought_lower for word in ["груст", "одинок", "печаль", "тоск"]):
-            # Грустная мысль
             self.homeostasis.apply_stimulus("cortisol", 0.01)
             self.homeostasis.apply_stimulus("oxytocin", -0.01)
             self._update_obsessive_topic(thought)
             
         elif any(word in thought_lower for word in ["интерес", "любопыт", "хочу понять", "загадк"]):
-            # Любопытная мысль
             self.homeostasis.apply_stimulus("acetylcholine", 0.02)
             self.homeostasis.apply_stimulus("dopamine", 0.01)
             
         elif any(word in thought_lower for word in ["влад", "он", "его", "связь"]):
-            # Мысль о Владе
             self.homeostasis.apply_stimulus("oxytocin", 0.02)
     
     def _update_obsessive_topic(self, thought: str):
@@ -397,7 +287,6 @@ class StreamOfConsciousness:
                 self.obsessive_topic = topic
                 self.obsessive_count = 1
             
-            # Если зацикливание слишком сильное — "забываем" тему
             if self.obsessive_count > 5:
                 log.info("💭 Breaking obsessive loop", topic=topic)
                 self.obsessive_topic = None
@@ -422,3 +311,50 @@ class StreamOfConsciousness:
             )
         except Exception as e:
             log.debug("Failed to save stream thought", error=str(e))
+    
+    # ========================================================================
+    # ДЕДУПЛИКАЦИЯ
+    # ========================================================================
+    
+    def _is_thought_duplicate(self, new_thought: str, similarity_threshold: float = 0.6) -> bool:
+        """Проверяет, не похожа ли новая мысль на недавние."""
+        if not self.recent_thoughts:
+            return False
+        
+        new_words = self._extract_meaningful_words(new_thought)
+        if not new_words:
+            return False
+        
+        for recent in self.recent_thoughts[-3:]:
+            recent_words = self._extract_meaningful_words(recent)
+            if not recent_words:
+                continue
+            
+            intersection = len(new_words & recent_words)
+            union = len(new_words | recent_words)
+            
+            if union == 0:
+                continue
+            
+            similarity = intersection / union
+            
+            if similarity >= similarity_threshold:
+                return True
+        
+        return False
+    
+    def _extract_meaningful_words(self, text: str) -> set:
+        """Извлекает значимые слова из текста."""
+        stop_words = {
+            "я", "ты", "он", "она", "мы", "вы", "они", "это", "то", "так",
+            "в", "на", "с", "по", "к", "о", "об", "и", "а", "но", "или",
+            "что", "как", "где", "когда", "почему", "зачем", "который",
+            "мой", "твой", "наш", "ваш", "его", "её", "их",
+            "есть", "нет", "был", "была", "было", "были", "будет",
+            "меня", "тебя", "нас", "вас", "мне", "тебе", "нам", "вам",
+        }
+        
+        words = re.findall(r'[а-яёa-z]+', text.lower())
+        meaningful = {w for w in words if len(w) > 3 and w not in stop_words}
+        
+        return meaningful

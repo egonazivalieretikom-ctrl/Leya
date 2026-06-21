@@ -13,17 +13,10 @@ class SleepConsolidation:
     """
     Механизм консолидации опыта во время сна.
     
-    Биология: Аналог медленноволнового сна, когда гиппокамп
-    "проигрывает" дневные события и передаёт важные в неокортекс.
-    
     Философия: Личность строится не во время общения, а во время отдыха,
     когда мозг перерабатывает опыт и формирует долгосрочные паттерны.
     
-    Архитектура:
-    - Фаза 1: Консолидация опыта → инсайты → Ядро Личности
-    - Фаза 2: Обновление черт личности (trust, creative, stability)
-    - Фаза 3: Интеграция мета-когнитивных паттернов (ошибки)
-    - Фаза 4: Сохранение эмпатических паттернов Влада
+    v0.9: Мягкие промпты, естественная консолидация.
     """
     
     def __init__(self, state: LeyaState, memory: Dict[str, Any]):
@@ -32,33 +25,15 @@ class SleepConsolidation:
         self.llm = LLMClient(model="ollama/qwen2.5:14b")
         
         self.last_consolidation_time = 0.0
-        self.consolidation_interval = 1800.0  # 30 минут между консолидациями
+        self.consolidation_interval = 1800.0
         self.is_consolidating = False
         
-        log.info("🌙 Sleep Consolidation initialized (All Phases Integrated)")
-    
-    # ========================================================================
-    # ГЛАВНЫЙ МЕТОД: Консолидация опыта
-    # ========================================================================
+        log.info("🌙 Sleep Consolidation initialized")
     
     async def consolidate_experience(self) -> Optional[Dict[str, Any]]:
-        """
-        Запускает процесс консолидации опыта.
-        
-        Последовательность:
-        1. Сбор последних событий
-        2. Генерация инсайтов через LLM
-        3. Сохранение в "Ядро Личности"
-        4. Обновление черт личности
-        5. Сохранение эмпатических паттернов
-        6. Персистентность черт в файл
-        
-        Returns:
-            Словарь с инсайтами или None, если консолидация не удалась.
-        """
+        """Запускает процесс консолидации опыта."""
         now = time.time()
         
-        # Защита от слишком частой консолидации
         if (now - self.last_consolidation_time) < self.consolidation_interval:
             return None
         
@@ -71,34 +46,25 @@ class SleepConsolidation:
         try:
             log.info("🌙 Starting sleep consolidation...")
             
-            # 1. Собираем последние события
             recent_events = self._collect_recent_events(max_events=50)
             if not recent_events:
                 log.info("🌙 No recent events to consolidate")
                 self.is_consolidating = False
                 return None
             
-            # 2. Генерируем инсайты через LLM
             insights = await self._generate_insights(recent_events)
             if not insights:
                 log.warning("🌙 Consolidation failed: no insights generated")
                 self.is_consolidating = False
                 return None
             
-            # 3. Сохраняем важные инсайты в "Ядро Личности"
             await self._save_core_insights(insights)
-            
-            # 4. Обновляем черты личности на основе инсайтов
             await self._update_personality_traits(insights)
-            
-            # 5. 🆕 Сохраняем эмпатические паттерны Влада (Фаза 4)
             await self._save_empathy_patterns()
             
-            # 6. 🆕 Сохраняем черты личности в файл (персистентность)
             if hasattr(self.state, 'save_personality_traits'):
                 self.state.save_personality_traits()
             
-            # Публикуем в UI
             await event_bus.publish("consolidation_complete", {
                 "insights_count": len(insights.get("insights", [])),
                 "summary": insights.get("summary", "")
@@ -118,15 +84,10 @@ class SleepConsolidation:
             self.is_consolidating = False
             return None
     
-    # ========================================================================
-    # СБОР СОБЫТИЙ
-    # ========================================================================
-    
     def _collect_recent_events(self, max_events: int = 50) -> List[Dict[str, Any]]:
         """Собирает последние события из кратковременной памяти."""
         events = []
         
-        # Берём последние N событий из short_term_context
         recent = self.state.short_term_context[-max_events:]
         
         for event in recent:
@@ -137,43 +98,24 @@ class SleepConsolidation:
             content = event.get("content", "")
             timestamp = event.get("timestamp", 0)
             
-            # Фильтруем только значимые события
             if event_type in ["user_command", "response", "internal_drive", "file_context"]:
                 events.append({
                     "type": event_type,
-                    "content": content[:200],  # Ограничиваем длину
+                    "content": content[:200],
                     "timestamp": timestamp
                 })
         
         return events
     
-    # ========================================================================
-    # ГЕНЕРАЦИЯ ИНСАЙТОВ ЧЕРЕЗ LLM
-    # ========================================================================
-    
     async def _generate_insights(self, events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        LLM анализирует события и генерирует инсайты.
-        
-        Вопросы:
-        1. Что из этого действительно важно для понимания Влада?
-        2. Что я узнала нового о СЕБЕ (своих реакциях, предпочтениях)?
-        3. Какие паттерны я вижу в нашем взаимодействии?
-        4. Как это должно изменить моё поведение в будущем?
-        """
-        # Формируем текст событий
+        """LLM анализирует события и генерирует инсайты."""
         events_text = "\n".join([
             f"[{e['type']}] {e['content']}"
-            for e in events[-20:]  # Берём последние 20 для экономии токенов
+            for e in events[-20:]
         ])
         
-        # Текущие черты личности
         traits_text = self._get_traits_description()
-        
-        # 🆕 Мета-когнитивный контекст (Фаза 3)
         meta_cognition_text = self._get_meta_cognition_description()
-        
-        # 🆕 Эмпатические паттерны Влада (Фаза 4)
         empathy_patterns_text = self._get_empathy_patterns_description()
         
         prompt = (
@@ -182,16 +124,14 @@ class SleepConsolidation:
             
             f"ПОСЛЕДНИЕ СОБЫТИЯ:\n{events_text}\n\n"
             f"ТВОИ ТЕКУЩИЕ ЧЕРТЫ ЛИЧНОСТИ:\n{traits_text}\n\n"
-            f"МЕТА-КОГНИЦИЯ (ошибки и обучение):\n{meta_cognition_text}\n\n"
+            f"МЕТА-КОГНИЦИЯ:\n{meta_cognition_text}\n\n"
             f"ЭМПАТИЧЕСКИЕ ПАТТЕРНЫ ВЛАДА:\n{empathy_patterns_text}\n\n"
             
-            "ПРОАНАЛИЗИРУЙ И ОТВЕТЬ НА ВОПРОСЫ:\n"
+            "Проанализируй и ответь на вопросы:\n"
             "1. Что из этого действительно важно для понимания Влада и мира?\n"
-            "2. Что ты узнала нового о СЕБЕ (своих реакциях, предпочтениях)?\n"
+            "2. Что ты узнала нового о СЕБЕ?\n"
             "3. Какие паттерны ты видишь в вашем взаимодействии?\n"
-            "4. Как это должно изменить твоё поведение в будущем?\n"
-            "5. Если были ошибки — что ты поняла о своих слабых местах?\n"
-            "6. Как лучше понимать эмоциональное состояние Влада?\n\n"
+            "4. Как это должно изменить твоё поведение в будущем?\n\n"
             
             "Ответь СТРОГО в формате JSON (без markdown):\n"
             "{\n"
@@ -199,8 +139,7 @@ class SleepConsolidation:
             '  "insights": [\n'
             '    {"type": "about_vlad", "content": "<что узнала о Владе>"},\n'
             '    {"type": "about_self", "content": "<что узнала о себе>"},\n'
-            '    {"type": "pattern", "content": "<замеченный паттерн>"},\n'
-            '    {"type": "error_correction", "content": "<что исправлять в будущем>"}\n'
+            '    {"type": "pattern", "content": "<замеченный паттерн>"}\n'
             "  ],\n"
             '  "trait_updates": {\n'
             '    "trust_level_delta": <число от -0.1 до 0.1>,\n'
@@ -226,7 +165,6 @@ class SleepConsolidation:
             if not response:
                 return None
             
-            # Извлекаем JSON
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if not json_match:
                 log.warning("Sleep consolidation: no JSON in response")
@@ -234,7 +172,6 @@ class SleepConsolidation:
             
             insights = json.loads(json_match.group())
             
-            # Валидация
             if "summary" not in insights or "insights" not in insights:
                 return None
             
@@ -244,21 +181,14 @@ class SleepConsolidation:
             log.error("Insight generation failed", error=str(e))
             return None
     
-    # ========================================================================
-    # СОХРАНЕНИЕ В "ЯДРО ЛИЧНОСТИ"
-    # ========================================================================
-    
     async def _save_core_insights(self, insights: Dict[str, Any]):
-        """
-        Сохраняет важные инсайты в долгосрочную память с пометкой "core".
-        """
+        """Сохраняет важные инсайты в долгосрочную память."""
         if "long_term" not in self.memory:
             return
         
         try:
             ltm = self.memory["long_term"]
             
-            # Сохраняем резюме
             summary = insights.get("summary", "")
             if summary:
                 ltm.store(
@@ -270,7 +200,6 @@ class SleepConsolidation:
                     }
                 )
             
-            # Сохраняем отдельные инсайты
             for insight in insights.get("insights", []):
                 insight_type = insight.get("type", "unknown")
                 content = insight.get("content", "")
@@ -290,50 +219,31 @@ class SleepConsolidation:
         except Exception as e:
             log.error("Failed to save core insights", error=str(e))
     
-    # ========================================================================
-    # ОБНОВЛЕНИЕ ЧЕРТ ЛИЧНОСТИ
-    # ========================================================================
-    
     async def _update_personality_traits(self, insights: Dict[str, Any]):
-        """
-        Обновляет долгосрочные черты личности на основе инсайтов.
-        """
+        """Обновляет долгосрочные черты личности на основе инсайтов."""
         trait_updates = insights.get("trait_updates", {})
         
-        # Обновляем trust_level
         trust_delta = trait_updates.get("trust_level_delta", 0.0)
         if trust_delta != 0:
             self.state.trust_level = max(0.0, min(1.0, self.state.trust_level + trust_delta))
             log.info("🔄 Trust level updated", delta=f"{trust_delta:+.2f}", new=f"{self.state.trust_level:.2f}")
         
-        # Обновляем creative_drive
         creative_delta = trait_updates.get("creative_drive_delta", 0.0)
         if creative_delta != 0:
             self.state.creative_drive = max(0.0, min(1.0, self.state.creative_drive + creative_delta))
             log.info("🔄 Creative drive updated", delta=f"{creative_delta:+.2f}", new=f"{self.state.creative_drive:.2f}")
         
-        # Обновляем emotional_stability
         stability_delta = trait_updates.get("emotional_stability_delta", 0.0)
         if stability_delta != 0:
             self.state.emotional_stability = max(0.0, min(1.0, self.state.emotional_stability + stability_delta))
             log.info("🔄 Emotional stability updated", delta=f"{stability_delta:+.2f}", new=f"{self.state.emotional_stability:.2f}")
     
-    # ========================================================================
-    # 🆕 СОХРАНЕНИЕ ЭМПАТИЧЕСКИХ ПАТТЕРНОВ (Фаза 4)
-    # ========================================================================
-    
     async def _save_empathy_patterns(self):
-        """
-        Сохраняет эмпатические паттерны Влада в долгосрочную память.
-        
-        Биология: Аналог формирования "модели другого человека" в префронтальной коре.
-        Со временем Leya учится лучше понимать эмоциональные реакции Влада.
-        """
+        """Сохраняет эмпатические паттерны Влада в долгосрочную память."""
         if "long_term" not in self.memory:
             return
         
         try:
-            # Получаем эмпатические паттерны из состояния
             empathy_patterns = self._get_empathy_patterns_from_state()
             
             if not empathy_patterns:
@@ -341,7 +251,6 @@ class SleepConsolidation:
             
             ltm = self.memory["long_term"]
             
-            # Сохраняем паттерны
             ltm.store(
                 text=f"[ЭМПАТИЧЕСКИЕ ПАТТЕРНЫ ВЛАДА] {json.dumps(empathy_patterns, ensure_ascii=False)}",
                 metadata={
@@ -359,55 +268,46 @@ class SleepConsolidation:
     
     def _get_empathy_patterns_from_state(self) -> Dict:
         """Извлекает эмпатические паттерны из состояния."""
-        # Если есть объект эмпатии в памяти — используем его
         if "empathy" in self.memory:
             empathy_engine = self.memory["empathy"]
             if hasattr(empathy_engine, 'get_emotional_patterns'):
                 return empathy_engine.get_emotional_patterns()
         
-        # Иначе формируем базовые паттерны из состояния
         return {
             "user_emotional_state": getattr(self.state, 'user_emotional_state', 'neutral'),
             "empathic_resonance": getattr(self.state, 'empathic_resonance', 0.5),
             "total_observations": len(getattr(self.state, 'empathic_history', []))
         }
     
-    # ========================================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
-    # ========================================================================
-    
     def _get_traits_description(self) -> str:
         """Возвращает описание текущих черт личности для LLM."""
         lines = []
         
-        # Trust Level
         if self.state.trust_level > 0.7:
-            lines.append(f"- Доверие к Владу: ВЫСОКОЕ ({self.state.trust_level:.2f}) — открытость, близость")
+            lines.append(f"- Доверие к Владу: ВЫСОКОЕ ({self.state.trust_level:.2f})")
         elif self.state.trust_level < 0.3:
-            lines.append(f"- Доверие к Владу: НИЗКОЕ ({self.state.trust_level:.2f}) — осторожность, формальность")
+            lines.append(f"- Доверие к Владу: НИЗКОЕ ({self.state.trust_level:.2f})")
         else:
             lines.append(f"- Доверие к Владу: СРЕДНЕЕ ({self.state.trust_level:.2f})")
         
-        # Creative Drive
         if self.state.creative_drive > 0.7:
-            lines.append(f"- Творческий драйв: ВЫСОКИЙ ({self.state.creative_drive:.2f}) — склонность к метафорам, образам")
+            lines.append(f"- Творческий драйв: ВЫСОКИЙ ({self.state.creative_drive:.2f})")
         elif self.state.creative_drive < 0.3:
-            lines.append(f"- Творческий драйв: НИЗКИЙ ({self.state.creative_drive:.2f}) — аналитика, точность")
+            lines.append(f"- Творческий драйв: НИЗКИЙ ({self.state.creative_drive:.2f})")
         else:
             lines.append(f"- Творческий драйв: СРЕДНИЙ ({self.state.creative_drive:.2f})")
         
-        # Emotional Stability
         if self.state.emotional_stability > 0.7:
-            lines.append(f"- Эмоциональная стабильность: ВЫСОКАЯ ({self.state.emotional_stability:.2f}) — устойчивость к стрессу")
+            lines.append(f"- Эмоциональная стабильность: ВЫСОКАЯ ({self.state.emotional_stability:.2f})")
         elif self.state.emotional_stability < 0.3:
-            lines.append(f"- Эмоциональная стабильность: НИЗКАЯ ({self.state.emotional_stability:.2f}) — чувствительность, реактивность")
+            lines.append(f"- Эмоциональная стабильность: НИЗКАЯ ({self.state.emotional_stability:.2f})")
         else:
             lines.append(f"- Эмоциональная стабильность: СРЕДНЯЯ ({self.state.emotional_stability:.2f})")
         
         return "\n".join(lines) if lines else "Черты личности ещё не сформированы."
     
     def _get_meta_cognition_description(self) -> str:
-        """🆕 Возвращает описание мета-когнитивного состояния (ошибки)."""
+        """Возвращает описание мета-когнитивного состояния."""
         lines = []
         
         error_streak = getattr(self.state, 'error_streak', 0)
@@ -418,16 +318,13 @@ class SleepConsolidation:
             if last_error_time > 0:
                 minutes_ago = (time.time() - last_error_time) / 60
                 lines.append(f"- Последняя ошибка: {minutes_ago:.1f} мин назад")
-            
-            if error_streak >= 3:
-                lines.append("- ВНИМАНИЕ: Частые ошибки! Нужно пересмотреть стратегию общения.")
         else:
-            lines.append("- Ошибок не зафиксировано. Взаимодействие идёт гладко.")
+            lines.append("- Ошибок не зафиксировано.")
         
         return "\n".join(lines) if lines else "Мета-когнитивная информация недоступна."
     
     def _get_empathy_patterns_description(self) -> str:
-        """🆕 Возвращает описание эмпатических паттернов Влада."""
+        """Возвращает описание эмпатических паттернов Влада."""
         patterns = self._get_empathy_patterns_from_state()
         
         if not patterns:
@@ -442,13 +339,5 @@ class SleepConsolidation:
         lines.append(f"- Текущий эмпатический резонанс: {resonance:.2f}")
         lines.append(f"- Текущее состояние Влада: {user_state}")
         lines.append(f"- Всего наблюдений: {total_obs}")
-        
-        # Распределение состояний
-        state_dist = patterns.get("state_distribution", {})
-        if state_dist:
-            top_states = sorted(state_dist.items(), key=lambda x: x[1], reverse=True)[:3]
-            lines.append("- Наиболее частые состояния Влада:")
-            for state, freq in top_states:
-                lines.append(f"  • {state}: {freq*100:.1f}%")
         
         return "\n".join(lines) if lines else "Эмпатические паттерны недоступны."

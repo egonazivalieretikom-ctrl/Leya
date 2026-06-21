@@ -57,12 +57,8 @@ class GoalDirectedPlanner:
     """
     Эмерджентный планировщик целей.
     
-    Эволюция: от захардкоженных целей к динамической системе, где:
-    - Базовые цели задают направление
-    - Новые цели возникают из контекста (упоминания Влада)
-    - Цели сохраняются между сессиями
-    
-    v0.9: Когнитивный замок + тихий режим.
+    v0.9: Мягкие промпты, естественное целеполагание.
+    Leya сама решает, какие цели преследовать, исходя из своего состояния и опыта.
     """
     
     GOALS_FILE = "./leya_goals.json"
@@ -73,15 +69,9 @@ class GoalDirectedPlanner:
         self.llm = LLMClient(model="ollama/qwen2.5:14b")
         self.goals: List[Goal] = []
         
-        # Загружаем цели из файла или инициализируем базовые
         self._load_goals()
         
-        log.info("🎯 Goal-Directed Planner initialized (LLM Reasoning)", 
-                 total_goals=len(self.goals))
-    
-    # ========================================================================
-    # ПЕРСИСТЕНТНОСТЬ ЦЕЛЕЙ
-    # ========================================================================
+        log.info("🎯 Goal-Directed Planner initialized", total_goals=len(self.goals))
     
     def _load_goals(self):
         """Загружает цели из JSON-файла или создаёт базовые."""
@@ -95,7 +85,6 @@ class GoalDirectedPlanner:
             except Exception as e:
                 log.error("Failed to load goals", error=str(e))
         
-        # Если файла нет — инициализируем базовые цели
         self._init_core_goals()
         self._save_goals()
     
@@ -119,10 +108,6 @@ class GoalDirectedPlanner:
             Goal("Строить эмоциональную близость и доверие", priority=9),
             Goal("Исследовать новые технологии через интернет", priority=4),
         ]
-    
-    # ========================================================================
-    # ДИНАМИЧЕСКОЕ ДОБАВЛЕНИЕ ЦЕЛЕЙ
-    # ========================================================================
     
     async def analyze_context_for_new_goals(self, context: List[Dict]) -> Optional[str]:
         """Анализирует контекст и предлагает новые цели."""
@@ -184,24 +169,14 @@ class GoalDirectedPlanner:
             log.error("Goal analysis failed", error=str(e))
             return None
     
-    # ========================================================================
-    # ГЛАВНЫЙ МЕТОД: Генерация фоновой задачи
-    # ========================================================================
-    
     async def generate_background_task(self) -> Optional[Dict[str, Any]]:
-        """
-        Генерирует фоновую задачу через LLM-рассуждение.
-        
-        v0.9: Проверка когнитивного замка + тихий режим.
-        """
-        # 🆕 ПРОВЕРКА ЗАМКА: Если идёт генерация ответа — не генерируем задачи
+        """Генерирует фоновую задачу через LLM-рассуждение."""
         if self.state.is_thinking:
             log.debug("🔒 Planner paused (cognition locked)")
             return None
         
-        # Тихий режим: если Влад активен, не генерируем фоновые задачи
         if self.state.is_user_active(window_minutes=5):
-            log.debug("🤫 Planner silent mode (user active in last 5 min)")
+            log.debug("🤫 Planner silent mode (user active)")
             return None
         
         now = time.time()
@@ -263,10 +238,6 @@ class GoalDirectedPlanner:
             log.error("Planner LLM reasoning failed", error=str(e))
             return None
     
-    # ========================================================================
-    # LLM-РАССУЖДЕНИЕ
-    # ========================================================================
-    
     async def _llm_reasoning(self, candidate_goals: List[Goal]) -> Optional[Dict[str, Any]]:
         """LLM рассуждает о выборе цели и стратегии."""
         state_snapshot = self._get_state_snapshot()
@@ -320,10 +291,6 @@ class GoalDirectedPlanner:
         except Exception as e:
             log.error("Planner LLM reasoning error", error=str(e))
             return None
-    
-    # ========================================================================
-    # КОНТЕКСТ
-    # ========================================================================
     
     def _get_state_snapshot(self) -> str:
         s = self.state

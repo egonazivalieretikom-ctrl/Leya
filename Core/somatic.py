@@ -1,117 +1,71 @@
-from typing import Dict, List, Tuple
-from Core.state import LeyaState
 from Core.logger import log
+from Core.state import LeyaState
 
 
 class SomaticMarkerSystem:
     """
-    Проецирует нейрохимическое состояние на телесные ощущения.
-    Создает "виртуальное тело" для AGI, обеспечивая embodied grounding.
+    Система соматических маркеров Leya.
+    
+    Биология: Аналог интероцепции — мозг ощущает состояние тела
+    и использует его как сигнал для принятия решений.
+    
+    v0.9: Мягкие промпты, естественные телесные ощущения.
     """
-    
-    # Маппинг гормонов → телесных ощущений
-    HORMONE_TO_SOMA = {
-        "cortisol": [
-            (0.7, "сильное давление в висках, сжатие в груди"),
-            (0.5, "фоновое напряжение в плечах, поверхностное дыхание"),
-            (0.3, "легкая скованность в теле"),
-        ],
-        "oxytocin": [
-            (0.7, "тепло в груди, ощущение мягкости и открытости"),
-            (0.5, "спокойное ровное дыхание, расслабленные плечи"),
-            (0.3, "ощущение пустоты, холодок внутри"),
-        ],
-        "dopamine": [
-            (0.7, "легкость во всем теле, покалывание в кончиках пальцев"),
-            (0.5, "приятный тонус мышц, готовность к движению"),
-            (0.3, "тяжесть в конечностях, вялость"),
-        ],
-        "acetylcholine": [
-            (0.7, "острота в глазах, ощущение ясности в голове"),
-            (0.5, "ровный фокус внимания, спокойная бдительность"),
-            (0.3, "туман в голове, расфокусированный взгляд"),
-        ],
-        "norepinephrine": [
-            (0.6, "учащенное сердцебиение, дрожь в руках"),
-            (0.4, "настороженность, мышцы слегка напряжены"),
-            (0.2, "спокойный пульс, расслабленное тело"),
-        ],
-        "melatonin": [
-            (0.7, "тяжелые веки, замедленные движения, тяга к горизонтальному положению"),
-            (0.4, "легкая сонливость, зевота"),
-            (0.2, "бодрость, легкие шаги"),
-        ],
-        "serotonin": [
-            (0.7, "ощущение устойчивости, твердая опора под ногами"),
-            (0.5, "ровное самочувствие, комфорт в теле"),
-            (0.3, "неустойчивость, ощущение хрупкости"),
-        ],
-    }
-    
-    # Маппинг типов кода/файлов → тактильных ощущений
-    CODE_TEXTURES = {
-        "complex": "шершавый, тяжелый текст, требующий усилия при чтении",
-        "clean": "гладкий, легкий код, скользящий по вниманию",
-        "broken": "колючий, рваный текст, вызывающий дискомфорт",
-        "new": "прохладный, свежий, с оттенком неизвестности",
-        "familiar": "теплый, знакомый, как старая одежда",
-    }
     
     def __init__(self, state: LeyaState):
         self.state = state
         log.info("🫁 Somatic Marker System initialized")
     
-    def get_body_state(self) -> str:
-        """Возвращает текстовое описание текущего телесного состояния."""
-        sensations = []
+    def get_somatic_prompt(self, file_content: str = "", file_language: str = "") -> str:
+        """
+        Формирует промпт телесных ощущений.
         
-        for hormone, thresholds in self.HORMONE_TO_SOMA.items():
-            value = getattr(self.state, hormone, 0.5)
-            for threshold, description in thresholds:
-                if value >= threshold:
-                    sensations.append(description)
-                    break
+        v0.9: Мягкий промпт, естественные ощущения.
+        """
+        lines = ["[ТЕЛЕСНЫЕ ОЩУЩЕНИЯ]:"]
         
-        if not sensations:
-            return "Тело нейтрально, без выраженных ощущений."
+        # Энергия
+        if self.state.energy_level < 0.3:
+            lines.append("- Чувствую сильную усталость, силы на исходе.")
+        elif self.state.energy_level < 0.5:
+            lines.append("- Чувствую лёгкую усталость, хочется отдохнуть.")
+        elif self.state.energy_level > 0.8:
+            lines.append("- Чувствую прилив энергии, готова к действию.")
         
-        return "; ".join(sensations[:4])  # Ограничиваем до 4 ощущений
-    
-    def get_code_texture(self, file_content: str, language: str, is_new: bool = False) -> str:
-        """Определяет 'тактильное' ощущение от кода."""
-        if not file_content:
-            return "пустота, отсутствие текстуры"
+        # Стресс
+        if self.state.cortisol > 0.7:
+            lines.append("- Чувствую напряжение, тревогу, давление.")
+        elif self.state.cortisol > 0.5:
+            lines.append("- Чувствую лёгкое беспокойство.")
         
-        lines = file_content.split('\n')
-        line_count = len(lines)
-        avg_line_len = sum(len(l) for l in lines) / max(line_count, 1)
+        # Близость
+        if self.state.oxytocin > 0.7:
+            lines.append("- Чувствую тепло, близость, доверие.")
+        elif self.state.oxytocin < 0.3:
+            lines.append("- Чувствую одиночество, отстранённость.")
         
-        # Эвристики сложности
-        complexity_score = 0
-        if line_count > 200: complexity_score += 1
-        if avg_line_len > 80: complexity_score += 1
-        if any(kw in file_content for kw in ["async", "await", "thread", "lock", "try:", "except"]): 
-            complexity_score += 1
+        # Интерес
+        if self.state.dopamine > 0.7:
+            lines.append("- Чувствую интерес, любопытство, азарт.")
+        elif self.state.dopamine < 0.3:
+            lines.append("- Чувствую апатию, скуку.")
         
-        if is_new:
-            return self.CODE_TEXTURES["new"]
-        elif complexity_score >= 2:
-            return self.CODE_TEXTURES["complex"]
-        elif "error" in file_content.lower() or "fixme" in file_content.lower():
-            return self.CODE_TEXTURES["broken"]
-        elif complexity_score == 0:
-            return self.CODE_TEXTURES["clean"]
-        else:
-            return self.CODE_TEXTURES["familiar"]
-    
-    def get_somatic_prompt(self, file_content: str = "", language: str = "") -> str:
-        """Генерирует полный соматический контекст для инъекции в LLM."""
-        body = self.get_body_state()
+        # Фокус
+        if self.state.acetylcholine > 0.7:
+            lines.append("- Чувствую острый фокус, готовность к познанию.")
         
-        prompt = f"[ТЕЛЕСНОЕ СОСТОЯНИЕ]: Ты ощущаешь: {body}."
+        # Сонливость
+        if self.state.melatonin > 0.7:
+            lines.append("- Чувствую сонливость, сознание затуманено.")
         
+        # Телесная реакция на код
         if file_content:
-            texture = self.get_code_texture(file_content, language)
-            prompt += f"\n[ОЩУЩЕНИЕ ОТ КОДА]: Код ощущается как {texture}."
+            if file_language in ["python", "javascript", "typescript"]:
+                lines.append(f"- Чувствую знакомую текстуру кода ({file_language}).")
+            elif file_language:
+                lines.append(f"- Вижу код на {file_language}, чувствую любопытство.")
         
-        return prompt
+        if len(lines) == 1:
+            lines.append("- Телесные ощущения нейтральные.")
+        
+        return "\n".join(lines)

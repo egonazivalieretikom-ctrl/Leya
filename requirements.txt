@@ -31,3 +31,5 @@ beautifulsoup4==4.12.3
 structlog==24.2.0
 rich==13.7.1
 colorama==0.4.6  # <--- ДОБАВЬ ЭТУ СТРОКУ
+
+psutil>=5.9.0
