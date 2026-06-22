@@ -33,30 +33,26 @@ class MetaCognition:
     async def background_consolidation(self):
         """
         ГЛАВНЫЙ ФОНОВЫЙ ПРОЦЕСС. Аналог сна и медитации.
-        Запускается периодически и делает три вещи:
-        1. Анализирует паттерны поведения (Наблюдение).
-        2. Задает Лее экзистенциальные вопросы (Самопознание).
-        3. Консолидирует память (Сон).
         """
         logging.info("MetaCognition: Фоновый цикл саморефлексии запущен.")
-        
+    
         while True:
-            # "Сон" раз в 10 минут (в реальной системе — реже, например, раз в час)
-            await asyncio.sleep(600) 
-            
+            # "Сон" раз в 10 минут
+            await asyncio.sleep(600)
+        
             logging.info("MetaCognition: Начало сеанса рефлексии...")
             self.is_sleeping = True
-            
+        
             try:
                 # 1. АНАЛИЗ ПАТТЕРНОВ ПОВЕДЕНИЯ
                 await self._analyze_behavioral_patterns()
-                
+            
                 # 2. ГЛУБИННОЕ САМОПОЗНАНИЕ
                 await self._existential_inquiry()
-                
-                # 3. КОНСОЛИДАЦИЯ ПАМЯТИ (Сон)
-                await self.leya.memory.consolidate_memories()
-                
+            
+                # 3. КОНСОЛИДАЦИЯ ПАМЯТИ (Сон) — передаем LLM клиент
+                await self.leya.memory.consolidate_memories(llm_client=self.llm_client)
+            
             except Exception as e:
                 logging.error(f"MetaCognition: Ошибка во время рефлексии: {e}")
             finally:

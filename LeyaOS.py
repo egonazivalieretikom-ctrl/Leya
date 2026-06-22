@@ -167,7 +167,8 @@ class LeyaOS:
             
             # 6.4. Если Лея хочет задать вопрос — передаем в Environment
             if cognitive_output.action_intent == "ask_question":
-                await self.env.send_message(cognitive_output.response)
+                # НЕ вызываем send_message здесь — ответ уже выведется в конце цикла
+                logger.info("Лея хочет задать вопрос пользователю.")
             
             # 6.5. Если Лея хочет изменить себя — запускаем self-modify
             if cognitive_output.action_intent == "self_modify":
@@ -192,6 +193,8 @@ class LeyaOS:
                 logger.info(f"[САМОРЕФЛЕКСИЯ]: {cognitive_output.self_reflection}")
             logger.info("=" * 60)
             
+            await self.env.send_message(cognitive_output.response)
+
             # Уведомляем Наблюдателя о результате (для быстрого анализа)
             await self.reflection.process_action(
                 stimulus=stimulus_content,

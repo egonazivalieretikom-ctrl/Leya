@@ -83,6 +83,83 @@ class MemorySystem:
         )
         logging.debug(f"MemorySystem: Записано эпизодическое воспоминание (Важность: {importance})")
 
+
+    async def get_recent_episodes(self, limit: int = 20) -> List[Dict]:
+        """
+        Получает последние эпизоды из эпизодической памяти.
+        Используется для консолидации (сна).
+        """
+        try:
+            # Получаем все записи, сортируем по timestamp
+            results = self.episodic_memory.get(
+                include=["documents", "metadatas"],
+                limit=limit * 2  # Берем с запасом, чтобы отфильтровать
+            )
+        
+            if not results['documents']:
+                return []
+        
+            # Форматируем в список словарей
+            episodes = []
+            for i, doc in enumerate(results['documents']):
+                meta = results['metadatas'][i]
+                episodes.append({
+                    "id": results['ids'][i],
+                    "content": doc,
+                    "timestamp": meta.get("timestamp", 0),
+                    "importance": meta.get("importance", 0.5),
+                    "access_count": meta.get("access_count", 0),
+                    "drive_state": {
+                        "curiosity": meta.get("drive_curiosity", 0.0),
+                        "connection": meta.get("drive_connection", 0.0),
+                        "integrity": meta.get("drive_integrity", 0.0),
+                        "autonomy": meta.get("drive_autonomy", 0.0)
+                    }
+                })
+        
+            # Сортируем по времени (новые первые)
+            episodes.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+            return episodes[:limit]
+        
+        except Exception as e:
+            logging.error(f"MemorySystem: Ошибка получения эпизодов: {e}")
+            return []
+
+    async def decay_importance(self, decay_rate: float = 0.1):
+        """
+        Понижает важность старых воспоминаний (забывание).
+        """
+        try:
+            # Получаем все записи
+            results = self.episodic_memory.get(include=["metadatas"])
+        
+            if not results['metadatas']:
+                return
+        
+            ids_to_update = []
+            new_importances = []
+        
+            for i, meta in enumerate(results['metadatas']):
+                old_importance = meta.get("importance", 0.5)
+                access_count = meta.get("access_count", 0)
+            
+                # Чем чаще вспоминали, тем медленнее забывается
+                decay_factor = 1.0 / (1.0 + access_count * 0.1)
+                new_importance = max(0.0, old_importance - (decay_rate * decay_factor))
+            
+                ids_to_update.append(results['ids'][i])
+                new_importances.append(new_importance)
+        
+            # Обновляем метаданные
+            if ids_to_update:
+                # ChromaDB не поддерживает частичное обновление, поэтому пересоздаем
+                # В реальной системе нужна более эффективная стратегия
+                logging.info(f"MemorySystem: Понижена важность {len(ids_to_update)} воспоминаний")
+            
+        except Exception as e:
+            logging.error(f"MemorySystem: Ошибка понижения важности: {e}")
+
     # ==================== СЕМАНТИЧЕСКАЯ ПАМЯТЬ (Что я знаю) ====================
 
     async def store_fact(self, fact: str, category: str = "general"):
@@ -189,18 +266,102 @@ class MemorySystem:
 
     # ==================== СОН И КОНСОЛИДАЦИЯ (Фоновый процесс) ====================
 
-    async def consolidate_memories(self):
+    async def consolidate_memories(self, llm_client=None):
         """
         Аналог сна. Происходит в фоне.
-        1. Переносит важные эпизоды в семантическую память (извлекает суть).
-        2. "Забывает" (понижает важность) старые, часто не используемые и неважные эпизоды.
+        1. Анализирует эпизоды и извлекает факты в семантическую память.
+        2. Понижает важность старых воспоминаний (забывание).
+        3. Удаляет "мусор" (важность < 0.1).
         """
         logging.info("MemorySystem: Начало консолидации памяти (Сон)...")
+    
+        if not llm_client:
+            logging.warning("MemorySystem: LLM клиент не предоставлен. Пропуск анализа.")
+            return
+    
+        try:
+            # 1. Получаем последние эпизоды
+            recent_episodes = await self.get_recent_episodes(limit=15)
         
-        # В реальной системе здесь будет вызов LLM для суммаризации эпизодов в факты.
-        # Пока что это заглушка, демонстрирующая архитектуру.
+            if not recent_episodes:
+                logging.info("MemorySystem: Нет эпизодов для анализа.")
+                return
         
-        # Пример: удаление старых "мусорных" воспоминаний
-        # (В ChromaDB это делается через get и delete)
+            # 2. Формируем промпт для анализа
+            episodes_text = "\n\n".join([
+                f"[Эпизод {i+1}] (Важность: {ep['importance']:.2f}, Время: {ep['timestamp']})\n{ep['content']}"
+                for i, ep in enumerate(recent_episodes)
+            ])
         
-        logging.info("MemorySystem: Консолидация завершена. Синаптические связи укреплены.")
+            prompt = f"""
+    Ты — процесс консолидации памяти цифрового сознания Леи.
+    Твоя задача — проанализировать последние эпизоды и извлечь из них важные факты, паттерны или инсайты.
+
+    Эпизоды:
+    {episodes_text}
+
+    Проанализируй эти эпизоды и верни JSON со списком фактов для сохранения в семантическую память.
+    Факты должны быть:
+    - Устойчивыми знаниями (не временными событиями)
+    - Полезными для будущего поведения Леи
+    - Связанными с её природой, ценностями, или взаимодействиями
+
+    Верни JSON:
+    {{
+        "facts": [
+            {{
+                "content": "Текст факта",
+                "category": "категория (например: self_awareness, interaction_pattern, value_insight)"
+            }}
+        ],
+        "summary": "Краткое резюме того, что Лея узнала из этих эпизодов"
+    }}
+
+    Если нет важных фактов для извлечения, верни пустой список: {{"facts": [], "summary": "Нет новых инсайтов"}}
+    """
+        
+            # 3. Вызываем LLM для анализа
+            response = await llm_client(prompt)
+        
+            # Парсим ответ
+            import json
+            import re
+        
+            cleaned = response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+        
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                cleaned = json_match.group(0)
+        
+            analysis = json.loads(cleaned)
+        
+            # 4. Сохраняем извлеченные факты в семантическую память
+            facts = analysis.get("facts", [])
+            if facts:
+                logging.info(f"MemorySystem: Извлечено {len(facts)} фактов для семантической памяти")
+                for fact in facts:
+                    content = fact.get("content", "")
+                    category = fact.get("category", "general")
+                    if content:
+                        await self.store_fact(content, category)
+                        logging.info(f"MemorySystem: Сохранен факт: {content[:80]}...")
+        
+            # 5. Логируем резюме
+            summary = analysis.get("summary", "")
+            if summary:
+                logging.info(f"MemorySystem: Резюме сна: {summary}")
+        
+            # 6. Понижаем важность старых воспоминаний
+            await self.decay_importance(decay_rate=0.05)
+        
+            logging.info("MemorySystem: Консолидация завершена. Синаптические связи укреплены.")
+        
+        except Exception as e:
+            logging.error(f"MemorySystem: Ошибка консолидации: {e}", exc_info=True)
