@@ -2,6 +2,7 @@ import re
 import json
 import time
 import asyncio
+import torch
 from typing import List, Dict, Any, Optional
 from Core.logger import log
 from Core.state import LeyaState
@@ -12,6 +13,14 @@ from Cognition.empathy import EmpathyEngine
 from Cognition.lesson_system import LessonSystem
 from Core.somatic import SomaticMarkerSystem
 from Memory.associative import AssociativeMemory
+
+def safe_round(x, ndigits: int = 0):
+    """Безопасный round для Python чисел и PyTorch тензоров"""
+    if torch.is_tensor(x):
+        if x.numel() == 1:  # одиночное значение
+            return round(x.item(), ndigits)
+        return torch.round(x)
+    return round(x, ndigits)
 
 
 class CognitionManager:
@@ -268,7 +277,7 @@ class CognitionManager:
         """Мгновенная оценка события через SNN или Fast Appraisal."""
         stimuli = {}
     
-        # Пытаемся использовать SNN
+        # Пытаемся использовать SNN (Фаза 3)
         if self.emotional_snn and self.emotional_snn.enabled:
             try:
                 stimuli = self.emotional_snn.evaluate(
@@ -276,9 +285,9 @@ class CognitionManager:
                     content=content,
                     context_history=[e for e in context if isinstance(e, dict)]
                 )
+                log.debug("🧠 SNN evaluation successful", hormones=stimuli)
             except Exception as e:
-                log.error("SNN evaluation failed", error=str(e))
-                # Откат на fast_appraisal
+                log.warning("SNN evaluation failed, falling back to fast_appraisal", error=str(e))
                 stimuli = self.fast_appraisal.evaluate(
                     event_type=event_type,
                     content=content,
@@ -295,19 +304,19 @@ class CognitionManager:
         if self.homeostasis:
             for hormone, intensity in stimuli.items():
                 try:
-                    # ВАЖНО: Преобразуем тензор в float
-                    intensity_float = float(intensity)
+                    # Безопасное преобразование тензора в float
+                    intensity_float = float(intensity) if not torch.is_tensor(intensity) else intensity.item()
                     if intensity_float != 0:
                         self.homeostasis.apply_stimulus(hormone, intensity_float)
                 except (TypeError, AttributeError) as e:
-                    log.debug(f"Failed to convert intensity for {hormone}", error=str(e))
+                    log.debug(f"Failed to apply stimulus for {hormone}", error=str(e))
     
-        # Логируем активные стимулы
+        # Логируем активные стимулы с безопасным round
         active_stimuli = {}
         for k, v in stimuli.items():
             try:
-                # ВАЖНО: Преобразуем тензор в float перед round()
-                v_float = float(v)
+                # Безопасный round для float и тензоров
+                v_float = float(v) if not torch.is_tensor(v) else v.item()
                 if abs(v_float) > 0.001:
                     active_stimuli[k] = round(v_float, 3)
             except (TypeError, AttributeError):
