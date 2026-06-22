@@ -265,24 +265,10 @@ class CognitionManager:
     
     async def _apply_fast_appraisal(self, event_type: str, content: str, 
                                      context: List[Dict]) -> None:
-        """Мгновенная оценка события."""
-        # 🆕 Временно используем fast_appraisal, пока SNN не обучится
-        stimuli = self.fast_appraisal.evaluate(
-            event_type=event_type,
-            content=content,
-            context_history=[e for e in context if isinstance(e, dict)]
-        )
+        """Мгновенная оценка события через SNN или Fast Appraisal."""
+        stimuli = {}
     
-        # TODO: Вернуть SNN, когда она обучится
-        # if self.emotional_snn and self.emotional_snn.enabled:
-        #     stimuli = self.emotional_snn.evaluate(...)
-    
-        if self.homeostasis:
-            for hormone, intensity in stimuli.items():
-                if intensity != 0:
-                    self.homeostasis.apply_stimulus(hormone, intensity)
-        
-        # Пытаемся использовать SNN (Фаза 3)
+        # Пытаемся использовать SNN
         if self.emotional_snn and self.emotional_snn.enabled:
             try:
                 stimuli = self.emotional_snn.evaluate(
@@ -290,31 +276,45 @@ class CognitionManager:
                     content=content,
                     context_history=[e for e in context if isinstance(e, dict)]
                 )
-                log.debug("🧠 SNN evaluation successful", hormones=stimuli)
             except Exception as e:
-                log.error("SNN evaluation failed, falling back to fast_appraisal", error=str(e))
+                log.error("SNN evaluation failed", error=str(e))
+                # Откат на fast_appraisal
                 stimuli = self.fast_appraisal.evaluate(
                     event_type=event_type,
                     content=content,
                     context_history=[e for e in context if isinstance(e, dict)]
                 )
         else:
-            # Откат на паттерн-матчинг
             stimuli = self.fast_appraisal.evaluate(
                 event_type=event_type,
                 content=content,
                 context_history=[e for e in context if isinstance(e, dict)]
             )
-        
+    
+        # Применяем стимулы к гомеостазу
         if self.homeostasis:
             for hormone, intensity in stimuli.items():
-                if intensity != 0:
-                    self.homeostasis.apply_stimulus(hormone, intensity)
-            
-            active_stimuli = {k: round(v, 2) for k, v in stimuli.items() if v != 0}
-            if active_stimuli:
-                await event_bus.publish("fast_reaction", {"stimuli": active_stimuli})
-                log.info("⚡ Fast appraisal applied", stimuli=active_stimuli)
+                try:
+                    # ВАЖНО: Преобразуем тензор в float
+                    intensity_float = float(intensity)
+                    if intensity_float != 0:
+                        self.homeostasis.apply_stimulus(hormone, intensity_float)
+                except (TypeError, AttributeError) as e:
+                    log.debug(f"Failed to convert intensity for {hormone}", error=str(e))
+    
+        # Логируем активные стимулы
+        active_stimuli = {}
+        for k, v in stimuli.items():
+            try:
+                # ВАЖНО: Преобразуем тензор в float перед round()
+                v_float = float(v)
+                if abs(v_float) > 0.001:
+                    active_stimuli[k] = round(v_float, 3)
+            except (TypeError, AttributeError):
+                pass
+    
+        if active_stimuli:
+            log.info("⚡ Fast appraisal applied", stimuli=active_stimuli)
     
     # ========================================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
@@ -556,6 +556,8 @@ class CognitionManager:
             t, c = e.get("type", "?"), e.get("content", "")
             if t == "user_command":
                 lines.append(f"👤 Собеседник: {c}")
+            elif t == "response":  # 🆕 Ответы Леи
+                lines.append(f"🤖 Лея: {c}")
             elif t == "vision_request":
                 lines.append(f"👁️ Изображение: {c}")
             elif t == "internal_drive":
@@ -766,6 +768,16 @@ class CognitionManager:
             
             latest_event["processed"] = True
             
+            # 🆕 Сохраняем ответ Леи в кратковременную память
+            state.add_to_context({
+                "type": "response",
+                "content": response,
+                "source": "leya",
+                "timestamp": time.time()
+            })
+
+            latest_event["processed"] = True
+
             return {
                 "type": "response",
                 "content": response,

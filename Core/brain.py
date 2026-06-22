@@ -9,7 +9,7 @@ from Core.event_bus import event_bus
 
 class Brain:
     """
-    Центральный орган управления Leya v0.9.
+    Центральный орган управления Леи v0.9.
     
     Биология: Brain — это префронтальная кора + лимбическая система.
     Он создаёт HomeostaticEngine (сердце) и передаёт его всем подсистемам.
@@ -19,6 +19,10 @@ class Brain:
     - Knowledge Graph для долгосрочных фактов
     - Sleep Consolidation для формирования личности
     - Thalamus для фильтрации и объединения сигналов
+    - SNN для эмоциональной оценки
+    - Behavioral RL для адаптивного поведения
+    - Embodiment для телесных ощущений
+    - Continuity для непрерывного переживания времени
     """
     
     def __init__(self):
@@ -39,6 +43,13 @@ class Brain:
         self.stream = None
         self.sleep_consolidation = None
         self.thalamus = None
+        self.project_manager = None
+        self.embodiment = None
+        self.continuity = None
+        
+        # Непрерывные процессы
+        self._background_tasks = []
+        self._running = False
         
         log.info("🧠 Brain initialized (v0.9 - Full Integration)")
     
@@ -159,9 +170,9 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Thalamus", error=str(e))
             self.thalamus = None
-
+        
         # ====================================================================
-        # 🆕 9.5 МЕНЕДЖЕР СОБСТВЕННЫХ ПРОЕКТОВ
+        # 10. МЕНЕДЖЕР СОБСТВЕННЫХ ПРОЕКТОВ
         # ====================================================================
         try:
             from Cognition.projects import ProjectManager
@@ -170,9 +181,9 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Project Manager", error=str(e))
             self.project_manager = None
-
+        
         # ====================================================================
-        # 🆕 ЭМБОДЗИМЕНТ (телесные ощущения)
+        # 11. ЭМБОДЗИМЕНТ (телесные ощущения)
         # ====================================================================
         try:
             from Core.embodiment import EmbodimentSystem
@@ -181,9 +192,9 @@ class Brain:
         except Exception as e:
             log.error("Failed to load Embodiment System", error=str(e))
             self.embodiment = None
-
+        
         # ====================================================================
-        # 🆕 НЕПРЕРЫВНОСТЬ (субъективное время + фоновые ощущения)
+        # 12. НЕПРЕРЫВНОСТЬ (субъективное время + фоновые ощущения)
         # ====================================================================
         try:
             from Core.continuity import ContinuitySystem
@@ -194,7 +205,7 @@ class Brain:
             self.continuity = None
         
         # ====================================================================
-        # 10. ПЕРЕДАЧА ВСЕХ ПОДСИСТЕМ В ЦИКЛ
+        # 13. ПЕРЕДАЧА ВСЕХ ПОДСИСТЕМ В ЦИКЛ
         # ====================================================================
         self.cycle.attach_systems(
             perception=self.perception,
@@ -206,17 +217,73 @@ class Brain:
             stream=self.stream,
             sleep_consolidation=self.sleep_consolidation,
             thalamus=self.thalamus,
-            project_manager=self.project_manager 
+            project_manager=self.project_manager
         )
         
         # ====================================================================
-        # 11. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
+        # 14. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
         # ====================================================================
         if self.homeostasis and self.cognition:
             self.cognition.homeostasis = self.homeostasis
             log.info("🔗 Homeostasis linked to Cognition Manager")
         
         log.info("✅ All subsystems loaded and attached (v0.9)")
+    
+    # ========================================================================
+    # 🆕 ОБУЧЕНИЕ SNN ПРИ ПЕРВОМ ЗАПУСКЕ
+    # ========================================================================
+    
+    async def _train_snn_if_needed(self):
+        """
+        Обучает SNN, если она ещё не обучена.
+        
+        Использует LLM как учителя для генерации размеченных данных.
+        """
+        import os
+        
+        weights_path = "./leya_snn_weights.pt"
+        dataset_path = "./snn_training_data.json"
+        
+        # Проверяем, есть ли обученные веса
+        if os.path.exists(weights_path):
+            log.info("✅ SNN weights found, skipping training")
+            return
+        
+        log.info("🎓 SNN not trained yet, starting training...")
+        
+        try:
+            # Проверяем, есть ли SNN в cognition
+            if not hasattr(self.cognition, 'emotional_snn') or not self.cognition.emotional_snn:
+                log.warning("⚠️ SNN not available in CognitionManager, skipping training")
+                return
+            
+            from Core.snn_trainer import SNNTrainer
+            
+            # Создаём тренера
+            trainer = SNNTrainer(self.cognition.emotional_snn.network)
+            
+            # Загружаем датасет, если есть
+            if os.path.exists(dataset_path):
+                trainer.load_dataset(dataset_path)
+            else:
+                # Генерируем данные с помощью LLM
+                await trainer.generate_training_data(num_samples=50)
+                trainer.save_dataset(dataset_path)
+            
+            # Обучаем SNN
+            trainer.train(epochs=100, batch_size=10)
+            
+            # Сохраняем обученные веса
+            self.cognition.emotional_snn.save_weights(weights_path)
+            
+            log.info("✅ SNN training complete, weights saved")
+            
+        except Exception as e:
+            log.error("SNN training failed", error=str(e), exc_info=True)
+    
+    # ========================================================================
+    # ЗАПУСК ВСЕХ ПРОЦЕССОВ
+    # ========================================================================
     
     async def start(self, cycle_interval: float = 2.0):
         """Запускает мозг и все его подсистемы."""
@@ -226,28 +293,83 @@ class Brain:
         except Exception as e:
             log.error("💥 Critical error in Brain", error=str(e), exc_info=True)
             raise
-        
+    
         # Публикуем событие старта
         await event_bus.publish("leya_start", {"timestamp": self.state.start_time})
-        
+    
         # 🆕 Запускаем непрерывные процессы
-        background_tasks = []
-        
+        self._running = True
+    
         if self.embodiment:
-            background_tasks.append(asyncio.create_task(self.embodiment.start()))
-        
+            self._background_tasks.append(
+                asyncio.create_task(self.embodiment.start())
+            )
+    
         if self.continuity:
-            background_tasks.append(asyncio.create_task(self.continuity.start()))
-        
+            self._background_tasks.append(
+                asyncio.create_task(self.continuity.start())
+            )
+    
+        # 🆕 Запускаем обучение SNN В ФОНЕ (неблокирующее)
+        self._background_tasks.append(
+            asyncio.create_task(self._train_snn_in_background())
+        )
+    
         # Запускаем когнитивный цикл
         try:
             await self.cycle.run_continuous(cycle_interval)
         except asyncio.CancelledError:
             log.info("🛑 Brain cycle cancelled")
-            for task in background_tasks:
-                task.cancel()
         except Exception as e:
             log.error("💥 Critical error in Brain cycle", error=str(e), exc_info=True)
-            for task in background_tasks:
-                task.cancel()
             raise
+        finally:
+            # Останавливаем все фоновые процессы
+            await self.stop()
+
+    async def _train_snn_in_background(self):
+        """
+        Запускает обучение SNN в фоне (неблокирующее).
+    
+        Это позволяет системе работать параллельно с обучением.
+        """
+        try:
+            log.info("🎓 Starting SNN training in background...")
+            await self._train_snn_if_needed()
+            log.info("🎓 Background SNN training complete")
+        except Exception as e:
+            log.error("🎓 Background SNN training failed", error=str(e), exc_info=True)
+    
+    # ========================================================================
+    # ОСТАНОВКА ВСЕХ ПРОЦЕССОВ
+    # ========================================================================
+    
+    async def stop(self):
+        """Останавливает все непрерывные процессы."""
+        if not self._running:
+            return
+        
+        log.info("🛑 Stopping all background processes...")
+        
+        self._running = False
+        
+        # Останавливаем эмбодзимент
+        if self.embodiment:
+            self.embodiment.stop()
+        
+        # Останавливаем непрерывность
+        if self.continuity:
+            self.continuity.stop()
+        
+        # Отменяем все фоновые задачи
+        for task in self._background_tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        self._background_tasks.clear()
+        
+        log.info("✅ All background processes stopped")

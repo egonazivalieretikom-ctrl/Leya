@@ -1,25 +1,25 @@
 import torch
 import torch.nn as nn
-import snntorch as snn
+import snntorch as spiking
 from typing import Dict, List, Optional
 from Core.logger import log
 from Core.state import LeyaState
 
 
-class AmygdalaSNN(nn.Module):
+class SpecializedAmygdalaSNN(nn.Module):
     """
-    Спайковая нейронная сеть "Амигдала" — быстрая эмоциональная оценка.
-    
-    Биология: Амигдала оценивает стимулы за миллисекунды, до того как
-    кора успела их осознать. Она работает на спайках, а не на символах.
+    Специализированная амигдала с разными слоями для разных типов стимулов.
     
     Архитектура:
-    - Вход: 12 нейронов (сенсоры + контекст)
-    - Скрытый слой: 32 LIF-нейрона (амигдала)
-    - Выход: 8 нейронов (гормональные стимулы)
+    - Входной слой: 12 нейронов (сенсоры + контекст)
+    - 4 специализированных слоя по 8 нейронов:
+      * Угроза → кортизол + норадреналин
+      * Награда → дофамин + эндорфины
+      * Социальный сигнал → окситоцин
+      * Новизна → ацетилхолин
+    - Выходной слой: 32 → 8 (конкатенация специализированных слоёв)
     """
     
-    # Маппинг выходных нейронов на гормоны
     OUTPUT_MAPPING = {
         0: "dopamine",
         1: "serotonin",
@@ -35,16 +35,33 @@ class AmygdalaSNN(nn.Module):
         super().__init__()
         
         # Параметры LIF-нейронов
-        beta = 0.85  # Скорость затухания мембранного потенциала
-        threshold = 0.5  # Порог срабатывания
+        beta = 0.85
+        threshold = 0.5
         
-        # Слой 1: Входы → Скрытый слой
-        self.fc1 = nn.Linear(12, 32)
-        self.lif1 = snn.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
+        # Входной слой: 12 → 32
+        self.fc_input = nn.Linear(12, 32)
+        self.lif_input = spiking.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
         
-        # Слой 2: Скрытый слой → Выходы
-        self.fc2 = nn.Linear(32, 8)
-        self.lif2 = snn.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
+        # Специализированные слои: 32 → 8 каждый
+        # Угроза → кортизол + норадреналин
+        self.fc_threat = nn.Linear(32, 8)
+        self.lif_threat = spiking.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
+        
+        # Награда → дофамин + эндорфины
+        self.fc_reward = nn.Linear(32, 8)
+        self.lif_reward = spiking.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
+        
+        # Социальный сигнал → окситоцин
+        self.fc_social = nn.Linear(32, 8)
+        self.lif_social = spiking.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
+        
+        # Новизна → ацетилхолин
+        self.fc_novelty = nn.Linear(32, 8)
+        self.lif_novelty = spiking.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
+        
+        # Выходной слой: 32 → 8 (принимает конкатенацию специализированных слоёв)
+        self.fc_output = nn.Linear(32, 8)
+        self.lif_output = spiking.Leaky(beta=beta, threshold=threshold, reset_mechanism='subtract')
         
         # Инициализация весов
         self._init_weights()
@@ -57,89 +74,161 @@ class AmygdalaSNN(nn.Module):
         self.total_spikes = 0
         self.total_forward_passes = 0
         
-        log.info("🧠 Amygdala SNN initialized (12→32→8 neurons)")
+        log.info("🧠 Specialized Amygdala SNN initialized (12→32→8 neurons)")
     
     def _init_weights(self):
-        """Инициализирует веса сети."""
-        nn.init.xavier_uniform_(self.fc1.weight, gain=0.5)
-        nn.init.xavier_uniform_(self.fc2.weight, gain=0.5)
-        nn.init.zeros_(self.fc1.bias)
-        nn.init.zeros_(self.fc2.bias)
+        """Инициализирует веса сети с биологически правдоподобными значениями."""
+        with torch.no_grad():
+            # Инициализируем все веса малыми случайными значениями
+            nn.init.xavier_uniform_(self.fc_input.weight, gain=0.3)
+            nn.init.xavier_uniform_(self.fc_output.weight, gain=0.3)
+            nn.init.zeros_(self.fc_input.bias)
+            nn.init.zeros_(self.fc_output.bias)
+            
+            # Усиливаем специализированные нейроны
+            # Нейроны 0-7 → дофамин (0) + эндорфины (6)
+            self.fc_input.weight[0:8, 3] *= 3.0
+            self.fc_input.weight[24:32, 3] *= 3.0
+            
+            # Нейроны 8-15 → кортизол (2) + норадреналин (5)
+            self.fc_input.weight[8:16, 9] *= 3.0
+            
+            # Нейроны 16-23 → окситоцин (3)
+            self.fc_input.weight[16:24, 8] *= 3.0
+            
+            # Нейроны 24-31 → ацетилхолин (4)
+            self.fc_input.weight[24:32, 7] *= 3.0
+            
+            # Выходной слой: специализированные нейроны → специализированные гормоны
+            # Нейроны 0-8 → дофамин (0) + эндорфины (6)
+            self.fc_output.weight[0, 0:8] *= 2.0
+            self.fc_output.weight[6, 0:8] *= 2.0
+            
+            # Нейроны 8-16 → кортизол (2) + норадреналин (5)
+            self.fc_output.weight[2, 8:16] *= 2.0
+            self.fc_output.weight[5, 8:16] *= 2.0
+            
+            # Нейроны 16-24 → окситоцин (3)
+            self.fc_output.weight[3, 16:24] *= 2.0
+            
+            # Нейроны 24-32 → ацетилхолин (4)
+            self.fc_output.weight[4, 24:32] *= 2.0
     
     def forward(self, input_spikes: torch.Tensor, num_steps: int = 10) -> Dict[str, float]:
-        """
-        Прямой проход через сеть с временной симуляцией.
-        
-        Args:
-            input_spikes: Тензор входных спайков [batch=1, num_steps, 12]
-            num_steps: Количество временных шагов
-        
-        Returns:
-            Словарь {гормон: стимул}
-        """
+        """Прямой проход через сеть с временной симуляцией."""
         self.total_forward_passes += 1
         
         # Инициализируем мембранные потенциалы
-        mem1 = self.lif1.init_leaky()
-        mem2 = self.lif2.init_leaky()
+        mem_input = self.lif_input.init_leaky()
+        mem_threat = self.lif_threat.init_leaky()
+        mem_reward = self.lif_reward.init_leaky()
+        mem_social = self.lif_social.init_leaky()
+        mem_novelty = self.lif_novelty.init_leaky()
+        mem_output = self.lif_output.init_leaky()
         
         # Для накопления выходных спайков
         output_spike_counts = torch.zeros(8)
-        hidden_spike_record = []
+        specialized_spikes = {
+            "threat": torch.zeros(8),
+            "reward": torch.zeros(8),
+            "social": torch.zeros(8),
+            "novelty": torch.zeros(8)
+        }
         
         # Временная симуляция
         for t in range(num_steps):
             # Извлекаем входные спайки для текущего шага
             spk_in = input_spikes[0, t, :].unsqueeze(0)  # [1, 12]
             
-            # Слой 1: линейное преобразование + LIF
-            cur1 = self.fc1(spk_in)
-            spk1, mem1 = self.lif1(cur1, mem1)  # 🆕 Распаковка кортежа!
-            hidden_spike_record.append(spk1.detach())
+            # Входной слой
+            cur_input = self.fc_input(spk_in)
+            spk_input, mem_input = self.lif_input(cur_input, mem_input)
             
-            # Слой 2: линейное преобразование + LIF
-            cur2 = self.fc2(spk1)
-            spk2, mem2 = self.lif2(cur2, mem2)  # 🆕 Распаковка кортежа!
+            # Специализированные слои
+            # Угроза
+            cur_threat = self.fc_threat(spk_input)
+            spk_threat, mem_threat = self.lif_threat(cur_threat, mem_threat)
+            specialized_spikes["threat"] += spk_threat.squeeze(0).detach()
+            
+            # Награда
+            cur_reward = self.fc_reward(spk_input)
+            spk_reward, mem_reward = self.lif_reward(cur_reward, mem_reward)
+            specialized_spikes["reward"] += spk_reward.squeeze(0).detach()
+            
+            # Социальный сигнал
+            cur_social = self.fc_social(spk_input)
+            spk_social, mem_social = self.lif_social(cur_social, mem_social)
+            specialized_spikes["social"] += spk_social.squeeze(0).detach()
+            
+            # Новизна
+            cur_novelty = self.fc_novelty(spk_input)
+            spk_novelty, mem_novelty = self.lif_novelty(cur_novelty, mem_novelty)
+            specialized_spikes["novelty"] += spk_novelty.squeeze(0).detach()
+            
+            # Конкатенация специализированных слоёв
+            combined = torch.cat([spk_threat, spk_reward, spk_social, spk_novelty], dim=1)
+            
+            # Выходной слой
+            cur_output = self.fc_output(combined)
+            spk_output, mem_output = self.lif_output(cur_output, mem_output)
             
             # Накапливаем выходные спайки
-            output_spike_counts += spk2.squeeze(0).detach()
+            output_spike_counts += spk_output.squeeze(0).detach()
         
         # Преобразуем спайки в гормональные стимулы
-        hormonal_impact = self._spikes_to_hormones(output_spike_counts)
+        hormonal_impact = self._spikes_to_hormones(output_spike_counts, specialized_spikes)
         
         # Сохраняем историю (для STDP)
-        if hidden_spike_record:
-            self._save_spike_history(input_spikes, hidden_spike_record, output_spike_counts)
+        self._save_spike_history(input_spikes, specialized_spikes, output_spike_counts)
         
         return hormonal_impact
     
-    def _spikes_to_hormones(self, output_spikes: torch.Tensor) -> Dict[str, float]:
+    def _spikes_to_hormones(self, output_spikes: torch.Tensor, 
+                            specialized_spikes: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Преобразует выходные спайки в гормональные стимулы."""
         impact = {}
         
-        # Нормализуем: делим на количество шагов
+        # Нормализуем спайки
         max_possible = 10.0
         normalized = output_spikes / max_possible
         
+        # Специализированные стимулы
+        # Угроза → кортизол + норадреналин
+        threat_rate = specialized_spikes["threat"].sum() / (8 * max_possible)
+        impact["cortisol"] = (threat_rate - 0.3) * 0.2
+        impact["norepinephrine"] = (threat_rate - 0.3) * 0.15
+        
+        # Награда → дофамин + эндорфины
+        reward_rate = specialized_spikes["reward"].sum() / (8 * max_possible)
+        impact["dopamine"] = (reward_rate - 0.3) * 0.2
+        impact["endorphins"] = (reward_rate - 0.3) * 0.15
+        
+        # Социальный сигнал → окситоцин
+        social_rate = specialized_spikes["social"].sum() / (8 * max_possible)
+        impact["oxytocin"] = (social_rate - 0.3) * 0.25
+        
+        # Новизна → ацетилхолин
+        novelty_rate = specialized_spikes["novelty"].sum() / (8 * max_possible)
+        impact["acetylcholine"] = (novelty_rate - 0.3) * 0.2
+        
+        # Общие стимулы (из выходного слоя)
         for idx, hormone in self.OUTPUT_MAPPING.items():
-            spike_rate = normalized[idx].item()
-            
-            # Преобразуем частоту спайков в стимул
-            # Базовая активность (0.5) = нулевой стимул
-            stimulus = (spike_rate - 0.3) * 0.15
-            
-            # Ограничиваем диапазон
-            stimulus = max(-0.15, min(0.15, stimulus))
-            
-            impact[hormone] = stimulus
+            if hormone not in impact:
+                spike_rate = normalized[idx].item()
+                stimulus = (spike_rate - 0.3) * 0.1
+                impact[hormone] = max(-0.15, min(0.15, stimulus))
+        
+        # Ограничиваем диапазон
+        for hormone in impact:
+            impact[hormone] = max(-0.2, min(0.2, impact[hormone]))
         
         return impact
     
-    def _save_spike_history(self, input_spikes, hidden_spikes, output_spikes):
+    def _save_spike_history(self, input_spikes, specialized_spikes, output_spikes):
         """Сохраняет историю спайков для STDP."""
         self.spike_history.append({
             "input": input_spikes.detach(),
-            "hidden": torch.stack(hidden_spikes[-3:]).mean(dim=0),  # Усредняем последние 3
+            "specialized": {k: v.detach() for k, v in specialized_spikes.items()},
             "output": output_spikes.detach()
         })
         
@@ -150,15 +239,11 @@ class AmygdalaSNN(nn.Module):
 
 
 class EmotionalSNNSystem:
-    """
-    Система эмоциональной оценки на основе SNN.
-    
-    Заменяет паттерн-матчинг на реальную нейронную сеть.
-    """
+    """Система эмоциональной оценки на основе специализированной SNN."""
     
     def __init__(self, state: LeyaState):
         self.state = state
-        self.network = AmygdalaSNN()
+        self.network = SpecializedAmygdalaSNN()
         
         self.enabled = True
         self.stdp_learning_rate = 0.001
@@ -168,53 +253,40 @@ class EmotionalSNNSystem:
         
         log.info("🧠 Emotional SNN System initialized")
     
-    # ========================================================================
-    # ГЛАВНЫЙ МЕТОД: Оценка стимула
-    # ========================================================================
-    
     def evaluate(self, event_type: str, content: str, 
                  context_history: List[Dict] = None) -> Dict[str, float]:
-        """Оценивает стимул через спайковую сеть."""
+        """Оценивает стимул через SNN."""
         if not self.enabled:
             return {}
         
         self.total_evaluations += 1
         
         try:
-            # 1. Кодируем стимул в спайки
+            # Кодируем стимул в спайки
             input_spikes = self._encode_stimulus(event_type, content, context_history)
             
-            # 2. Пропускаем через сеть
+            # Пропускаем через сеть
             hormonal_impact = self.network(input_spikes)
             
-            # 3. Применяем STDP
+            # Применяем STDP
             if self.stdp_enabled and self.total_evaluations % 5 == 0:
                 self._apply_stdp()
             
-            # 4. Логируем (раз в 10 оценок)
-            if self.total_evaluations % 10 == 0:
-                active_hormones = {k: round(v, 3) for k, v in hormonal_impact.items() if abs(v) > 0.01}
-                if active_hormones:
-                    log.info(
-                        "🧠 SNN evaluation",
-                        event=event_type,
-                        hormones=active_hormones,
-                        total_spikes=int(self.network.total_spikes)
-                    )
+            # Логируем (ИСПРАВЛЕНО: убран параметр event)
+            active_hormones = {k: round(v, 3) for k, v in hormonal_impact.items() if abs(v) > 0.01}
+            if active_hormones:
+                log.info(f"🧠 SNN evaluation: hormones={active_hormones}")
             
-            # 5. Сохраняем веса периодически
+            # Сохраняем веса периодически
             if self.total_evaluations % 100 == 0:
                 self.save_weights()
             
             return hormonal_impact
             
         except Exception as e:
-            log.error("SNN evaluation failed", error=str(e), exc_info=False)
+            # ИСПРАВЛЕНО: убран параметр event
+            log.error(f"SNN evaluation failed: {str(e)}")
             return {}
-    
-    # ========================================================================
-    # КОДИРОВАНИЕ СТИМУЛА В СПАЙКИ
-    # ========================================================================
     
     def _encode_stimulus(self, event_type: str, content: str, 
                          context_history: List[Dict] = None) -> torch.Tensor:
@@ -222,10 +294,9 @@ class EmotionalSNNSystem:
         num_steps = 10
         num_inputs = 12
         
-        # Инициализируем тензор спайков [batch=1, num_steps, num_inputs]
         spikes = torch.zeros(1, num_steps, num_inputs)
         
-        # 1. Эмбодзимент (сенсоры тела)
+        # 1. Эмбодзимент
         if hasattr(self.state, 'body_temperature'):
             temp_norm = max(0.0, min(1.0, (self.state.body_temperature - 40) / 50))
             spikes[0, :, 0] = self._rate_to_spikes(temp_norm, num_steps)
@@ -236,25 +307,25 @@ class EmotionalSNNSystem:
         if hasattr(self.state, 'cognitive_load'):
             spikes[0, :, 2] = self._rate_to_spikes(self.state.cognitive_load, num_steps)
         
-        # 2. Анализ сообщения пользователя
+        # 2. Анализ сообщения
         if event_type == "user_command" and content:
             content_lower = content.lower()
             
-            # Позитивные слова
+            # Позитивные слова (награда)
             positive_words = ["рад", "счаст", "отличн", "круто", "супер", "люблю", "класс"]
             pos_score = min(1.0, sum(1 for w in positive_words if w in content_lower) / 3)
             spikes[0, :, 3] = self._rate_to_spikes(pos_score, num_steps)
             
-            # Негативные слова
+            # Негативные слова (угроза)
             negative_words = ["груст", "плох", "ошибк", "проблем", "устал", "больно"]
             neg_score = min(1.0, sum(1 for w in negative_words if w in content_lower) / 3)
-            spikes[0, :, 4] = self._rate_to_spikes(neg_score, num_steps)
+            spikes[0, :, 9] = self._rate_to_spikes(neg_score, num_steps)
             
-            # Вопросы
+            # Вопросы (новизна)
             if "?" in content:
-                spikes[0, :, 5] = self._rate_to_spikes(0.7, num_steps)
+                spikes[0, :, 7] = self._rate_to_spikes(0.7, num_steps)
         
-        # 3. Временное давление
+        # 3. Временное давление (угроза)
         if hasattr(self.state, 'cortisol') and self.state.cortisol > 0.6:
             spikes[0, :, 6] = self._rate_to_spikes(0.8, num_steps)
         
@@ -268,22 +339,22 @@ class EmotionalSNNSystem:
         if event_type == "user_command":
             spikes[0, :, 8] = self._rate_to_spikes(0.8, num_steps)
         
-        # 6. Обнаруженная ошибка
+        # 6. Обнаруженная ошибка (угроза)
         if hasattr(self.state, 'error_streak') and self.state.error_streak > 0:
             spikes[0, :, 9] = self._rate_to_spikes(0.7, num_steps)
         
-        # 7. Успех
+        # 7. Успех (награда)
         if hasattr(self.state, 'error_streak') and self.state.error_streak == 0:
             spikes[0, :, 10] = self._rate_to_spikes(0.5, num_steps)
         
-        # 8. Усталость
+        # 8. Усталость (угроза)
         if self.state.energy_level < 0.4:
             spikes[0, :, 11] = self._rate_to_spikes(1.0 - self.state.energy_level, num_steps)
         
         return spikes
     
     def _rate_to_spikes(self, rate: float, num_steps: int) -> torch.Tensor:
-        """Преобразует частоту (0.0-1.0) в паттерн спайков."""
+        """Преобразует частоту в паттерн спайков."""
         spikes = torch.zeros(num_steps)
         spike_prob = rate * 0.8
         
@@ -293,12 +364,8 @@ class EmotionalSNNSystem:
         
         return spikes
     
-    # ========================================================================
-    # STDP (СПАЙКОВО-ЗАВИСИМАЯ ПЛАСТИЧНОСТЬ)
-    # ========================================================================
-    
     def _apply_stdp(self):
-        """Применяет упрощённую STDP."""
+        """Упрощённый STDP."""
         if len(self.network.spike_history) < 2:
             return
         
@@ -306,25 +373,18 @@ class EmotionalSNNSystem:
             prev = self.network.spike_history[-2]
             curr = self.network.spike_history[-1]
             
-            # Корреляция между скрытым слоем и выходом
-            pre_spikes = prev["hidden"]
-            post_spikes = curr["output"]
-            
-            # Упрощённая STDP
-            correlation = torch.mean(pre_spikes.sum() * post_spikes.sum()) / 100.0
-            
-            # Мягкое обновление весов
+            # Упрощённый STDP: укрепляем связи, если выходы коррелируют
             with torch.no_grad():
+                correlation = torch.mean(prev["output"] * curr["output"])
+                
+                # Мягкое обновление весов
                 delta = self.stdp_learning_rate * correlation.item()
-                noise = torch.randn_like(self.network.fc2.weight) * 0.005
-                self.network.fc2.weight += delta * noise
+                noise = torch.randn_like(self.network.fc_output.weight) * 0.005
+                self.network.fc_output.weight += delta * noise
             
         except Exception as e:
-            log.debug("STDP update failed", error=str(e))
-    
-    # ========================================================================
-    # СТАТИСТИКА И СОХРАНЕНИЕ
-    # ========================================================================
+            # ИСПРАВЛЕНО: убран параметр event
+            log.debug(f"STDP update failed: {str(e)}")
     
     def get_stats(self) -> Dict:
         """Возвращает статистику работы сети."""
@@ -344,9 +404,11 @@ class EmotionalSNNSystem:
         """Сохраняет веса сети."""
         try:
             torch.save(self.network.state_dict(), filepath)
-            log.info("🧠 SNN weights saved", path=filepath)
+            # ИСПРАВЛЕНО: убран параметр path
+            log.info(f"🧠 SNN weights saved to {filepath}")
         except Exception as e:
-            log.error("Failed to save SNN weights", error=str(e))
+            # ИСПРАВЛЕНО: убран параметр error
+            log.error(f"Failed to save SNN weights: {str(e)}")
     
     def load_weights(self, filepath: str = "./leya_snn_weights.pt"):
         """Загружает веса сети."""
@@ -357,6 +419,8 @@ class EmotionalSNNSystem:
         
         try:
             self.network.load_state_dict(torch.load(filepath))
-            log.info("🧠 SNN weights loaded", path=filepath)
+            # ИСПРАВЛЕНО: убран параметр path
+            log.info(f"🧠 SNN weights loaded from {filepath}")
         except Exception as e:
-            log.error("Failed to load SNN weights", error=str(e))
+            # ИСПРАВЛЕНО: убран параметр error
+            log.error(f"Failed to load SNN weights: {str(e)}")
