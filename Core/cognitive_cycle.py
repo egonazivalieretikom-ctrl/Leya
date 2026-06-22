@@ -1,458 +1,62 @@
 import asyncio
-import time
-from typing import Optional, Dict, Any
-from Core.logger import log
+import logging
 from Core.state import LeyaState
-from Core.event_bus import event_bus
+from Core.event_bus import EventBus
+from Core.brain import Brain
 
-
-class CognitivePhase:
-    """
-    Фазы когнитивного цикла.
-    
-    PERCEIVE — сбор сенсорных данных
-    THINK — обработка событий, генерация ответа
-    ACT — выполнение действий
-    LEARN — консолидация памяти
-    REFLECT — DMN (инсайты, рефлексия)
-    STREAM — поток сознания (непрерывный внутренний монолог)
-    REST — сон/отдых
-    """
-    PERCEIVE = "perceive"
-    THINK = "think"
-    ACT = "act"
-    LEARN = "learn"
-    REFLECT = "reflect"
-    STREAM = "stream"
-    REST = "rest"
-
+logger = logging.getLogger(__name__)
 
 class CognitiveCycle:
-    """
-    Когнитивный цикл Leya v0.9.
-    
-    Эволюция: от реактивного (отвечает на стимулы) к непрерывному
-    (генерирует поток сознания даже в тишине).
-    
-    v0.9: Интеграция Таламуса (фильтрация + объединение сигналов)
-    и Sleep Consolidation (формирование личности во сне).
-    
-    Архитектура:
-    - При наличии событий: PERCEIVE → THINK → ACT → LEARN
-    - При отсутствии событий: PERCEIVE → THALAMUS → STREAM или REFLECT
-    - Во сне: REST + SLEEP CONSOLIDATION
-    """
-    
-    def __init__(self, state: LeyaState):
-        self.state = state
-        self.current_phase = CognitivePhase.REST
-        self.cycle_count = 0
-        self.cycle_times: Dict[str, float] = {
-            CognitivePhase.PERCEIVE: 0.0,
-            CognitivePhase.THINK: 0.0,
-            CognitivePhase.ACT: 0.0,
-            CognitivePhase.LEARN: 0.0,
-            CognitivePhase.REFLECT: 0.0,
-            CognitivePhase.STREAM: 0.0,
-        }
-        
-        # Подсистемы
-        self.perception_system = None
-        self.thinking_system = None
-        self.action_system = None
-        self.learning_system = None
-        self.dmn = None
-        self.planner = None
-        self.stream = None
-        self.sleep_consolidation = None
-        self.thalamus = None
-        
-        log.info("Cognitive Cycle initialized (v0.9 - Thalamus + Sleep Integration)")
+    def __init__(self, brain: Brain):
+        self.brain = brain
+        self.state = brain.state
+        self.event_bus = brain.event_bus
+        self.interval = 2.0
+        self.running = False
 
-    def attach_systems(self, perception=None, thinking=None, action=None,
-                       learning=None, dmn=None, planner=None, stream=None,
-                       sleep_consolidation=None, thalamus=None, project_manager=None):
-        """Привязывает все подсистемы к когнитивному циклу."""
-        self.perception_system = perception
-        self.thinking_system = thinking
-        self.action_system = action
-        self.learning_system = learning
-        self.dmn = dmn
-        self.planner = planner
-        self.stream = stream
-        self.sleep_consolidation = sleep_consolidation
-        self.thalamus = thalamus
-        self.project_manager = project_manager  # 🆕
-        log.info("Cognitive systems attached (v0.9 - All Phases + Projects)")
-
-    # ========================================================================
-    # ЗАПУСК ФАЗЫ
-    # ========================================================================
-    
-    async def run_phase(self, phase: str, duration_budget: float = 1.0):
-        """Запускает одну фазу когнитивного цикла."""
-        self.current_phase = phase
-        start_time = time.time()
-        
-        # Публикуем смену фазы в UI
-        await event_bus.publish("phase_start", {"phase": phase, "cycle": self.cycle_count})
-        
-        try:
-            if phase == CognitivePhase.PERCEIVE:
-                await self._perceive(duration_budget)
-            elif phase == CognitivePhase.THINK:
-                await self._think(duration_budget)
-            elif phase == CognitivePhase.ACT:
-                await self._act(duration_budget)
-            elif phase == CognitivePhase.LEARN:
-                await self._learn(duration_budget)
-            elif phase == CognitivePhase.REFLECT:
-                await self._reflect(duration_budget)
-            elif phase == CognitivePhase.STREAM:
-                await self._stream(duration_budget)
-                
-        except Exception as e:
-            log.error(f"Error in phase {phase}", error=str(e), exc_info=True)
-            # При ошибке — стрессовый стимул через гомеостаз
-            if hasattr(self, 'homeostasis') and self.homeostasis:
-                self.homeostasis.apply_stimulus("cortisol", 0.1)
-        
-        elapsed = time.time() - start_time
-        self.cycle_times[phase] = elapsed
-        await event_bus.publish("phase_end", {"phase": phase, "duration": elapsed})
-
-    # ========================================================================
-    # РЕАЛИЗАЦИЯ ФАЗ
-    # ========================================================================
-    
-    async def _perceive(self, budget: float):
-        """
-        Сбор сенсорных данных из окружения.
-        
-        Биология: Аналог зрительной коры — обработка всех типов сенсорных входов.
-        """
-        log.debug("👁️ Perceiving environment...")
-        if self.perception_system:
-            sensory_data = await self.perception_system.gather(budget)
-            
-            for data in sensory_data:
-                if not isinstance(data, dict):
-                    continue
-                
-                data_type = data.get("type")
-                
-                # Обрабатываем ВСЕ типы сенсорных данных
-                if data_type == "proprioception":
-                    # Проприоцепция — знание о среде ПК
-                    self.state.current_environment = data.get("active_window", "Неизвестно")
-                    self.state.add_to_context(data)
-                    await event_bus.publish("environment_changed", data)
-                    log.debug("🖥️ Environment updated", window=self.state.current_environment)
-                
-                elif data_type == "file_context":
-                    # Файловый контекст — Leya видит код
-                    self.state.add_to_context(data)
-                    await event_bus.publish("file_context", data)
-                    log.info(
-                        "📄 File perceived",
-                        name=data.get("file_name", "?"),
-                        language=data.get("language", "?")
-                    )
-                
-                elif data_type == "vision":
-                    # Визуальный вход (камера)
-                    self.state.add_to_context(data)
-                    await event_bus.publish("vision_input", data)
-                
-                else:
-                    # Другие типы сенсорных данных
-                    self.state.add_to_context(data)
-        else:
-            await asyncio.sleep(0.1)
-
-    async def _think(self, budget: float):
-        """Обработка событий и генерация ответа."""
-        log.debug("🧠 Thinking...", context_size=len(self.state.short_term_context))
-        if self.thinking_system:
-            decision = await self.thinking_system.process(
-                context=self.state.short_term_context,
-                state=self.state,
-                budget=budget
-            )
-            if decision:
-                await event_bus.publish("decision_made", decision)
-        else:
-            await asyncio.sleep(0.2)
-
-    async def _act(self, budget: float):
-        """
-        Выполнение действий.
-    
-        v0.9: Теперь ищет действия в контексте и передаёт их в ActionExecutor.
-        """
-        log.debug("⚡ Acting on decisions...")
-    
-        if not self.action_system:
-            await asyncio.sleep(0.1)
+    async def start(self):
+        if self.running:
             return
-    
-        # 🆕 Ищем действия в контексте (например, запросы на поиск/вычисления)
-        actions_to_execute = []
-    
-        for event in self.state.short_term_context[-5:]:
-            if not isinstance(event, dict):
-                continue
-        
-            # Ищем события с типом "action_request"
-            if event.get("type") == "action_request":
-                actions_to_execute.append(event)
-    
-        # Выполняем найденные действия
-        total_energy_cost = 0.0
-    
-        for action in actions_to_execute:
+        self.running = True
+        logger.info("🔄 Cognitive Cycle started (v1.0 - Thalamus + Full Integration)")
+
+        while self.running:
             try:
-                result = await self.action_system.execute(action)
-                log.info("⚡ Action executed", type=action.get("type"), result=result[:50])
-            
-                # Энергетическая стоимость действия
-                energy_cost = 0.05  # Базовая стоимость
-                total_energy_cost += energy_cost
-            
-                # Помечаем действие как выполненное
-                action["processed"] = True
-            
+                self.state.cycle_count += 1
+                
+                await self.event_bus.publish("cycle_start", {
+                    "cycle": self.state.cycle_count,
+                    "energy": self.state.energy,
+                    "mood": self.state.mood
+                }, priority=8)
+
+                # === Основные фазы цикла ===
+                await self._perception_phase()
+                await self.brain.homeostasis.tick()
+                await self.brain.cognition_manager.think()
+                await self._action_phase()
+                await self._reflection_phase()
+
+                await asyncio.sleep(self.interval)
+
             except Exception as e:
-                log.error("Action execution failed", error=str(e), action=action)
-    
-        # Если не было действий — просто тратим немного энергии на "думание"
-        if total_energy_cost == 0.0:
-            total_energy_cost = 0.01
-    
-        self.state.consume_energy(total_energy_cost)
+                logger.error("Critical cycle failure", exc_info=True)
+                self.state.error_streak += 1
+                await asyncio.sleep(5.0)
 
-    async def _learn(self, budget: float):
-        """Консолидация памяти."""
-        log.debug("📚 Learning from cycle...")
-        if self.learning_system:
-            await self.learning_system.consolidate(
-                context=self.state.short_term_context,
-                cycle_id=self.cycle_count
-            )
-        else:
-            await asyncio.sleep(0.1)
+    async def _perception_phase(self):
+        await self.event_bus.publish("perception_tick", {"active": True}, priority=6)
 
-    async def _reflect(self, budget: float):
-        """Фаза пассивного режима (Default Mode Network)."""
-        log.debug("💭 Reflecting (DMN active)...")
-        if self.dmn:
-            await self.dmn.reflect()
-        else:
-            await asyncio.sleep(0.5)
+    async def _action_phase(self):
+        # Пока заглушка — будет расширяться
+        pass
 
-    async def _stream(self, budget: float):
-        """
-        Фаза потока сознания.
-        
-        Генерирует субъективную мысль, которая:
-        - Зависит от текущего настроения
-        - Влияет на состояние (эмоциональная обратная связь)
-        - Сохраняется в память
-        - Публикуется в UI
-        """
-        log.debug("🌊 Stream of consciousness...")
-        if self.stream:
-            thought = await self.stream.generate_stream()
-            if thought:
-                log.info("🌊 Stream generated", thought=thought[:80])
-        else:
-            await asyncio.sleep(0.3)
+    async def _reflection_phase(self):
+        if self.state.cycle_count % 3 == 0:
+            await self.event_bus.publish("reflection", {
+                "cycle": self.state.cycle_count,
+                "summary": self.state.get_emotional_summary()
+            }, priority=5)
 
-    # ========================================================================
-    # ГЛАВНЫЙ НЕПРЕРЫВНЫЙ ЦИКЛ
-    # ========================================================================
-    
-    async def run_continuous(self, cycle_interval: float = 2.0):
-        """
-        Непрерывный когнитивный цикл.
-        
-        v0.9: Интеграция Таламуса и Sleep Consolidation.
-        
-        Логика:
-        - Если есть необработанные события → активный режим (PERCEIVE → THINK → ACT → LEARN)
-        - Если событий нет → пассивный режим (PERCEIVE → THALAMUS → STREAM или REFLECT)
-        - Во сне → REST + SLEEP CONSOLIDATION
-        """
-        log.info("🔄 Starting continuous cognitive cycle (v0.9 - Thalamus + Sleep)", 
-                 interval=cycle_interval)
-        
-        # Счётчик для чередования STREAM и REFLECT
-        passive_cycle_counter = 0
-        
-        while True:
-            cycle_start = time.time()
-            self.cycle_count += 1
-            
-            log.info(
-                f"🌟 Cycle #{self.cycle_count} begins",
-                energy=f"{self.state.energy_level:.2f}",
-                mood=str(getattr(self.state, 'emotion', 'neutral')),
-                neuro=f"D:{self.state.dopamine:.2f} N:{self.state.norepinephrine:.2f} "
-                      f"C:{self.state.cortisol:.2f} O:{self.state.oxytocin:.2f} "
-                      f"A:{self.state.acetylcholine:.2f} M:{self.state.melatonin:.2f}"
-            )
-            
-            # Публикуем текущее состояние в UI (для Dashboard)
-            await event_bus.publish("state_update", {
-                "hormones": {
-                    "dopamine": self.state.dopamine,
-                    "serotonin": self.state.serotonin,
-                    "cortisol": self.state.cortisol,
-                    "oxytocin": self.state.oxytocin,
-                    "melatonin": self.state.melatonin,
-                    "norepinephrine": self.state.norepinephrine,
-                    "testosterone": self.state.testosterone,
-                    "estrogen": self.state.estrogen,
-                    "endorphins": self.state.endorphins,
-                    "gaba": self.state.gaba,
-                },
-                "emotion": str(getattr(self.state, 'emotion', 'neutral')),
-                "environment": getattr(self.state, 'current_environment', '')
-            })
-            
-            # ====================================================================
-            # РЕЖИМ СНА + КОНСОЛИДАЦИЯ (с пробуждением)
-            # ====================================================================
-            if self.state.energy_level < 0.3 or self.state.melatonin > 0.8:
-                # 🆕 ПРОВЕРКА: Есть ли важные события (user_command)?
-                has_urgent = any(
-                    isinstance(e, dict)
-                    and e.get("type") == "user_command"
-                    and not e.get("processed")
-                    for e in self.state.short_term_context
-                )
-                
-                if has_urgent:
-                    # 🆕 ПРОБУЖДЕНИЕ от важного события
-                    log.info("⚠️ Waking up from sleep (urgent message)")
-                    self.state.melatonin = max(0.3, self.state.melatonin - 0.3)
-                    self.state.energy_level = min(1.0, self.state.energy_level + 0.2)
-                    # Продолжаем цикл (не спим)
-                else:
-                    # Обычный сон
-                    log.info("😴 Sleep Mode activated")
-                    self.current_phase = CognitivePhase.REST
-                    
-                    if self.sleep_consolidation:
-                        consolidation_result = await self.sleep_consolidation.consolidate_experience()
-                        if consolidation_result:
-                            log.info(
-                                "🌙 Consolidation complete",
-                                insights=len(consolidation_result.get("insights", []))
-                            )
-                    
-                    await asyncio.sleep(cycle_interval)
-                    self.state.energy_level = min(1.0, self.state.energy_level + 0.05)
-                    continue
-            
-            # ====================================================================
-            # ПРОВЕРКА НАЛИЧИЯ АКТИВНЫХ ЗАДАЧ
-            # ====================================================================
-            has_pending = any(
-                isinstance(e, dict)
-                and e.get("type") in ["user_command", "vision_request", "internal_drive"]
-                and not e.get("processed")
-                for e in self.state.short_term_context
-            )
-            
-            if has_pending:
-                # ============================================================
-                # АКТИВНЫЙ РЕЖИМ: обработка событий
-                # ============================================================
-                await self.run_phase(CognitivePhase.PERCEIVE, duration_budget=0.5)
-                await self.run_phase(CognitivePhase.THINK, duration_budget=2.0)
-                await self.run_phase(CognitivePhase.ACT, duration_budget=0.5)
-                await self.run_phase(CognitivePhase.LEARN, duration_budget=0.3)
-                # Сбрасываем счётчик пассивного режима
-                passive_cycle_counter = 0
-            else:
-                # ============================================================
-                # ПАССИВНЫЙ РЕЖИМ: Таламус + непрерывный внутренний опыт
-                # ============================================================
-                await self.run_phase(CognitivePhase.PERCEIVE, duration_budget=0.5)
-                
-                # 🆕 Сбор всех фоновых сигналов
-                background_signals = []
-                
-                if self.stream:
-                    stream_thought = await self.stream.generate_stream()
-                    if stream_thought:
-                        background_signals.append({
-                            "type": "stream_thought",
-                            "content": stream_thought,
-                            "timestamp": time.time()
-                        })
-                
-                passive_cycle_counter += 1
-                if passive_cycle_counter % 3 == 0:
-                    if self.dmn:
-                        dmn_insight = await self.dmn.reflect()
-                        if dmn_insight:
-                            background_signals.append({
-                                "type": "dmn_insight",
-                                "content": dmn_insight,
-                                "timestamp": time.time()
-                            })
-                
-                # Фильтрация + Объединение через Таламус
-                if self.thalamus and background_signals:
-                    merged_signals = self.thalamus.filter_and_merge(background_signals)
-                    
-                    for signal in merged_signals:
-                        self.state.add_to_context(signal)
-                        log.info(
-                            "🚦 Signal passed to Workspace",
-                            type=signal.get("type"),
-                            importance=f"{signal.get('importance', 0):.2f}"
-                        )
-                else:
-                    for signal in background_signals:
-                        self.state.add_to_context(signal)
-                
-                if self.planner:
-                    task = await self.planner.generate_background_task()
-                    if task:
-                        if self.thalamus:
-                            filtered_task = self.thalamus.filter_and_merge([task])
-                            if filtered_task:
-                                self.state.add_to_context(filtered_task[0])
-                                log.info(
-                                    "🎯 Planner task passed to Workspace",
-                                    task=filtered_task[0]["content"][:60]
-                                )
-                        else:
-                            self.state.add_to_context(task)
-                            log.info(
-                                "🎯 Planner injected background task",
-                                task=task["content"][:60]
-                            )
-                
-                # 🆕 ШАГ: СОБСТВЕННЫЕ ПРОЕКТЫ
-                # Если Leya не занята ничем важным, она работает над своими проектами
-                if self.project_manager and passive_cycle_counter % 5 == 0:
-                    project_work = await self.project_manager.work_on_projects()
-                    if project_work:
-                        log.info(
-                            "🎨 Leya worked on personal project",
-                            type=project_work.get("type"),
-                            filename=project_work.get("filename", "")
-                        )
-            
-            # ====================================================================
-            # ПАУЗА МЕЖДУ ЦИКЛАМИ
-            # ====================================================================
-            cycle_duration = time.time() - cycle_start
-            sleep_time = max(0, cycle_interval - cycle_duration)
-            
-            if sleep_time > 0:
-                await asyncio.sleep(sleep_time)
+    async def stop(self):
+        self.running = False

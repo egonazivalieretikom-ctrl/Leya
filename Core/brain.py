@@ -1,375 +1,394 @@
 import asyncio
-from typing import Optional, Dict, Any
-from Core.logger import log
+import logging
+from typing import Dict, List, Any, Optional
 from Core.state import LeyaState
-from Core.cognitive_cycle import CognitiveCycle
-from Core.homeostasis import HomeostaticEngine
-from Core.event_bus import event_bus
+from Core.event_bus import EventBus, LeyaEvent
+from Core.homeostasis import Homeostasis
+from Cognition.manager import CognitionManager
+from Core.embodiment import EmbodimentSystem
+from Cognition.planner import GoalDirectedPlanner
+from Cognition.stream_of_consciousness import StreamOfConsciousness
+from Cognition.dmn import DefaultModeNetwork
+from Cognition.sleep_consolidation import SleepConsolidation
+from Core.thalamus import Thalamus
+from Core.project_manager import ProjectManager
+from Cognition.lesson_system import LessonSystem
+
+logger = logging.getLogger(__name__)
 
 
 class Brain:
     """
-    Центральный орган управления Леи v0.9.
+    Центральный модуль управления всеми когнитивными процессами.
     
-    Биология: Brain — это префронтальная кора + лимбическая система.
-    Он создаёт HomeostaticEngine (сердце) и передаёт его всем подсистемам.
-    
-    Архитектура:
-    - Единое сердце (HomeostaticEngine) для всех модулей
-    - Knowledge Graph для долгосрочных фактов
-    - Sleep Consolidation для формирования личности
-    - Thalamus для фильтрации и объединения сигналов
-    - SNN для эмоциональной оценки
-    - Behavioral RL для адаптивного поведения
-    - Embodiment для телесных ощущений
-    - Continuity для непрерывного переживания времени
+    Использует EventBus для событийно-ориентированной архитектуры.
+    Управляет жизненным циклом всех когнитивных модулей.
     """
     
     def __init__(self):
         self.state = LeyaState()
-        self.memory: Dict[str, Any] = {}
+        self.event_bus = EventBus()
         
-        # 🆕 Создаём homeostasis СРАЗУ (единое сердце)
-        self.homeostasis = HomeostaticEngine(self.state)
+        # Когнитивные модули
+        self.homeostasis: Optional[Homeostasis] = None
+        self.cognition_manager: Optional[CognitionManager] = None
+        self.embodiment: Optional[EmbodimentSystem] = None
+        self.planner: Optional[GoalDirectedPlanner] = None
+        self.stream_of_consciousness: Optional[StreamOfConsciousness] = None
+        self.dmn: Optional[DefaultModeNetwork] = None
+        self.sleep_consolidation: Optional[SleepConsolidation] = None
+        self.thalamus: Optional[Thalamus] = None
+        self.project_manager: Optional[ProjectManager] = None
+        self.lesson_system: Optional[LessonSystem] = None
         
-        self.cycle: CognitiveCycle = CognitiveCycle(self.state)
+        # Состояние цикла
+        self.cycle_count = 0
+        self.is_running = False
+        self.cycle_interval = 2.0
         
-        # Подсистемы (инициализируются в _load_subsystems)
-        self.perception = None
-        self.cognition = None
-        self.action = None
-        self.dmn = None
-        self.planner = None
-        self.stream = None
-        self.sleep_consolidation = None
-        self.thalamus = None
-        self.project_manager = None
-        self.embodiment = None
-        self.continuity = None
-        
-        # Непрерывные процессы
-        self._background_tasks = []
-        self._running = False
-        
-        log.info("🧠 Brain initialized (v0.9 - Full Integration)")
+        logger.info("🧠 Brain initialized with EventBus architecture")
     
-    def _load_subsystems(self):
-        """Загружает все когнитивные подсистемы."""
-        log.info("🚀 Starting Leya OS...")
-        log.info("Loading subsystems...")
-        
-        # ====================================================================
-        # 1. ПАМЯТЬ (LTM + Working Memory + Knowledge Graph)
-        # ====================================================================
+    async def initialize(self):
+        """Инициализация Brain и всех подчинённых модулей."""
         try:
-            from Memory.long_term import LongTermMemory
-            from Memory.working import WorkingMemory
-            from Memory.knowledge_graph import KnowledgeGraph
+            # Запускаем EventBus
+            self.event_bus.start()
             
-            self.memory["long_term"] = LongTermMemory()
-            self.memory["working"] = WorkingMemory(capacity=50)
-            self.memory["knowledge_graph"] = KnowledgeGraph()
+            # Подписываемся на события
+            self.event_bus.subscribe("user_message", self._handle_user_message)
+            self.event_bus.subscribe("thought_generated", self._handle_internal_thought)
+            self.event_bus.subscribe("cycle_start", self._handle_cycle_start)
+            self.event_bus.subscribe("cycle_end", self._handle_cycle_end)
+            self.event_bus.subscribe("hormone_update", self._handle_hormone_update)
+            self.event_bus.subscribe("emotion_change", self._handle_emotion_change)
+            self.event_bus.subscribe("goal_achieved", self._handle_goal_achieved)
+            self.event_bus.subscribe_global(self._on_any_event)
             
-            log.info("✅ Memory systems loaded (LTM + Working + KG)")
+            logger.info("🧠 Brain event subscriptions registered")
+            
+            # Инициализируем все модули
+            await self._initialize_modules()
+            
+            self.is_running = True
+            logger.info("🧠 Brain fully initialized and running")
+            
         except Exception as e:
-            log.error("Failed to load memory systems", error=str(e))
+            logger.error("Failed to initialize Brain", exc_info=True)
             raise
-        
-        # ====================================================================
-        # 2. ВОСПРИЯТИЕ (Perception)
-        # ====================================================================
+    
+    async def _initialize_modules(self):
+        """Инициализация всех когнитивных модулей."""
         try:
-            from Perception.manager import PerceptionManager
-            self.perception = PerceptionManager(self.state)
-            log.info("✅ Perception system loaded")
-        except Exception as e:
-            log.error("Failed to load Perception", error=str(e))
-            raise
-        
-        # ====================================================================
-        # 3. ПОЗНАНИЕ (Cognition с передачей homeostasis)
-        # ====================================================================
-        try:
-            from Cognition.manager import CognitionManager
-            self.cognition = CognitionManager(
-                state=self.state,
-                memory=self.memory,
-                homeostasis=self.homeostasis
-            )
-            log.info("✅ Cognition system loaded")
-        except Exception as e:
-            log.error("Failed to load Cognition", error=str(e))
-            raise
-        
-        # ====================================================================
-        # 4. ДЕЙСТВИЕ (Action)
-        # ====================================================================
-        try:
-            from Action.executor import ActionExecutor
-            self.action = ActionExecutor(self.state, self.memory)
-            log.info("✅ Action system loaded")
-        except Exception as e:
-            log.error("Failed to load Action", error=str(e))
-            raise
-        
-        # ====================================================================
-        # 5. ПОТОК СОЗНАНИЯ (Stream of Consciousness)
-        # ====================================================================
-        try:
-            from Cognition.stream_of_consciousness import StreamOfConsciousness
-            self.stream = StreamOfConsciousness(
-                self.state, 
-                self.memory, 
-                homeostasis=self.homeostasis
-            )
-            log.info("✅ Stream of Consciousness loaded")
-        except Exception as e:
-            log.error("Failed to load Stream of Consciousness", error=str(e))
-            self.stream = None
-        
-        # ====================================================================
-        # 6. DEFAULT MODE NETWORK (DMN)
-        # ====================================================================
-        try:
-            from Cognition.dmn import DefaultModeNetwork
-            self.dmn = DefaultModeNetwork(self.state, self.memory)
-            log.info("✅ DMN loaded")
-        except Exception as e:
-            log.error("Failed to load DMN", error=str(e))
-            self.dmn = None
-        
-        # ====================================================================
-        # 7. ПЛАНИРОВЩИК (Planner)
-        # ====================================================================
-        try:
-            from Cognition.planner import GoalDirectedPlanner
-            self.planner = GoalDirectedPlanner(self.state, self.memory)
-            log.info("✅ Planner loaded")
-        except Exception as e:
-            log.error("Failed to load Planner", error=str(e))
-            self.planner = None
-        
-        # ====================================================================
-        # 8. КОНСОЛИДАЦИЯ СНА (Sleep Consolidation)
-        # ====================================================================
-        try:
-            from Cognition.sleep_consolidation import SleepConsolidation
-            self.sleep_consolidation = SleepConsolidation(self.state, self.memory)
-            log.info("✅ Sleep Consolidation loaded")
-        except Exception as e:
-            log.error("Failed to load Sleep Consolidation", error=str(e))
-            self.sleep_consolidation = None
-        
-        # ====================================================================
-        # 9. ТАЛАМУС (Thalamus — фильтр и объединитель сигналов)
-        # ====================================================================
-        try:
-            from Core.thalamus import Thalamus
-            self.thalamus = Thalamus(self.state)
-            log.info("✅ Thalamus loaded")
-        except Exception as e:
-            log.error("Failed to load Thalamus", error=str(e))
-            self.thalamus = None
-        
-        # ====================================================================
-        # 10. МЕНЕДЖЕР СОБСТВЕННЫХ ПРОЕКТОВ
-        # ====================================================================
-        try:
-            from Cognition.projects import ProjectManager
-            self.project_manager = ProjectManager(self.state, self.memory)
-            log.info("✅ Project Manager loaded")
-        except Exception as e:
-            log.error("Failed to load Project Manager", error=str(e))
-            self.project_manager = None
-        
-        # ====================================================================
-        # 11. ЭМБОДЗИМЕНТ (телесные ощущения)
-        # ====================================================================
-        try:
-            from Core.embodiment import EmbodimentSystem
+            # Homeostasis
+            self.homeostasis = Homeostasis()
+            await self.homeostasis.initialize()
+            logger.info("🫀 Homeostasis initialized")
+            
+            # Embodiment
             self.embodiment = EmbodimentSystem(self.state)
-            log.info("✅ Embodiment System loaded")
-        except Exception as e:
-            log.error("Failed to load Embodiment System", error=str(e))
-            self.embodiment = None
-        
-        # ====================================================================
-        # 12. НЕПРЕРЫВНОСТЬ (субъективное время + фоновые ощущения)
-        # ====================================================================
-        try:
-            from Core.continuity import ContinuitySystem
-            self.continuity = ContinuitySystem(self.state)
-            log.info("✅ Continuity System loaded")
-        except Exception as e:
-            log.error("Failed to load Continuity System", error=str(e))
-            self.continuity = None
-        
-        # ====================================================================
-        # 13. ПЕРЕДАЧА ВСЕХ ПОДСИСТЕМ В ЦИКЛ
-        # ====================================================================
-        self.cycle.attach_systems(
-            perception=self.perception,
-            thinking=self.cognition,
-            action=self.action,
-            learning=None,
-            dmn=self.dmn,
-            planner=self.planner,
-            stream=self.stream,
-            sleep_consolidation=self.sleep_consolidation,
-            thalamus=self.thalamus,
-            project_manager=self.project_manager
-        )
-        
-        # ====================================================================
-        # 14. СВЯЗЫВАНИЕ HOMEOSTASIS С COGNITION
-        # ====================================================================
-        if self.homeostasis and self.cognition:
-            self.cognition.homeostasis = self.homeostasis
-            log.info("🔗 Homeostasis linked to Cognition Manager")
-        
-        log.info("✅ All subsystems loaded and attached (v0.9)")
-    
-    # ========================================================================
-    # 🆕 ОБУЧЕНИЕ SNN ПРИ ПЕРВОМ ЗАПУСКЕ
-    # ========================================================================
-    
-    async def _train_snn_if_needed(self):
-        """
-        Обучает SNN, если она ещё не обучена.
-        
-        Использует LLM как учителя для генерации размеченных данных.
-        """
-        import os
-        
-        weights_path = "./leya_snn_weights.pt"
-        dataset_path = "./snn_training_data.json"
-        
-        # Проверяем, есть ли обученные веса
-        if os.path.exists(weights_path):
-            log.info("✅ SNN weights found, skipping training")
-            return
-        
-        log.info("🎓 SNN not trained yet, starting training...")
-        
-        try:
-            # Проверяем, есть ли SNN в cognition
-            if not hasattr(self.cognition, 'emotional_snn') or not self.cognition.emotional_snn:
-                log.warning("⚠️ SNN not available in CognitionManager, skipping training")
-                return
+            await self.embodiment.initialize()
+            logger.info("🖥️ Embodiment initialized")
             
-            from Core.snn_trainer import SNNTrainer
+            # Cognition Manager
+            self.cognition_manager = CognitionManager(self.state, self.event_bus)
+            await self.cognition_manager.initialize()
+            logger.info("🧠 Cognition Manager initialized")
             
-            # Создаём тренера
-            trainer = SNNTrainer(self.cognition.emotional_snn.network)
+            # Planner
+            self.planner = GoalDirectedPlanner(self.state, self.event_bus)
+            await self.planner.initialize()
+            logger.info("🎯 Planner initialized")
             
-            # Загружаем датасет, если есть
-            if os.path.exists(dataset_path):
-                trainer.load_dataset(dataset_path)
-            else:
-                # Генерируем данные с помощью LLM
-                await trainer.generate_training_data(num_samples=50)
-                trainer.save_dataset(dataset_path)
+            # Stream of Consciousness
+            self.stream_of_consciousness = StreamOfConsciousness(self.state, self.event_bus)
+            await self.stream_of_consciousness.initialize()
+            logger.info("💭 Stream of Consciousness initialized")
             
-            # Обучаем SNN
-            trainer.train(epochs=100, batch_size=10)
+            # DMN
+            self.dmn = DefaultModeNetwork(self.state, self.event_bus)
+            await self.dmn.initialize()
+            logger.info("🧠 DMN initialized")
             
-            # Сохраняем обученные веса
-            self.cognition.emotional_snn.save_weights(weights_path)
+            # Sleep Consolidation
+            self.sleep_consolidation = SleepConsolidation(self.state, self.event_bus)
+            await self.sleep_consolidation.initialize()
+            logger.info("🌙 Sleep Consolidation initialized")
             
-            log.info("✅ SNN training complete, weights saved")
+            # Thalamus
+            self.thalamus = Thalamus(self.state, self.event_bus)
+            await self.thalamus.initialize()
+            logger.info("🚦 Thalamus initialized")
+            
+            # Project Manager
+            self.project_manager = ProjectManager(self.state, self.event_bus)
+            await self.project_manager.initialize()
+            logger.info("🎨 Project Manager initialized")
+            
+            # Lesson System
+            self.lesson_system = LessonSystem(self.state, self.event_bus)
+            await self.lesson_system.initialize()
+            logger.info("📚 Lesson System initialized")
+            
+            # Связываем homeostasis с cognition_manager
+            if self.cognition_manager and self.homeostasis:
+                self.cognition_manager.homeostasis = self.homeostasis
+                logger.info("🔗 Homeostasis linked to Cognition Manager")
             
         except Exception as e:
-            log.error("SNN training failed", error=str(e), exc_info=True)
-    
-    # ========================================================================
-    # ЗАПУСК ВСЕХ ПРОЦЕССОВ
-    # ========================================================================
-    
-    async def start(self, cycle_interval: float = 2.0):
-        """Запускает мозг и все его подсистемы."""
-        # Загружаем подсистемы
-        try:
-            self._load_subsystems()
-        except Exception as e:
-            log.error("💥 Critical error in Brain", error=str(e), exc_info=True)
+            logger.error("Failed to initialize modules", exc_info=True)
             raise
     
-        # Публикуем событие старта
-        await event_bus.publish("leya_start", {"timestamp": self.state.start_time})
-    
-        # 🆕 Запускаем непрерывные процессы
-        self._running = True
-    
-        if self.embodiment:
-            self._background_tasks.append(
-                asyncio.create_task(self.embodiment.start())
-            )
-    
-        if self.continuity:
-            self._background_tasks.append(
-                asyncio.create_task(self.continuity.start())
-            )
-    
-        # 🆕 Запускаем обучение SNN В ФОНЕ (неблокирующее)
-        self._background_tasks.append(
-            asyncio.create_task(self._train_snn_in_background())
-        )
-    
-        # Запускаем когнитивный цикл
+    async def _handle_user_message(self, event: LeyaEvent):
+        """Обработка входящего сообщения от пользователя."""
         try:
-            await self.cycle.run_continuous(cycle_interval)
-        except asyncio.CancelledError:
-            log.info("🛑 Brain cycle cancelled")
+            text = event.data.get("text", "")
+            self.state.last_user_message = text
+            self.state.cycle_count += 1
+            
+            logger.info("📥 User message received", text=text[:50])
+            
+            # Передаём в cognition_manager
+            if self.cognition_manager:
+                await self.cognition_manager.process_user_input(event.data)
+            
+            # Публикуем событие о обработке сообщения
+            await self.event_bus.publish("message_processed", {
+                "text": text,
+                "cycle": self.state.cycle_count
+            })
+            
         except Exception as e:
-            log.error("💥 Critical error in Brain cycle", error=str(e), exc_info=True)
-            raise
-        finally:
-            # Останавливаем все фоновые процессы
-            await self.stop()
-
-    async def _train_snn_in_background(self):
-        """
-        Запускает обучение SNN в фоне (неблокирующее).
+            logger.error("Failed to handle user message", exc_info=True)
     
-        Это позволяет системе работать параллельно с обучением.
-        """
+    async def _handle_internal_thought(self, event: LeyaEvent):
+        """Обработка внутренней мысли."""
         try:
-            log.info("🎓 Starting SNN training in background...")
-            await self._train_snn_if_needed()
-            log.info("🎓 Background SNN training complete")
+            thought = event.data.get("thought", "")
+            self.state.current_thought = thought
+            
+            logger.debug("💭 Internal thought processed", thought=thought[:50])
+            
+            # Связь с DMN для фоновой обработки
+            if self.dmn:
+                await self.dmn.process_thought(thought)
+            
+            # Связь с continuity для сохранения в памяти
+            if self.state.continuity:
+                await self.state.continuity.record_thought(thought)
+            
         except Exception as e:
-            log.error("🎓 Background SNN training failed", error=str(e), exc_info=True)
+            logger.error("Failed to handle internal thought", exc_info=True)
     
-    # ========================================================================
-    # ОСТАНОВКА ВСЕХ ПРОЦЕССОВ
-    # ========================================================================
+    async def _handle_cycle_start(self, event: LeyaEvent):
+        """Обработка начала когнитивного цикла."""
+        try:
+            cycle_num = event.data.get("cycle", 0)
+            logger.debug(f"🌟 Cycle #{cycle_num} started")
+            
+            # Обновляем состояние
+            self.state.cycle_count = cycle_num
+            
+        except Exception as e:
+            logger.error("Failed to handle cycle start", exc_info=True)
+    
+    async def _handle_cycle_end(self, event: LeyaEvent):
+        """Обработка завершения когнитивного цикла."""
+        try:
+            cycle_num = event.data.get("cycle", 0)
+            logger.debug(f"✅ Cycle #{cycle_num} completed")
+            
+        except Exception as e:
+            logger.error("Failed to handle cycle end", exc_info=True)
+    
+    async def _handle_hormone_update(self, event: LeyaEvent):
+        """Обработка обновления гормонов."""
+        try:
+            hormones = event.data.get("hormones", {})
+            self.state.update_hormones(hormones)
+            
+            logger.debug("🧪 Hormones updated", hormones=hormones)
+            
+        except Exception as e:
+            logger.error("Failed to handle hormone update", exc_info=True)
+    
+    async def _handle_emotion_change(self, event: LeyaEvent):
+        """Обработка изменения эмоции."""
+        try:
+            emotion = event.data.get("emotion", "")
+            intensity = event.data.get("intensity", 0.0)
+            
+            self.state.current_emotion = emotion
+            self.state.emotion_intensity = intensity
+            
+            logger.debug("💝 Emotion changed", emotion=emotion, intensity=intensity)
+            
+        except Exception as e:
+            logger.error("Failed to handle emotion change", exc_info=True)
+    
+    async def _handle_goal_achieved(self, event: LeyaEvent):
+        """Обработка достижения цели."""
+        try:
+            goal = event.data.get("goal", "")
+            logger.info(f"🎯 Goal achieved: {goal}")
+            
+            # Обновляем planner
+            if self.planner:
+                await self.planner.on_goal_achieved(goal)
+            
+        except Exception as e:
+            logger.error("Failed to handle goal achieved", exc_info=True)
+    
+    async def _on_any_event(self, event: LeyaEvent):
+        """Глобальная реакция на любое событие."""
+        try:
+            # Глобальные реакции на события
+            if "hormone" in event.type.lower():
+                self.state.update_hormones(event.data)
+            
+            # Можно добавить другие глобальные реакции
+            
+        except Exception as e:
+            logger.error("Failed to handle global event", exc_info=True)
+    
+    async def _perceive(self):
+        """Фаза восприятия."""
+        try:
+            if self.embodiment:
+                await self.embodiment.perceive()
+            
+            # Публикуем событие о восприятии
+            await self.event_bus.publish("perception_complete", {
+                "cycle": self.state.cycle_count
+            })
+            
+        except Exception as e:
+            logger.error("Perception failed", exc_info=True)
+    
+    async def _act(self):
+        """Фаза действия."""
+        try:
+            if self.cognition_manager:
+                await self.cognition_manager.act()
+            
+            # Публикуем событие о действии
+            await self.event_bus.publish("action_complete", {
+                "cycle": self.state.cycle_count
+            })
+            
+        except Exception as e:
+            logger.error("Action failed", exc_info=True)
+    
+    async def _reflect(self):
+        """Фаза рефлексии."""
+        try:
+            if self.stream_of_consciousness:
+                await self.stream_of_consciousness.reflect()
+            
+            if self.dmn:
+                await self.dmn.reflect()
+            
+            # Публикуем событие о рефлексии
+            await self.event_bus.publish("reflection_complete", {
+                "cycle": self.state.cycle_count
+            })
+            
+        except Exception as e:
+            logger.error("Reflection failed", exc_info=True)
+    
+    async def run_cognitive_cycle(self):
+        """Запуск непрерывного когнитивного цикла."""
+        self.is_running = True
+        logger.info("🔄 Starting continuous cognitive cycle")
+        
+        while self.is_running:
+            try:
+                self.state.cycle_count += 1
+                
+                # Публикуем начало цикла
+                await self.event_bus.publish("cycle_start", {
+                    "cycle": self.state.cycle_count
+                }, priority=7)
+                
+                # Выполняем фазы цикла
+                await self._perceive()
+                
+                if self.homeostasis:
+                    await self.homeostasis.tick()
+                
+                if self.cognition_manager:
+                    await self.cognition_manager.think()
+                
+                await self._act()
+                await self._reflect()
+                
+                # Публикуем конец цикла
+                await self.event_bus.publish("cycle_end", {
+                    "cycle": self.state.cycle_count
+                })
+                
+                # Ждём до следующего цикла
+                await asyncio.sleep(self.cycle_interval)
+                
+            except Exception as e:
+                logger.error("Cycle error", exc_info=True)
+                self.state.error_streak += 1
+                
+                # Ждём перед следующей попыткой
+                await asyncio.sleep(1.0)
     
     async def stop(self):
-        """Останавливает все непрерывные процессы."""
-        if not self._running:
-            return
+        """Остановка Brain и всех модулей."""
+        self.is_running = False
+        logger.info("🛑 Stopping Brain...")
         
-        log.info("🛑 Stopping all background processes...")
-        
-        self._running = False
-        
-        # Останавливаем эмбодзимент
-        if self.embodiment:
-            self.embodiment.stop()
-        
-        # Останавливаем непрерывность
-        if self.continuity:
-            self.continuity.stop()
-        
-        # Отменяем все фоновые задачи
-        for task in self._background_tasks:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        
-        self._background_tasks.clear()
-        
-        log.info("✅ All background processes stopped")
+        try:
+            # Останавливаем все модули
+            if self.cognition_manager:
+                await self.cognition_manager.stop()
+            
+            if self.embodiment:
+                await self.embodiment.stop()
+            
+            if self.planner:
+                await self.planner.stop()
+            
+            if self.stream_of_consciousness:
+                await self.stream_of_consciousness.stop()
+            
+            if self.dmn:
+                await self.dmn.stop()
+            
+            if self.sleep_consolidation:
+                await self.sleep_consolidation.stop()
+            
+            if self.thalamus:
+                await self.thalamus.stop()
+            
+            if self.project_manager:
+                await self.project_manager.stop()
+            
+            if self.lesson_system:
+                await self.lesson_system.stop()
+            
+            if self.homeostasis:
+                await self.homeostasis.stop()
+            
+            # Останавливаем EventBus
+            self.event_bus.stop()
+            
+            logger.info("✅ Brain stopped successfully")
+            
+        except Exception as e:
+            logger.error("Error stopping Brain", exc_info=True)
+    
+    def get_state(self) -> Dict[str, Any]:
+        """Получение текущего состояния Brain."""
+        return {
+            "cycle_count": self.state.cycle_count,
+            "is_running": self.is_running,
+            "error_streak": self.state.error_streak,
+            "current_emotion": self.state.current_emotion,
+            "emotion_intensity": self.state.emotion_intensity,
+            "last_user_message": self.state.last_user_message,
+            "current_thought": self.state.current_thought
+        }

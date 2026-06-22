@@ -1,54 +1,67 @@
 import asyncio
-from typing import Callable, Dict, List, Any
-from collections import defaultdict
-from Core.logger import log
+import logging
+from typing import Callable, Dict, Any, Set, Optional
+from dataclasses import dataclass
+from datetime import datetime
 
-class EventBus:
-    """
-    Асинхронная шина событий.
-    Позволяет модулям Leya общаться друг с другом, не создавая жестких связей (coupling).
-    
-    Пример:
-    - Модуль Vision публикует событие "object_detected".
-    - Модуль Memory и Модуль Curiosity подписаны на "object_detected" и реагируют.
-    """
-    
+logger = setup_logging()
+
+class LeyaOS:
     def __init__(self):
-        self._subscribers: Dict[str, List[Callable]] = defaultdict(list)
-        log.debug("EventBus initialized")
+        self.state = LeyaState()
+        self.brain = Brain()
 
-    def subscribe(self, event_name: str, callback: Callable):
-        """Подписать функцию на событие"""
-        if callback not in self._subscribers[event_name]:
-            self._subscribers[event_name].append(callback)
-            log.debug(f"Subscribed to {event_name}", callback=callback.__name__)
+    async def initialize(self):
+        logger.info("🚀 Leya OS v1.0 — Starting full initialization...")
 
-    def unsubscribe(self, event_name: str, callback: Callable):
-        """Отписать функцию от события"""
-        if callback in self._subscribers[event_name]:
-            self._subscribers[event_name].remove(callback)
+        self.brain.state = self.state
+        self.brain.event_bus = event_bus
 
-    async def publish(self, event_name: str, data: Any = None):
-        """Опубликовать событие и вызвать все подписанные функции"""
-        log.debug("Publishing event", event_name=event_name, data_type=type(data).__name__)
+        # Создаём модули
+        self.homeostasis = HomeostaticEngine(self.state, event_bus)
+        self.embodiment = EmbodimentSystem(self.state, event_bus)
+        self.continuity = ContinuitySystem(self.state, event_bus)
+        self.cognition = CognitionManager(self.state, event_bus)
+        self.snn = EmotionalSNN(self.state, event_bus)
+        self.emotion_core = EmotionCore(self.state, event_bus, self.snn)
+        self.memory = VectorMemory(self.state, event_bus)
+        self.ui = UIServer(self.state, event_bus)
+
+        # Инициализация
+        await self.brain.initialize()
+        await self.cognition.initialize()
+        await self.snn.initialize()
+        await self.memory.initialize()
+
+        logger.info("✅ Leya OS fully initialized and connected!")
+
+    async def run(self):
+        await self.initialize()
         
-        if event_name not in self._subscribers:
-            return
-            
-        for callback in self._subscribers[event_name]:
-            try:
-                # Поддерживаем как синхронные, так и асинхронные коллбэки
-                if asyncio.iscoroutinefunction(callback):
-                    await callback(data)
-                else:
-                    callback(data)
-            except Exception as e:
-                log.error(
-                    "Error in event callback", 
-                    event=event_name, 
-                    callback=callback.__name__, 
-                    error=str(e)
-                )
+        ui_task = asyncio.create_task(self.ui.start())
+        cycle = CognitiveCycle(self.brain)
+        
+        try:
+            await asyncio.gather(ui_task, cycle.start(), return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await self.shutdown()
 
-# Глобальный экземпляр шины событий для использования во всем проекте
-event_bus = EventBus()
+    async def shutdown(self):
+        await event_bus.stop()
+        logger.info("🛑 Leya OS shutdown completed.")
+
+async def main():
+    leya = LeyaOS()
+    try:
+        await leya.run()
+    except KeyboardInterrupt:
+        await leya.shutdown()
+    except Exception as e:
+        logger.critical("Fatal error", exc_info=True)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+event_bus: EventBus = EventBus()
