@@ -246,8 +246,7 @@ class EmotionalSNNSystem:
             }
             
             if active_hormones:
-                log.info("🧠 SNN evaluation", event=event_type, hormones=active_hormones, 
-                        total_spikes=safe_round(self.network.total_spikes, 0))
+                log.info(f"🧠 SNN evaluation: event={event_type}, hormones={active_hormones}, spikes={self.network.total_spikes}")
             
             # Сохраняем веса периодически
             if self.total_evaluations % 100 == 0:
