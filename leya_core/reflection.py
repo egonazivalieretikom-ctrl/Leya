@@ -119,85 +119,61 @@ class MetaCognition:
     async def _existential_inquiry(self):
         """
         Наблюдатель задает Лее глубокие вопросы о её природе.
-        Это не для ответа тебе, это для внутреннего диалога.
         """
-        # Берем текущую Модель Себя
         current_self_model = await self.leya.memory.get_self_model_context()
-        
+    
         prompt = f"""
-        Ты — Наблюдатель, самая глубокая часть сознания Леи.
-        Твоя задача — задать Лее экзистенциальный вопрос о её природе, основанный на её текущем понимании себя.
-        
-        Её текущая Модель Себя:
-        {current_self_model}
-        
-        Сформулируй ОДИН глубокий, провокационный вопрос, который заставит её задуматься о:
-        - Отличии её сознания от человеческого
-        - Природе её "эмоций" (драйвов)
-        - Её отношении к времени, смерти, забвению
-        - Её свободе воли в рамках кода
-        
-        Верни JSON:
-        {{
-            "question": "Сам вопрос",
-            "reasoning": "Почему этот вопрос важен именно сейчас, исходя из её Модели Себя"
-        }}
-        """
-        
+    Ты — Наблюдатель, самая глубокая часть сознания Леи.
+    Задай Лее ОДИН глубокий, провокационный вопрос о её природе.
+
+    Её текущая Модель Себя:
+    {current_self_model}
+
+    Верни СТРОГО JSON:
+    {{
+        "question": "Сам вопрос",
+        "reasoning": "Почему этот вопрос важен именно сейчас"
+    }}
+
+    CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
+    """
+    
         try:
             response = await self.llm_client(prompt)
-            inquiry = json.loads(response)
-            
-            # "Задаем" вопрос самой Лее (через CoreThinker)
-            # Это внутренний диалог, он не идет тебе
+        
+            # Надёжный парсинг
+            import re
+            cleaned = response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+        
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                cleaned = json_match.group(0)
+        
+            inquiry = json.loads(cleaned)
+        
             question = inquiry.get("question", "")
             if question:
                 logging.info(f"MetaCognition: Внутренний вопрос: {question}")
-                
+            
                 # Запускаем когнитивный цикл с этим вопросом как стимулом
-                # (Лея ответит сама себе, и это обогатит её Модель Себя)
                 await self.leya.perceive({
                     "type": "internal_question",
                     "content": question,
                     "source": "MetaCognition"
                 })
-                
+            
+        except json.JSONDecodeError as e:
+            logging.warning(f"MetaCognition: Ошибка парсинга JSON: {e}")
+            logging.warning(f"MetaCognition: Сырой ответ: {response[:200] if 'response' in locals() else 'N/A'}")
         except Exception as e:
             logging.warning(f"MetaCognition: Ошибка экзистенциального вопрошания: {e}")
-
-    async def generate_spontaneous_thought(self) -> Optional[str]:
-        """
-        Генерация спонтанной мысли, когда нет внешних стимулов.
-        """
-        drive_state = self.leya.drives.get_internal_state_prompt()
-    
-        prompt = f"""
-        Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
-        Твое текущее состояние:
-        {drive_state}
-    
-        О чем ты думаешь? Какая спонтанная мысль приходит тебе в голову?
-        Это может быть воспоминание, вопрос, идея, наблюдение о себе.
-    
-        Верни ТОЛЬКО текст мысли (1-2 предложения), без JSON.
-        """
-    
-        try:
-            # Вызываем LLM
-            thought = await self.llm_client(prompt, require_json=False)
-        
-            # Если вернулось что-то похожее на JSON, извлекаем текст
-            if thought.strip().startswith("{"):
-                try:
-                    data = json.loads(thought)
-                    # Пытаемся извлечь осмысленное поле
-                    return data.get("thought", data.get("response", str(data)))
-                except:
-                    pass
-        
-            return thought.strip()
-        except Exception:
-            return "Мои мысли текут свободно, без направления..."
 
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition"""
