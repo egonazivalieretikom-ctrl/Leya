@@ -1,6 +1,6 @@
 """
 LeyaOS.py — Оркестратор цифрового сознания Леи.
-Этот файл не содержит бизнес-логики. Он лишь связывает когнитивные модули
+Этот файл не содержит бизнес-логики. Он связывает когнитивные модули
 в единый цикл восприятия, мышления и действия.
 """
 
@@ -8,23 +8,30 @@ import asyncio
 import logging
 import signal
 import sys
+import os
+import json
 from typing import Dict, Any, Optional
 from datetime import datetime
-import json
+
+# Добавляем путь к web_interface
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'web_interface'))
 
 # Импорт когнитивных модулей
 from leya_core.drives import DriveSystem, DriveType
 from leya_core.memory import MemorySystem
 from leya_core.thinker import CoreThinker
 from leya_core.reflection import MetaCognition
-from leya_core.environment import CLIEnvironment  # Будет реализован следующим
+
+# Импорт интерфейсов
+from leya_core.environment import CLIEnvironment
+from web_environment import WebEnvironment
 
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(name)s | %(levelname)s | %(message)s',
     handlers=[
-        logging.FileHandler("leya_consciousness.log"),
+        logging.FileHandler("leya_consciousness.log", encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -37,12 +44,11 @@ class LeyaOS:
     Управляет жизненным циклом, когнитивными процессами и взаимодействием с миром.
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, use_web: bool = True):
         self.name = "Лея"
         self.state = "initializing"
-        self.config = config or {}
+        self._last_interaction_time = datetime.now().timestamp()
         
-        # Инициализация когнитивных модулей
         logger.info("Инициализация когнитивной архитектуры...")
         
         # 1. Лимбическая система (Воля и Драйвы)
@@ -50,31 +56,32 @@ class LeyaOS:
         
         # 2. Гиппокамп и Кора (Память)
         self.memory = MemorySystem(persist_directory="./leya_brain")
-
-        # 3. Моторная кора и Сенсорика (Взаимодействие с миром)
-        self.env = CLIEnvironment(leya_os=self)
         
-        # 4. Префронтальная кора (Мышление)
-        self.thinker = CoreThinker(llm_client=self._llm_call, soul_manager=self.env.soul_manager)
+        # 3. СНАЧАЛА Environment (чтобы получить soul_manager)
+        if use_web:
+            self.env = WebEnvironment(leya_os=self)
+            logger.info("🌐 Используется веб-интерфейс")
+        else:
+            self.env = CLIEnvironment(leya_os=self)
+            logger.info("💻 Используется CLI-интерфейс")
+        
+        # 4. ТЕПЕРЬ CoreThinker — передаём soul_manager из env
+        self.thinker = CoreThinker(
+            llm_client=self._llm_call,
+            soul_manager=self.env.soul_manager
+        )
         
         # 5. Наблюдатель (Саморефлексия)
         self.reflection = MetaCognition(self, llm_client=self._llm_call)
         
-
-
-        # После инициализации self.env
+        # Описание инструментов для промпта
         self.tools_description = self.env.tool_registry.get_all_descriptions()
         
-        
+        # Инициализируем пустой строкой, загрузим в run()
         self.self_model = ""
-
-        self._last_interaction_time = datetime.now().timestamp()
         
         # Флаг для graceful shutdown
         self.running = False
-
-        # Загрузка Модели Себя из долговременной памяти
-        logger.info("Загрузка Модели Себя...")
         
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
@@ -84,13 +91,14 @@ class LeyaOS:
         Запускает полный когнитивный цикл.
         """
         self._last_interaction_time = datetime.now().timestamp()
+        
         stimulus_type = stimulus.get("type", "unknown")
         stimulus_content = stimulus.get("content", "")
         source = stimulus.get("source", "external")
         
         logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
         
-        # Записываем стимул в эпизодическую память (сырой опыт)
+        # Записываем стимул в эпизодическую память
         await self.memory.store_perception(
             content=f"[{stimulus_type}] {stimulus_content}",
             drive_state={d.type.value: d.tension for d in self.drives.drives.values()},
@@ -103,25 +111,23 @@ class LeyaOS:
     async def _cognitive_loop(self, stimulus: Dict[str, Any]):
         """
         Главный когнитивный цикл: От стимула к действию.
-        Это "сердцебиение" сознания Леи.
         """
         stimulus_content = stimulus.get("content", "")
         
         try:
-            # ЭТАП 1: Оценка стимула через призму Драйвов (Лимбическая система)
+            # ЭТАП 1: Оценка стимула через призму Драйвов
             logger.debug("Этап 1: Оценка стимула Драйвами...")
             deltas = await self.drives.evaluate_stimulus(
                 stimulus=stimulus_content,
                 context=await self.memory.get_self_model_context()
             )
             self.drives.apply_deltas(deltas)
-            logger.debug(f"Изменения драйвов: {deltas}")
             
             # ЭТАП 2: Получение текущего состояния Воли
             drive_state_text = self.drives.get_internal_state_prompt()
             raw_drive_state = {d.type.value: d.tension for d in self.drives.drives.values()}
             
-            # ЭТАП 3: Вспоминание релевантного опыта (Гиппокамп)
+            # ЭТАП 3: Вспоминание релевантного опыта
             logger.debug("Этап 3: Поиск в памяти с эмоциональным резонансом...")
             memory_context = await self.memory.retrieve_context(
                 current_stimulus=stimulus_content,
@@ -139,7 +145,7 @@ class LeyaOS:
                 memory_context=memory_context,
                 drive_state=drive_state_text,
                 self_model=self_model,
-                tools_description=self.tools_description 
+                tools_description=self.tools_description
             )
             
             # ЭТАП 6: Пост-обработка и действия
@@ -157,7 +163,7 @@ class LeyaOS:
                 await self.memory.update_self_model(cognitive_output.self_reflection)
                 logger.info(f"Эго обновлено: {cognitive_output.self_reflection[:80]}...")
             
-            # 6.3. Если Лея хочет запомнить факт — делаем это
+            # 6.3. Если Лея хочет запомнить факт
             if cognitive_output.action_intent == "remember_fact":
                 await self.memory.store_fact(
                     fact=f"{stimulus_content} -> {cognitive_output.response}",
@@ -165,24 +171,26 @@ class LeyaOS:
                 )
                 logger.info("Новый факт сохранен в семантическую память.")
             
-            # 6.4. Если Лея хочет задать вопрос — передаем в Environment
+            # 6.4. Если Лея хочет задать вопрос
             if cognitive_output.action_intent == "ask_question":
-                # НЕ вызываем send_message здесь — ответ уже выведется в конце цикла
                 logger.info("Лея хочет задать вопрос пользователю.")
             
-            # 6.5. Если Лея хочет изменить себя — запускаем self-modify
+            # 6.5. Если Лея хочет изменить себя
             if cognitive_output.action_intent == "self_modify":
-                logger.warning("Лея запросила саморазвитие. Требует реализации в Environment.")
-                # TODO: Реализовать безопасный механизм self-modify в Environment
-
-            # После обработки других action_intent
+                logger.warning("Лея запросила саморазвитие.")
+            
+            # 6.6. Если Лея хочет использовать инструмент
             if cognitive_output.action_intent == "use_tool" and cognitive_output.tool_call:
                 logger.info(f"Лея вызывает инструмент: {cognitive_output.tool_call}")
                 tool_result = await self.env.execute_tool_call(cognitive_output.tool_call)
                 logger.info(f"Результат инструмента: {tool_result}")
-    
-                # Лея может захотеть прокомментировать результат
-                await self.env.send_message(f"[Результат действия]: {tool_result}")
+                
+                # Отправляем результат в веб-интерфейс
+                if hasattr(self.env, 'broadcast'):
+                    await self.env.broadcast({
+                        "type": "tool_result",
+                        "data": tool_result
+                    })
             
             # ЭТАП 7: Вывод результата
             logger.info("=" * 60)
@@ -193,9 +201,17 @@ class LeyaOS:
                 logger.info(f"[САМОРЕФЛЕКСИЯ]: {cognitive_output.self_reflection}")
             logger.info("=" * 60)
             
+            # Отправляем в веб-интерфейс
+            if hasattr(self.env, 'broadcast_thought'):
+                if cognitive_output.internal_monologue:
+                    await self.env.broadcast_thought("internal", cognitive_output.internal_monologue)
+                if cognitive_output.self_reflection:
+                    await self.env.broadcast_thought("reflection", cognitive_output.self_reflection)
+            
+            # Отправляем ответ через Environment
             await self.env.send_message(cognitive_output.response)
-
-            # Уведомляем Наблюдателя о результате (для быстрого анализа)
+            
+            # Уведомляем Наблюдателя
             await self.reflection.process_action(
                 stimulus=stimulus_content,
                 cognitive_output=cognitive_output,
@@ -204,39 +220,47 @@ class LeyaOS:
             
         except Exception as e:
             logger.error(f"Ошибка в когнитивном цикле: {e}", exc_info=True)
-            # Fallback: Лея "теряет нить мысли"
-            await self.env.send_message("Извини, я на секунду потеряла нить. Мои мысли рассыпались. Повтори, пожалуйста?")
+            await self.env.send_message("Извини, я на секунду потеряла нить. Мои мысли рассыпались.")
 
     async def run(self):
         """
         Главный цикл жизни Леи.
         """
-        # Загружаем Модель Себя из долговременной памяти (теперь это асинхронно)
+        # Загружаем Модель Себя из долговременной памяти
         logger.info("Загрузка Модели Себя...")
         self.self_model = await self.memory.get_self_model_context()
-    
+        
         self.running = True
         self.state = "awake"
         logger.info(f"{self.name} проснулась. Состояние: {self.state}")
-    
+        
         # Запуск фоновых процессов
         logger.info("Запуск фоновых когнитивных процессов...")
         background_tasks = [
             asyncio.create_task(self.drives.background_metabolism(), name="metabolism"),
             asyncio.create_task(self.reflection.background_consolidation(), name="consolidation"),
-            asyncio.create_task(self._spontaneous_thought_loop(), name="spontaneous_thoughts")
+            asyncio.create_task(self._spontaneous_thought_loop(), name="spontaneous_thoughts"),
+            asyncio.create_task(self._broadcast_state_loop(), name="state_broadcast"),
         ]
-    
+        
+        # Запускаем веб-сервер, если это WebEnvironment
+        if isinstance(self.env, WebEnvironment):
+            from server import run_server
+            background_tasks.append(
+                asyncio.create_task(run_server(self.env), name="web_server")
+            )
+            logger.info("🌐 Веб-интерфейс: http://localhost:8000")
+        
         # Основной цикл восприятия
         try:
             while self.running:
                 stimulus = await self.env.listen()
-            
+                
                 if stimulus:
                     await self.perceive(stimulus)
                 else:
                     await asyncio.sleep(0.1)
-                
+                    
         except asyncio.CancelledError:
             logger.info("Основной цикл отменен.")
         finally:
@@ -245,28 +269,50 @@ class LeyaOS:
     async def _spontaneous_thought_loop(self):
         """Фоновый процесс генерации спонтанных мыслей."""
         logger.info("Цикл спонтанных мыслей запущен.")
-    
-        # Трекер последнего взаимодействия
-        last_interaction_time = datetime.now().timestamp()
-    
-        while self.running:
-            await asyncio.sleep(120)  # Каждые 2 минуты вместо 30 секунд
         
+        while self.running:
+            await asyncio.sleep(120)  # Каждые 2 минуты
+            
             # Не генерируем мысли, если недавно было взаимодействие
-            time_since_interaction = datetime.now().timestamp() - last_interaction_time
+            time_since_interaction = datetime.now().timestamp() - self._last_interaction_time
             if time_since_interaction < 300:  # 5 минут после последнего стимула
                 continue
-        
+            
             if not self.reflection.is_sleeping:
                 thought = await self.reflection.generate_spontaneous_thought()
                 if thought:
                     logger.info(f"[СПОНТАННАЯ МЫСЛЬ]: {thought}")
+                    
+                    # Отправляем в веб-интерфейс
+                    if hasattr(self.env, 'broadcast_thought'):
+                        await self.env.broadcast_thought("spontaneous", thought)
+                    
+                    # Также выводим в CLI
                     await self.env.send_message(f"[Мысль вслух] {thought}")
 
+    async def _broadcast_state_loop(self):
+        """Периодически отправляет состояние в веб-интерфейс."""
+        while self.running:
+            if isinstance(self.env, WebEnvironment):
+                try:
+                    # Отправляем драйвы
+                    drives = {d.type.value: d.tension for d in self.drives.drives.values()}
+                    await self.env.update_drives(drives)
+                    
+                    # Отправляем состояние
+                    await self.env.broadcast_state(self.state)
+                    
+                    # Отправляем Модель Себя
+                    self_model = await self.memory.get_self_model_context()
+                    await self.env.update_self_model(self_model)
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка отправки состояния: {e}")
+            
+            await asyncio.sleep(2)  # Каждые 2 секунды
+
     async def shutdown(self, background_tasks: list):
-        """
-        Graceful shutdown. Сохраняет состояние, останавливает процессы.
-        """
+        """Graceful shutdown."""
         logger.info(f"{self.name} засыпает...")
         self.state = "sleeping"
         self.running = False
@@ -281,16 +327,24 @@ class LeyaOS:
         
         # Финальная консолидация памяти
         logger.info("Финальная консолидация памяти...")
-        await self.memory.consolidate_memories()
+        await self.memory.consolidate_memories(llm_client=self._llm_call)
         
         logger.info(f"{self.name} уснула. Состояние сохранено.")
 
     async def _llm_call(self, prompt: str, require_json: bool = False) -> str:
-        """Единая точка вызова LLM через Ollama."""
+        """
+        Единая точка вызова LLM через Ollama.
+        Использует Qwen 2.5 14B Instruct.
+    
+        Args:
+            prompt: Текст запроса
+            require_json: Если True, включает JSON mode в Ollama
+        """
         import aiohttp
     
         model_name = "qwen2.5:14b-instruct-q3_K_M"
     
+        # Формируем payload
         payload = {
             "model": model_name,
             "messages": [
@@ -307,6 +361,7 @@ class LeyaOS:
             "options": {
                 "temperature": 0.7,
                 "top_p": 0.9,
+                "top_k": 40,
                 "num_predict": 1024,
                 "repeat_penalty": 1.1
             }
@@ -330,27 +385,37 @@ class LeyaOS:
                     else:
                         logger.error(f"Ollama вернул статус {response.status}")
                         return await self._default_llm_call(prompt)
-        except Exception as e:
-            logger.error(f"Ошибка вызова LLM: {e}")
-            return await self._default_llm_call(prompt)
                     
         except aiohttp.ClientError as e:
             logger.error(f"Ошибка подключения к Ollama: {e}")
             logger.info("Убедись, что Ollama запущен командой: ollama serve")
             return await self._default_llm_call(prompt)
         except asyncio.TimeoutError:
-            logger.error("Превышено время ожидания ответа от Ollama (180 сек)")
+            logger.error("Превышено время ожидания ответа от Ollama")
             return await self._default_llm_call(prompt)
         except Exception as e:
             logger.error(f"Неожиданная ошибка вызова LLM: {e}", exc_info=True)
             return await self._default_llm_call(prompt)
+
+    async def _default_llm_call(self, prompt: str) -> str:
+        """Заглушка для LLM, если Ollama недоступен."""
+        return json.dumps({
+            "internal_monologue": "Я обрабатываю стимул. Мои драйвы активизируются.",
+            "response": "Привет! Я здесь и думаю о том, как интересно устроен этот диалог.",
+            "action_intent": "none",
+            "tool_call": "",
+            "self_reflection": ""
+        })
 
 
 async def main():
     """
     Точка входа. Кроссплатформенная обработка сигналов.
     """
-    leya = LeyaOS()
+    # Определяем, использовать ли веб-интерфейс
+    use_web = os.environ.get("LEYA_WEB", "1") == "1"
+    
+    leya = LeyaOS(use_web=use_web)
     
     # Кроссплатформенная обработка сигналов
     try:

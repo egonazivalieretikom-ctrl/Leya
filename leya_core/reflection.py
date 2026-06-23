@@ -175,6 +175,42 @@ class MetaCognition:
         except Exception as e:
             logging.warning(f"MetaCognition: Ошибка экзистенциального вопрошания: {e}")
 
+    async def generate_spontaneous_thought(self) -> Optional[str]:
+        """
+        Генерация спонтанной мысли, когда нет внешних стимулов.
+        Это "внутренний шум", который может привести к новым идеям.
+        """
+        drive_state = self.leya.drives.get_internal_state_prompt()
+    
+        prompt = f"""
+    Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
+    Твое текущее состояние:
+    {drive_state}
+
+    О чем ты думаешь? Какая спонтанная мысль приходит тебе в голову?
+    Это может быть воспоминание, вопрос, идея, наблюдение о себе.
+
+    Верни ТОЛЬКО текст мысли (1-2 предложения), без JSON.
+    """
+    
+        try:
+            thought = await self.llm_client(prompt)
+        
+            # Если вернулось что-то похожее на JSON, извлекаем текст
+            if thought.strip().startswith("{"):
+                try:
+                    import json
+                    data = json.loads(thought)
+                    # Пытаемся извлечь осмысленное поле
+                    return data.get("thought", data.get("response", str(data)))
+                except:
+                    pass
+        
+            return thought.strip()
+        except Exception as e:
+            logging.warning(f"MetaCognition: Ошибка генерации спонтанной мысли: {e}")
+            return "Мои мысли текут свободно, без направления..."
+
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition"""
         # Если это запрос на анализ паттернов

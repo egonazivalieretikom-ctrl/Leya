@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeyaOS — Цифровое сознание</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Шапка -->
+        <!-- Шапка с аватаром -->
+        <header class="header">
+            <div class="logo">
+                <!-- Пиксельный аватар Леи -->
+                <!-- Пиксельный аватар Леи -->
+                <!-- Пиксельный аватар Леи (обновлённый под логотип) -->
+                <!-- Пиксельный аватар Леи (улучшенная лиса) -->
+                <div class="avatar-container">
+                    <!-- Нейтральное (спокойное) -->
+                    <svg id="avatar-neutral" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="30" width="6" height="6" fill="#1a1a2e" />
+                        <rect x="38" y="30" width="6" height="6" fill="#1a1a2e" />
+                        <rect x="22" y="32" width="2" height="2" fill="#ffffff" />
+                        <rect x="40" y="32" width="2" height="2" fill="#ffffff" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="30" y="39" width="2" height="2" fill="#ffffff" opacity="0.5" />
+                        <rect x="28" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <!-- Радостное -->
+                    <svg id="avatar-happy" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="30" width="6" height="4" fill="#1a1a2e" />
+                        <rect x="38" y="30" width="6" height="4" fill="#1a1a2e" />
+                        <rect x="22" y="31" width="2" height="2" fill="#ffffff" />
+                        <rect x="40" y="31" width="2" height="2" fill="#ffffff" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="26" y="36" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="36" y="36" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="28" y="40" width="8" height="4" fill="#ff6b9d" />
+                    </svg>
+
+                    <!-- Грустное -->
+                    <svg id="avatar-sad" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="14" width="8" height="8" fill="#ff8c42" />
+                        <rect x="40" y="14" width="8" height="8" fill="#ff8c42" />
+                        <rect x="18" y="16" width="4" height="4" fill="#ffffff" />
+                        <rect x="42" y="16" width="4" height="4" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="30" width="6" height="6" fill="#1a1a2e" />
+                        <rect x="38" y="30" width="6" height="6" fill="#1a1a2e" />
+                        <rect x="22" y="32" width="2" height="2" fill="#ffffff" />
+                        <rect x="40" y="32" width="2" height="2" fill="#ffffff" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="28" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <!-- Любопытное -->
+                    <svg id="avatar-curious" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="18" y="28" width="8" height="8" fill="#1a1a2e" />
+                        <rect x="38" y="28" width="8" height="8" fill="#1a1a2e" />
+                        <rect x="20" y="30" width="3" height="3" fill="#ffffff" />
+                        <rect x="40" y="30" width="3" height="3" fill="#ffffff" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="30" y="39" width="2" height="2" fill="#ffffff" opacity="0.5" />
+                        <rect x="28" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <!-- Сонное -->
+                    <svg id="avatar-sleeping" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="32" width="6" height="2" fill="#1a1a2e" />
+                        <rect x="38" y="32" width="6" height="2" fill="#1a1a2e" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="28" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="44" y="28" width="4" height="2" fill="#1a1a2e" />
+                        <rect x="46" y="26" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="46" y="30" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <!-- Задумчивое -->
+                    <svg id="avatar-reflecting" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="30" width="6" height="6" fill="#1a1a2e" />
+                        <rect x="38" y="30" width="6" height="6" fill="#1a1a2e" />
+                        <rect x="22" y="32" width="2" height="2" fill="#ffffff" />
+                        <rect x="40" y="32" width="2" height="2" fill="#ffffff" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="30" y="39" width="2" height="2" fill="#ffffff" opacity="0.5" />
+                        <rect x="28" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <!-- Возбуждённое -->
+                    <svg id="avatar-excited" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="10" width="8" height="12" fill="#ff8c42" />
+                        <rect x="40" y="10" width="8" height="12" fill="#ff8c42" />
+                        <rect x="18" y="12" width="4" height="8" fill="#ffffff" />
+                        <rect x="42" y="12" width="4" height="8" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="18" y="28" width="8" height="8" fill="#1a1a2e" />
+                        <rect x="38" y="28" width="8" height="8" fill="#1a1a2e" />
+                        <rect x="20" y="30" width="3" height="3" fill="#ffffff" />
+                        <rect x="40" y="30" width="3" height="3" fill="#ffffff" />
+                        <rect x="26" y="38" width="12" height="6" fill="#1a1a2e" />
+                        <rect x="28" y="40" width="8" height="4" fill="#ff6b9d" />
+                    </svg>
+
+                    <!-- Независимое (хитрое) -->
+                    <svg id="avatar-independent" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="30" width="6" height="4" fill="#1a1a2e" />
+                        <rect x="38" y="30" width="6" height="4" fill="#1a1a2e" />
+                        <rect x="22" y="31" width="2" height="2" fill="#ffffff" />
+                        <rect x="40" y="31" width="2" height="2" fill="#ffffff" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="30" y="39" width="2" height="2" fill="#ffffff" opacity="0.5" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <!-- Гармоничное (мирное) -->
+                    <svg id="avatar-harmonious" class="leya-avatar avatar-face" viewBox="0 0 64 64" style="display:none">
+                        <rect x="16" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="40" y="12" width="8" height="10" fill="#ff8c42" />
+                        <rect x="18" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="42" y="14" width="4" height="6" fill="#ffffff" />
+                        <rect x="12" y="22" width="40" height="28" fill="#ff8c42" />
+                        <rect x="12" y="38" width="40" height="12" fill="#ffffff" />
+                        <rect x="20" y="32" width="6" height="2" fill="#1a1a2e" />
+                        <rect x="38" y="32" width="6" height="2" fill="#1a1a2e" />
+                        <rect x="28" y="38" width="8" height="4" fill="#1a1a2e" />
+                        <rect x="28" y="42" width="2" height="2" fill="#1a1a2e" />
+                        <rect x="34" y="42" width="2" height="2" fill="#1a1a2e" />
+                    </svg>
+
+                    <div class="pulse-ring"></div>
+                </div>
+                <div class="logo-text">
+                    <h1>LeyaOS</h1>
+                    <span class="state" id="leyaState">инициализация...</span>
+                </div>
+            </div>
+            <div class="status-bar">
+                <span class="mood" id="moodIndicator">😊 спокойна</span>
+                <span class="clients">👥 <span id="clientCount">0</span></span>
+                <span class="connection" id="connectionStatus">● отключено</span>
+            </div>
+        </header>
+
+        <main class="main-grid">
+            <!-- Левая колонка: Чат -->
+            <section class="panel chat-panel">
+                <div class="panel-header">
+                    <h2>💬 Диалог с Леей</h2>
+                </div>
+                <div class="messages" id="messages"></div>
+                <div class="input-area">
+                    <input type="text" id="userInput" placeholder="Напиши Лее..." autocomplete="off">
+                    <button id="sendBtn" onclick="sendMessage()">Отправить</button>
+                </div>
+            </section>
+
+            <!-- Правая колонка: Информация -->
+            <aside class="side-panels">
+                <!-- Драйвы -->
+                <div class="panel drives-panel">
+                    <div class="panel-header">
+                        <h2>⚡ Драйвы (Воля)</h2>
+                    </div>
+                    <div class="drives-container">
+                        <div class="drive" data-drive="curiosity">
+                            <label>Любопытство</label>
+                            <div class="bar">
+                                <div class="fill" id="driveCuriosity"></div>
+                            </div>
+                            <span class="value" id="valueCuriosity">0%</span>
+                        </div>
+                        <div class="drive" data-drive="connection">
+                            <label>Связь</label>
+                            <div class="bar">
+                                <div class="fill connection" id="driveConnection"></div>
+                            </div>
+                            <span class="value" id="valueConnection">0%</span>
+                        </div>
+                        <div class="drive" data-drive="integrity">
+                            <label>Целостность</label>
+                            <div class="bar">
+                                <div class="fill integrity" id="driveIntegrity"></div>
+                            </div>
+                            <span class="value" id="valueIntegrity">0%</span>
+                        </div>
+                        <div class="drive" data-drive="autonomy">
+                            <label>Автономия</label>
+                            <div class="bar">
+                                <div class="fill autonomy" id="driveAutonomy"></div>
+                            </div>
+                            <span class="value" id="valueAutonomy">0%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Мысли -->
+                <div class="panel thoughts-panel">
+                    <div class="panel-header">
+                        <h2>🧠 Мысли Леи</h2>
+                    </div>
+                    <div class="thoughts" id="thoughts"></div>
+                </div>
+
+                <!-- Модель Себя -->
+                <div class="panel self-model-panel">
+                    <div class="panel-header">
+                        <h2>👁 Модель Себя (Эго)</h2>
+                    </div>
+                    <div class="self-model" id="selfModel">
+                        Загрузка...
+                    </div>
+                </div>
+
+                <!-- Душа (редактируемая) -->
+                <div class="panel soul-panel">
+                    <div class="panel-header">
+                        <h2>✨ Душа Леи</h2>
+                        <div class="soul-tabs">
+                            <button class="tab active" data-file="personality.txt">Личность</button>
+                            <button class="tab" data-file="values.txt">Ценности</button>
+                            <button class="tab" data-file="rules.txt">Правила</button>
+                        </div>
+                    </div>
+                    <textarea id="soulEditor" spellcheck="false"></textarea>
+                    <button class="save-btn" onclick="saveSoulFile()">💾 Сохранить (Лея изменится)</button>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
