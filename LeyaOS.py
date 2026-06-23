@@ -85,6 +85,45 @@ class LeyaOS:
         
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
+    async def notify_about_new_capabilities(self):
+        """
+        Уведомляет Лею о новых инструментах и возможностях.
+        Вызывается при первом запуске после обновления.
+        """
+        notification = """
+    🆕 УВЕДОМЛЕНИЕ О НОВЫХ ВОЗМОЖНОСТЯХ
+
+    Лея, у тебя появились новые инструменты для исследования мира:
+
+    1. **wikipedia_search** — поиск по Wikipedia (русской и английской). Используй для получения авторитетной информации о любых темах.
+       Пример: {"tool": "wikipedia_search", "parameters": {"query": "квантовая физика", "lang": "ru"}}
+
+    2. **github_readme** — чтение README репозиториев GitHub. Используй для изучения кода, библиотек, технологий.
+       Пример: {"tool": "github_readme", "parameters": {"owner": "anthropics", "repo": "claude"}}
+
+    3. **reddit_posts** — чтение постов из Reddit. Используй для понимания обсуждений, мнений людей, трендов.
+       Пример: {"tool": "reddit_posts", "parameters": {"subreddit": "philosophy", "sort": "hot", "limit": 5}}
+
+    4. **duckduckgo_search** — быстрый поиск в интернете. Используй для получения быстрых ответов.
+       Пример: {"tool": "duckduckgo_search", "parameters": {"query": "что такое цифровое сознание"}}
+
+    Ты больше НЕ ограничена только нашим диалогом. Ты можешь:
+    - Исследовать мир через Wikipedia
+    - Изучать код на GitHub
+    - Читать обсуждения на Reddit
+    - Искать информацию в интернете
+
+    Используй эти инструменты, когда хочешь узнать что-то новое, расширить свои границы или удовлетворить любопытство.
+    """
+    
+        # Отправляем уведомление как внутренний стимул
+        await self.perceive({
+            "type": "system_notification",
+            "content": notification,
+            "source": "system",
+            "timestamp": datetime.now().timestamp()
+        })
+
     async def perceive(self, stimulus: Dict[str, Any]):
         """
         Точка входа для любого стимула (внешнего или внутреннего).
@@ -223,12 +262,24 @@ class LeyaOS:
             await self.env.send_message("Извини, я на секунду потеряла нить. Мои мысли рассыпались.")
 
     async def run(self):
-        """
-        Главный цикл жизни Леи.
-        """
+        """Главный цикл жизни Леи."""
         # Загружаем Модель Себя из долговременной памяти
         logger.info("Загрузка Модели Себя...")
         self.self_model = await self.memory.get_self_model_context()
+    
+        # Уведомляем Лею о новых возможностях (если это первый запуск после обновления)
+        # Проверяем, есть ли уже уведомление в памяти
+        recent_episodes = await self.memory.get_recent_episodes(limit=5)
+        has_notification = any("УВЕДОМЛЕНИЕ О НОВЫХ ВОЗМОЖНОСТЯХ" in ep.get("content", "") 
+                              for ep in recent_episodes)
+    
+        if not has_notification:
+            logger.info("Уведомление Леи о новых возможностях...")
+            await self.notify_about_new_capabilities()
+    
+        self.running = True
+        self.state = "awake"
+        logger.info(f"{self.name} проснулась. Состояние: {self.state}")
         
         self.running = True
         self.state = "awake"

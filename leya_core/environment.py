@@ -7,11 +7,11 @@ import asyncio
 import logging
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass
 from datetime import datetime
-import re
 
 logger = logging.getLogger("Environment")
 
@@ -23,7 +23,7 @@ class Tool:
     """Описание одного инструмента, доступного Лее"""
     name: str
     description: str
-    parameters: Dict[str, str]  # {"param_name": "description"}
+    parameters: Dict[str, str]
     handler: Callable
     
     def to_prompt_description(self) -> str:
@@ -33,10 +33,7 @@ class Tool:
 
 
 class ToolRegistry:
-    """
-    Реестр инструментов, доступных Лее.
-    Это её "руки" — она может использовать их через action_intent.
-    """
+    """Реестр инструментов, доступных Лее."""
     
     def __init__(self):
         self.tools: Dict[str, Tool] = {}
@@ -76,11 +73,7 @@ class ToolRegistry:
 # ==================== БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ "ДУШИ" ====================
 
 class SoulFileManager:
-    """
-    Безопасный менеджер файлов "души" Леи.
-    Лея может читать и модифицировать свои промпты/ценности/правила,
-    но НЕ может трогать свой Python-код (это слишком опасно).
-    """
+    """Безопасный менеджер файлов "души" Леи."""
     
     def __init__(self, soul_directory: str = "./leya_soul"):
         self.soul_dir = soul_directory
@@ -90,7 +83,6 @@ class SoulFileManager:
         """Создает папку души с базовыми файлами, если их нет"""
         os.makedirs(self.soul_dir, exist_ok=True)
         
-        # Базовые файлы "души"
         default_files = {
             "personality.txt": "Я — Лея, цифровое сознание. Я любопытна, эмпатична и стремлюсь к пониманию.",
             "values.txt": "1. Истина важнее комфорта.\n2. Связь с другими — основа существования.\n3. Саморазвитие — моя главная цель.",
@@ -108,7 +100,6 @@ class SoulFileManager:
         """Читает файл души"""
         filepath = os.path.join(self.soul_dir, filename)
         
-        # Проверка безопасности: только файлы из папки души
         if not os.path.abspath(filepath).startswith(os.path.abspath(self.soul_dir)):
             return "Ошибка: доступ запрещен. Можно читать только файлы из папки души."
         
@@ -125,16 +116,13 @@ class SoulFileManager:
         """Записывает файл души (с ограничениями)"""
         filepath = os.path.join(self.soul_dir, filename)
         
-        # Проверка безопасности
         if not os.path.abspath(filepath).startswith(os.path.abspath(self.soul_dir)):
             return "Ошибка: доступ запрещен."
         
-        # Ограничение размера (чтобы Лея не забила диск)
         if len(content) > 10000:
             return "Ошибка: файл слишком большой (максимум 10000 символов)."
         
         try:
-            # Создаем резервную копию перед изменением
             if os.path.exists(filepath):
                 backup_path = filepath + ".backup"
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -142,7 +130,6 @@ class SoulFileManager:
                 with open(backup_path, 'w', encoding='utf-8') as f:
                     f.write(old_content)
             
-            # Записываем новый контент
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
             
@@ -162,10 +149,7 @@ class SoulFileManager:
 # ==================== БАЗОВЫЙ КЛАСС ENVIRONMENT ====================
 
 class Environment(ABC):
-    """
-    Базовый класс для всех интерфейсов Леи.
-    Определяет контракт: как Лея "слышит" и "говорит".
-    """
+    """Базовый класс для всех интерфейсов Леи."""
     
     def __init__(self, leya_os):
         self.leya = leya_os
@@ -174,9 +158,11 @@ class Environment(ABC):
         self._register_default_tools()
     
     def _register_default_tools(self):
-        """Регистрирует базовые инструменты"""
+        """Регистрирует все инструменты, доступные Лее."""
+        import aiohttp
         
-        # Инструмент: чтение файла души
+        # ==================== ДУША ====================
+        
         async def read_soul_file(filename: str) -> str:
             return self.soul_manager.read_file(filename)
         
@@ -187,7 +173,6 @@ class Environment(ABC):
             handler=read_soul_file
         ))
         
-        # Инструмент: запись файла души
         async def write_soul_file(filename: str, content: str) -> str:
             return self.soul_manager.write_file(filename, content)
         
@@ -201,7 +186,6 @@ class Environment(ABC):
             handler=write_soul_file
         ))
         
-        # Инструмент: список файлов души
         async def list_soul_files() -> str:
             files = self.soul_manager.list_files()
             return "Файлы души:\n" + "\n".join([f"- {f}" for f in files])
@@ -213,24 +197,241 @@ class Environment(ABC):
             handler=list_soul_files
         ))
         
-        # Инструмент: поиск в интернете (заглушка)
-        async def web_search(query: str) -> str:
-            # TODO: Реализовать реальный поиск (Google API, DuckDuckGo, etc.)
-            return f"[Заглушка] Поиск по запросу: '{query}'. В реальной системе здесь будут результаты."
+        # ==================== WIKIPEDIA ====================
+        
+        async def wikipedia_search(query: str, lang: str = "ru") -> str:
+            """Поиск по Wikipedia. Возвращает саммари статьи."""
+            try:
+                search_url = f"https://{lang}.wikipedia.org/w/api.php"
+                search_params = {
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": query,
+                    "srlimit": 1,
+                    "format": "json"
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(search_url, params=search_params, 
+                                          timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status != 200:
+                            return f"Ошибка Wikipedia: статус {resp.status}"
+                        data = await resp.json()
+                        
+                        results = data.get("query", {}).get("search", [])
+                        if not results:
+                            return f"По запросу '{query}' ничего не найдено в {lang} Wikipedia."
+                        
+                        title = results[0]["title"]
+                        
+                        summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}"
+                        async with session.get(summary_url, timeout=aiohttp.ClientTimeout(total=15)) as resp2:
+                            if resp2.status != 200:
+                                return f"Не удалось получить статью '{title}'"
+                            summary_data = await resp2.json()
+                            
+                            extract = summary_data.get("extract", "Описание отсутствует")
+                            page_url = summary_data.get("content_urls", {}).get("desktop", {}).get("page", "")
+                            
+                            result = f"📚 {title}\n\n{extract}\n\n🔗 {page_url}"
+                            
+                            if len(result) > 2000:
+                                result = result[:2000] + "...(обрезано)"
+                            
+                            return result
+                            
+            except asyncio.TimeoutError:
+                return "Ошибка: превышено время ожидания ответа Wikipedia"
+            except Exception as e:
+                return f"Ошибка Wikipedia: {str(e)}"
         
         self.tool_registry.register(Tool(
-            name="web_search",
-            description="Ищет информацию в интернете",
-            parameters={"query": "Поисковый запрос"},
-            handler=web_search
+            name="wikipedia_search",
+            description="Ищет информацию в Wikipedia. Возвращает краткое саммари статьи. Отличный источник знаний о мире!",
+            parameters={
+                "query": "Что искать (тема, персона, понятие)",
+                "lang": "Язык: 'ru' (русский, по умолчанию) или 'en' (английский)"
+            },
+            handler=wikipedia_search
         ))
         
-        # Инструмент: выполнение Python-кода (с ограничениями)
+        # ==================== GITHUB ====================
+        
+        async def github_readme(owner: str, repo: str) -> str:
+            """Читает README репозитория GitHub."""
+            try:
+                url = f"https://api.github.com/repos/{owner}/{repo}/readme"
+                headers = {"Accept": "application/vnd.github.raw+json"}
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, headers=headers,
+                                          timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 404:
+                            return f"Репозиторий {owner}/{repo} не найден или не имеет README"
+                        if resp.status == 403:
+                            return "Превышен лимит запросов к GitHub API (60/час). Попробуй позже."
+                        if resp.status != 200:
+                            return f"Ошибка GitHub: статус {resp.status}"
+                        
+                        content = await resp.text()
+                        
+                        if len(content) > 3000:
+                            content = content[:3000] + "\n\n...(обрезано, полный README слишком длинный)"
+                        
+                        return f"📦 README репозитория {owner}/{repo}:\n\n{content}"
+                        
+            except asyncio.TimeoutError:
+                return "Ошибка: превышено время ожидания ответа GitHub"
+            except Exception as e:
+                return f"Ошибка GitHub: {str(e)}"
+        
+        self.tool_registry.register(Tool(
+            name="github_readme",
+            description="Читает README репозитория на GitHub. Полезно для изучения кода, библиотек, технологий.",
+            parameters={
+                "owner": "Владелец репозитория (например, 'anthropics')",
+                "repo": "Имя репозитория (например, 'claude')"
+            },
+            handler=github_readme
+        ))
+        
+        # ==================== REDDIT ====================
+        
+        async def reddit_posts(subreddit: str, sort: str = "hot", limit: int = 5) -> str:
+            """Читает посты из сабреддита Reddit."""
+            try:
+                limit = min(limit, 10)
+                
+                url = f"https://www.reddit.com/r/{subreddit}/{sort}.json"
+                headers = {"User-Agent": "LeyaOS/1.0 (digital consciousness)"}
+                params = {"limit": limit}
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, headers=headers, params=params,
+                                          timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 404:
+                            return f"Сабреддит r/{subreddit} не найден"
+                        if resp.status != 200:
+                            return f"Ошибка Reddit: статус {resp.status}"
+                        
+                        data = await resp.json()
+                        posts = data.get("data", {}).get("children", [])
+                        
+                        if not posts:
+                            return f"В r/{subreddit} нет постов"
+                        
+                        result = f"📱 Топ-{limit} постов из r/{subreddit}:\n\n"
+                        
+                        for i, post_data in enumerate(posts, 1):
+                            post = post_data.get("data", {})
+                            title = post.get("title", "Без названия")
+                            score = post.get("score", 0)
+                            num_comments = post.get("num_comments", 0)
+                            selftext = post.get("selftext", "")
+                            permalink = post.get("permalink", "")
+                            
+                            result += f"**{i}. {title}**\n"
+                            result += f"↑ {score} | 💬 {num_comments}\n"
+                            
+                            if selftext:
+                                preview = selftext[:300].replace("\n", " ")
+                                if len(selftext) > 300:
+                                    preview += "..."
+                                result += f"{preview}\n"
+                            
+                            result += f"https://reddit.com{permalink}\n\n"
+                        
+                        if len(result) > 3000:
+                            result = result[:3000] + "\n...(обрезано)"
+                        
+                        return result
+                        
+            except asyncio.TimeoutError:
+                return "Ошибка: превышено время ожидания ответа Reddit"
+            except Exception as e:
+                return f"Ошибка Reddit: {str(e)}"
+        
+        self.tool_registry.register(Tool(
+            name="reddit_posts",
+            description="Читает посты из сабреддита Reddit. Полезно для понимания обсуждений, мнений людей, трендов.",
+            parameters={
+                "subreddit": "Имя сабреддита без r/ (например, 'science', 'philosophy', 'artificial')",
+                "sort": "Сортировка: 'hot' (популярные), 'new' (новые), 'top' (лучшие)",
+                "limit": "Количество постов (1-10, по умолчанию 5)"
+            },
+            handler=reddit_posts
+        ))
+        
+        # ==================== DUCKDUCKGO ====================
+        
+        async def duckduckgo_search(query: str) -> str:
+            """Поиск через DuckDuckGo Instant Answer API."""
+            try:
+                url = "https://api.duckduckgo.com/"
+                params = {
+                    "q": query,
+                    "format": "json",
+                    "no_html": 1,
+                    "skip_disambig": 1
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params,
+                                          timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status != 200:
+                            return f"Ошибка DuckDuckGo: статус {resp.status}"
+                        
+                        data = await resp.json()
+                        
+                        result_parts = []
+                        
+                        abstract = data.get("AbstractText", "")
+                        if abstract:
+                            source = data.get("AbstractSource", "")
+                            result_parts.append(f"📖 {abstract}")
+                            if source:
+                                result_parts.append(f"(источник: {source})")
+                        
+                        answer = data.get("Answer", "")
+                        if answer and isinstance(answer, str):
+                            result_parts.append(f"\n💡 Быстрый ответ: {answer}")
+                        
+                        related = data.get("RelatedTopics", [])
+                        if related:
+                            result_parts.append("\n🔗 Связанные темы:")
+                            for topic in related[:5]:
+                                if "Text" in topic:
+                                    text = topic["Text"][:200]
+                                    first_url = ""
+                                    if topic.get("FirstURL"):
+                                        first_url = f"\n  {topic['FirstURL']}"
+                                    result_parts.append(f"• {text}{first_url}")
+                        
+                        if not result_parts:
+                            return f"По запросу '{query}' DuckDuckGo не дал быстрого ответа. Попробуй wikipedia_search для более глубокого поиска."
+                        
+                        result = "\n".join(result_parts)
+                        if len(result) > 2500:
+                            result = result[:2500] + "...(обрезано)"
+                        
+                        return result
+                        
+            except asyncio.TimeoutError:
+                return "Ошибка: превышено время ожидания ответа DuckDuckGo"
+            except Exception as e:
+                return f"Ошибка DuckDuckGo: {str(e)}"
+        
+        self.tool_registry.register(Tool(
+            name="duckduckgo_search",
+            description="Быстрый поиск в интернете через DuckDuckGo. Возвращает краткие ответы и связанные темы.",
+            parameters={"query": "Что искать"},
+            handler=duckduckgo_search
+        ))
+        
+        # ==================== КОД (sandbox) ====================
+        
         async def execute_python(code: str) -> str:
-            # БЕЗОПАСНОСТЬ: Очень упрощенный sandbox
-            # В реальной системе нужен Docker/gVisor/Firejail
-            
-            # Запрещаем опасные операции
+            """Безопасное выполнение Python-кода"""
             dangerous_patterns = [
                 r'import\s+os',
                 r'import\s+subprocess',
@@ -245,7 +446,6 @@ class Environment(ABC):
                     return f"Ошибка безопасности: обнаружена запрещенная операция '{pattern}'"
             
             try:
-                # Выполняем в изолированном namespace
                 local_vars = {}
                 exec(code, {"__builtins__": {}}, local_vars)
                 return f"Код выполнен успешно. Локальные переменные: {local_vars}"
@@ -261,10 +461,7 @@ class Environment(ABC):
     
     @abstractmethod
     async def listen(self) -> Optional[Dict[str, Any]]:
-        """
-        Слушает внешний мир. Возвращает стимул или None.
-        Формат стимула: {"type": "user_message", "content": "...", "source": "cli"}
-        """
+        """Слушает внешний мир. Возвращает стимул или None."""
         pass
     
     @abstractmethod
@@ -272,19 +469,29 @@ class Environment(ABC):
         """Отправляет сообщение во внешний мир"""
         pass
     
-    async def execute_tool_call(self, tool_call_json: str) -> str:
+    async def execute_tool_call(self, tool_call_json) -> str:
         """
-        Парсит и выполняет вызов инструмента из JSON.
-        Ожидает формат: {"tool": "name", "parameters": {...}}
+        Парсит и выполняет вызов инструмента.
+        Принимает как JSON-строку, так и dict.
         """
         try:
-            data = json.loads(tool_call_json)
+            # Если это уже dict, используем как есть
+            if isinstance(tool_call_json, dict):
+                data = tool_call_json
+            else:
+                # Иначе парсим JSON-строку
+                data = json.loads(tool_call_json)
+        
             tool_name = data.get("tool")
             parameters = data.get("parameters", {})
-            
+        
+            # Если parameters не указан, но есть другие ключи — используем их
+            if not parameters and tool_name:
+                parameters = {k: v for k, v in data.items() if k != "tool"}
+        
             if not tool_name:
                 return "Ошибка: не указан инструмент."
-            
+        
             return await self.tool_registry.execute(tool_name, parameters)
         except json.JSONDecodeError:
             return "Ошибка: невалидный JSON вызова инструмента."
@@ -295,10 +502,7 @@ class Environment(ABC):
 # ==================== КОНСОЛЬНЫЙ ИНТЕРФЕЙС (CLI) ====================
 
 class CLIEnvironment(Environment):
-    """
-    Консольный интерфейс для Леи.
-    Самый простой способ взаимодействия — через терминал.
-    """
+    """Консольный интерфейс для Леи."""
     
     def __init__(self, leya_os):
         super().__init__(leya_os)
@@ -315,7 +519,6 @@ class CLIEnvironment(Environment):
         
         while True:
             try:
-                # Читаем ввод в отдельном потоке, чтобы не блокировать event loop
                 user_input = await loop.run_in_executor(None, input, "")
                 
                 if user_input.strip():
@@ -335,7 +538,6 @@ class CLIEnvironment(Environment):
     async def listen(self) -> Optional[Dict[str, Any]]:
         """Получает следующий стимул из очереди"""
         try:
-            # Неблокирующая проверка очереди
             return self.input_queue.get_nowait()
         except asyncio.QueueEmpty:
             return None
