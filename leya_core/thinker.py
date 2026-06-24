@@ -66,13 +66,13 @@ class CoreThinker:
         drive_state: str, 
         self_model: str,
         tools_description: str = "",
-        tool_context: str = ""  # <-- НОВОЕ: реальные данные от инструментов
+        tool_context: str = ""  # <-- НОВОЕ
     ) -> CognitiveOutput:
-        """Генерация ответа. LLM только генерирует содержание."""
+        """Генерация ответа."""
         prompt = self._build_cognitive_prompt(
             stimulus, memory_context, drive_state, self_model, tool_context
         )
-        
+    
         raw_response = await self.llm_client(prompt)
         
         try:

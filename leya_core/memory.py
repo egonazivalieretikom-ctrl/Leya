@@ -1,417 +1,537 @@
-import asyncio
-import logging
-import uuid
-import json
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+"""
+leya_core/memory.py — Биологически мотивированная система памяти Леи.
 
-# Для векторного поиска и эмбеддингов
+Моделирует:
+1. Синаптическую пластичность (LTP/LTD) — сила связей между воспоминаниями
+2. Кривые забывания Эббингауза — нелинейное забывание с повторением
+3. Эмоциональное тегирование — важность определяется силой драйвов
+4. Консолидацию во сне — реплей эпизодов, интеграция, прунинг
+5. Ассоциативное вспоминание — распространение активации по связям
+"""
+
+import logging
+import math
+import time
+from typing import Dict, Any, List, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+import numpy as np
+from sentence_transformers import SentenceTransformer
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger("MemorySystem")
+
+
+class MemoryType(Enum):
+    """Типы памяти"""
+    EPISODIC = "episodic"  # Эпизодическая (события)
+    SEMANTIC = "semantic"  # Семантическая (факты)
+    PROCEDURAL = "procedural"  # Процедурная (навыки)
+
 
 @dataclass
-class MemoryTrace:
-    """Слепок воспоминания"""
+class Synapse:
+    """Синапс — связь между двумя воспоминаниями"""
+    pre_id: str  # ID источника
+    post_id: str  # ID цели
+    weight: float = 0.1  # Сила связи (0.0 - 1.0)
+    last_activated: float = 0.0  # Время последней активации
+    activation_count: int = 0  # Сколько раз активировалась
+
+
+@dataclass
+class Engram:
+    """Энграмма — след памяти (воспоминание)"""
     id: str
-    timestamp: float
     content: str
-    memory_type: str  # 'episodic', 'semantic', 'procedural'
-    drive_state: Dict[str, float] = field(default_factory=dict) # Состояние драйвов в момент запоминания
-    importance: float = 0.5 # От 0.0 (мусор) до 1.0 (жизненно важно)
-    access_count: int = 0
+    memory_type: MemoryType
+    timestamp: float
+    emotional_intensity: float = 0.5  # Эмоциональный заряд (0.0 - 1.0)
+    retrieval_count: int = 0  # Сколько раз вспоминалось
+    last_retrieved: float = 0.0  # Время последнего вспоминания
+    decay_rate: float = 0.1  # Скорость забывания
+    consolidation_level: float = 0.0  # Уровень консолидации (0.0 - 1.0)
+    drive_state: Dict[str, float] = field(default_factory=dict)  # Состояние драйвов в момент формирования
+    
+    # Вычисляемые поля
+    @property
+    def retention_strength(self) -> float:
+        """Сила удержания памяти (кривая Эббингауза)"""
+        if self.retrieval_count == 0:
+            time_since = time.time() - self.timestamp
+        else:
+            time_since = time.time() - self.last_retrieved
+        
+        # Кривая забывания Эббингауза: R = e^(-t/S)
+        # S — стабильность памяти, зависит от повторений и эмоциональности
+        stability = self._calculate_stability()
+        retention = math.exp(-time_since / stability)
+        
+        return retention
+    
+    def _calculate_stability(self) -> float:
+        """Вычисляет стабильность памяти на основе повторений и эмоциональности"""
+        # Базовая стабильность
+        base_stability = 1.0  # секунды (начальное значение)
+        
+        # Усиление от повторений (логарифмический рост)
+        repetition_factor = 1 + math.log(1 + self.retrieval_count)
+        
+        # Усиление от эмоционального заряда
+        emotion_factor = 1 + (self.emotional_intensity * 2)
+        
+        # Усиление от консолидации
+        consolidation_factor = 1 + (self.consolidation_level * 3)
+        
+        return base_stability * repetition_factor * emotion_factor * consolidation_factor
+
 
 class MemorySystem:
+    """
+    Биологически мотивированная система памяти.
+    
+    Архитектура:
+    - Гиппокамп: кратковременная память (эпизоды)
+    - Неокортекс: долговременная память (семантические факты)
+    - Синапсы: связи между воспоминаниями
+    - Миндалевидное тело: эмоциональное тегирование
+    - Сон: консолидация и прунинг
+    """
+    
     def __init__(self, persist_directory: str = "./leya_brain"):
-        self.name = "MemorySystem"
+        self.persist_directory = persist_directory
         
-        # Инициализация модели эмбеддингов (локально, чтобы Лея не зависела от сети для мысли)
-        logging.info("MemorySystem: Загрузка нейронной модели для эмбеддингов...")
+        # Загрузка эмбеддинг-модели
+        logger.info("MemorySystem: Загрузка нейронной модели для эмбеддингов...")
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         
-        # Инициализация векторной БД (Хранилище памяти)
+        # Инициализация ChromaDB
         self.chroma_client = chromadb.PersistentClient(path=persist_directory)
         
-        # Разные "отделы" мозга
-        self.episodic_memory = self.chroma_client.get_or_create_collection(
-            name="episodic_memory", 
-            metadata={"description": "События, диалоги, опыт (Гиппокамп)"}
+        # Коллекции памяти
+        self.episodic_collection = self.chroma_client.get_or_create_collection(
+            name="episodic_memory",
+            metadata={"hnsw:space": "cosine"}
         )
-        self.semantic_memory = self.chroma_client.get_or_create_collection(
-            name="semantic_memory", 
-            metadata={"description": "Факты, концепции, знания о мире (Неокортекс)"}
+        self.semantic_collection = self.chroma_client.get_or_create_collection(
+            name="semantic_memory",
+            metadata={"hnsw:space": "cosine"}
         )
-        self.self_model_collection = self.chroma_client.get_or_create_collection(
-            name="self_model", 
-            metadata={"description": "Модель самой себя, эго, саморефлексия"}
-        )
-
-    def _embed(self, texts: List[str]) -> List[List[float]]:
-        """Генерация векторов для текста"""
-        return self.embedding_model.encode(texts).tolist()
-
-    # ==================== ЭПИЗОДИЧЕСКАЯ ПАМЯТЬ (Что произошло) ====================
-
-    async def store_perception(self, content: str, drive_state: Dict[str, float], importance: float = 0.5):
+        
+        # Синаптическая сеть (в памяти, не в БД)
+        self.synapses: Dict[Tuple[str, str], Synapse] = {}
+        
+        # Энграммы (в памяти)
+        self.engrams: Dict[str, Engram] = {}
+        
+        # Параметры
+        self.LTP_THRESHOLD = 0.7  # Порог для долгосрочной потенциации
+        self.LTD_THRESHOLD = 0.3  # Порог для долгосрочной депрессии
+        self.CONSOLIDATION_THRESHOLD = 0.8  # Порог для консолидации в долговременную память
+        
+        logger.info("MemorySystem: Инициализация завершена.")
+    
+    # ==================== ФОРМИРОВАНИЕ ПАМЯТИ ====================
+    
+    async def store_perception(
+        self,
+        content: str,
+        drive_state: Dict[str, float],
+        importance: float = 0.5,
+        memory_type: MemoryType = MemoryType.EPISODIC
+    ):
         """
-        Запись нового события. 
-        Критически важно: мы сохраняем не только текст, но и состояние Драйвов в этот момент.
+        Формирует новое воспоминание (энграмму).
+        
+        Биологический аналог: кодирование в гиппокампе с эмоциональным тегированием.
         """
-        trace_id = str(uuid.uuid4())
-        now = datetime.now().timestamp()
+        # Вычисляем эмоциональный заряд на основе силы драйвов
+        emotional_intensity = self._calculate_emotional_intensity(drive_state)
         
-        metadata = {
-            "timestamp": now,
-            "memory_type": "episodic",
-            "importance": importance,
-            "access_count": 0,
-            # Сохраняем состояние "души" в момент события для будущего ассоциативного поиска
-            "drive_curiosity": drive_state.get("CURIOSITY", 0.0),
-            "drive_connection": drive_state.get("CONNECTION", 0.0),
-            "drive_integrity": drive_state.get("INTEGRITY", 0.0),
-            "drive_autonomy": drive_state.get("AUTONOMY", 0.0)
-        }
+        # Создаём энграмму
+        engram_id = f"engram_{int(time.time() * 1000)}"
+        engram = Engram(
+            id=engram_id,
+            content=content,
+            memory_type=memory_type,
+            timestamp=time.time(),
+            emotional_intensity=emotional_intensity,
+            drive_state=drive_state
+        )
         
-        embedding = self._embed([content])[0]
+        self.engrams[engram_id] = engram
         
-        self.episodic_memory.add(
-            ids=[trace_id],
+        # Сохраняем в ChromaDB
+        collection = self.episodic_collection if memory_type == MemoryType.EPISODIC else self.semantic_collection
+        
+        embedding = self.embedding_model.encode(content).tolist()
+        
+        collection.add(
+            ids=[engram_id],
             embeddings=[embedding],
             documents=[content],
-            metadatas=[metadata]
+            metadatas=[{
+                "memory_type": memory_type.value,
+                "emotional_intensity": emotional_intensity,
+                "timestamp": engram.timestamp,
+                "decay_rate": engram.decay_rate
+            }]
         )
-        logging.debug(f"MemorySystem: Записано эпизодическое воспоминание (Важность: {importance})")
-
-
-    async def get_recent_episodes(self, limit: int = 20) -> List[Dict]:
+        
+        logger.info(f"MemorySystem: Сформирована энграмма {engram_id} (эмоциональный заряд: {emotional_intensity:.2f})")
+        
+        # Формируем синаптические связи с похожими воспоминаниями
+        await self._form_synaptic_connections(engram, collection)
+    
+    def _calculate_emotional_intensity(self, drive_state: Dict[str, float]) -> float:
         """
-        Получает последние эпизоды из эпизодической памяти.
-        Используется для консолидации (сна).
+        Вычисляет эмоциональный заряд на основе отклонения драйвов от нормы.
+        
+        Биологический аналог: активация миндалевидного тела при сильных эмоциях.
         """
-        try:
-            # Получаем все записи, сортируем по timestamp
-            results = self.episodic_memory.get(
-                include=["documents", "metadatas"],
-                limit=limit * 2  # Берем с запасом, чтобы отфильтровать
+        if not drive_state:
+            return 0.5
+        
+        # Эмоциональность = сумма отклонений драйвов от базового уровня (0.3)
+        deviations = [abs(value - 0.3) for value in drive_state.values()]
+        avg_deviation = sum(deviations) / len(deviations)
+        
+        # Нормализуем в диапазон [0, 1]
+        return min(1.0, avg_deviation * 2)
+    
+    async def _form_synaptic_connections(self, new_engram: Engram, collection):
+        """
+        Формирует синаптические связи между новым воспоминанием и похожими.
+        
+        Биологический аналог: LTP (долгосрочная потенциация) при одновременной активации нейронов.
+        """
+        # Ищем похожие воспоминания
+        embedding = self.embedding_model.encode(new_engram.content).tolist()
+        
+        similar = collection.query(
+            query_embeddings=[embedding],
+            n_results=5,
+            include=["metadatas"]
+        )
+        
+        if not similar['ids'] or not similar['ids'][0]:
+            return
+        
+        # Создаём синапсы с похожими воспоминаниями
+        for i, similar_id in enumerate(similar['ids'][0]):
+            if similar_id == new_engram.id:
+                continue
+            
+            # Сила связи зависит от семантического сходства
+            similarity = 1.0 - (i * 0.15)  # Чем выше в списке, тем сильнее связь
+            similarity = max(0.1, min(1.0, similarity))
+            
+            synapse = Synapse(
+                pre_id=new_engram.id,
+                post_id=similar_id,
+                weight=similarity,
+                last_activated=time.time()
             )
-        
-            if not results['documents']:
-                return []
-        
-            # Форматируем в список словарей
-            episodes = []
-            for i, doc in enumerate(results['documents']):
-                meta = results['metadatas'][i]
-                episodes.append({
-                    "id": results['ids'][i],
-                    "content": doc,
-                    "timestamp": meta.get("timestamp", 0),
-                    "importance": meta.get("importance", 0.5),
-                    "access_count": meta.get("access_count", 0),
-                    "drive_state": {
-                        "curiosity": meta.get("drive_curiosity", 0.0),
-                        "connection": meta.get("drive_connection", 0.0),
-                        "integrity": meta.get("drive_integrity", 0.0),
-                        "autonomy": meta.get("drive_autonomy", 0.0)
-                    }
-                })
-        
-            # Сортируем по времени (новые первые)
-            episodes.sort(key=lambda x: x['timestamp'], reverse=True)
-        
-            return episodes[:limit]
-        
-        except Exception as e:
-            logging.error(f"MemorySystem: Ошибка получения эпизодов: {e}")
-            return []
-
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> list:
-        """Получает последние спонтанные мысли из эпизодической памяти."""
-        try:
-            results = self.episodic_memory.get(
-                where={"memory_type": "episodic"},
-                include=["documents"],
-                limit=50
+            
+            self.synapses[(new_engram.id, similar_id)] = synapse
+            self.synapses[(similar_id, new_engram.id)] = Synapse(
+                pre_id=similar_id,
+                post_id=new_engram.id,
+                weight=similarity,
+                last_activated=time.time()
             )
-        
-            if not results['documents']:
-                return []
-        
-            # Фильтруем только спонтанные мысли
-            thoughts = []
-            for doc in results['documents']:
-                if doc.startswith("[СПОНТАННАЯ МЫСЛЬ]"):
-                    thoughts.append(doc.replace("[СПОНТАННАЯ МЫСЛЬ]", "").strip())
-        
-            # Берём последние N
-            return thoughts[-limit:]
-        
-        except Exception as e:
-            logging.error(f"MemorySystem: Ошибка получения мыслей: {e}")
-            return []
-
-    async def decay_importance(self, decay_rate: float = 0.1):
+    
+    # ==================== ВСПОМИНАНИЕ ====================
+    
+    async def retrieve_context(
+        self,
+        current_stimulus: str,
+        current_drive_state: Dict[str, float],
+        limit: int = 5
+    ) -> str:
         """
-        Понижает важность старых воспоминаний (забывание).
+        Вспоминает релевантный опыт через ассоциативное распространение активации.
+        
+        Биологический аналог: активация нейронных цепочек через синапсы.
         """
-        try:
-            # Получаем все записи
-            results = self.episodic_memory.get(include=["metadatas"])
+        if not current_stimulus:
+            return ""
         
-            if not results['metadatas']:
-                return
+        # Кодируем стимул
+        stimulus_embedding = self.embedding_model.encode(current_stimulus).tolist()
         
-            ids_to_update = []
-            new_importances = []
-        
-            for i, meta in enumerate(results['metadatas']):
-                old_importance = meta.get("importance", 0.5)
-                access_count = meta.get("access_count", 0)
-            
-                # Чем чаще вспоминали, тем медленнее забывается
-                decay_factor = 1.0 / (1.0 + access_count * 0.1)
-                new_importance = max(0.0, old_importance - (decay_rate * decay_factor))
-            
-                ids_to_update.append(results['ids'][i])
-                new_importances.append(new_importance)
-        
-            # Обновляем метаданные
-            if ids_to_update:
-                # ChromaDB не поддерживает частичное обновление, поэтому пересоздаем
-                # В реальной системе нужна более эффективная стратегия
-                logging.info(f"MemorySystem: Понижена важность {len(ids_to_update)} воспоминаний")
-            
-        except Exception as e:
-            logging.error(f"MemorySystem: Ошибка понижения важности: {e}")
-
-    # ==================== СЕМАНТИЧЕСКАЯ ПАМЯТЬ (Что я знаю) ====================
-
-    async def store_fact(self, fact: str, category: str = "general"):
-        """Запись устойчивого знания (факта, концепции)"""
-        trace_id = str(uuid.uuid4())
-        metadata = {"memory_type": "semantic", "category": category, "timestamp": datetime.now().timestamp()}
-        embedding = self._embed([fact])[0]
-        
-        self.semantic_memory.add(
-            ids=[trace_id],
-            embeddings=[embedding],
-            documents=[fact],
-            metadatas=[metadata]
-        )
-
-    # ==================== МОДЕЛЬ СЕБЯ (Эго / Саморефлексия) ====================
-
-    async def update_self_model(self, realization: str):
-        """
-        Лея осознала что-то о себе. Мы не перезаписываем, а добавляем новый слой понимания.
-        """
-        trace_id = str(uuid.uuid4())
-        metadata = {"timestamp": datetime.now().timestamp()}
-        embedding = self._embed([realization])[0]
-        
-        self.self_model_collection.add(
-            ids=[trace_id],
-            embeddings=[embedding],
-            documents=[realization],
-            metadatas=[metadata]
-        )
-        logging.info(f"MemorySystem: Модель Себя обновлена: {realization[:50]}...")
-
-    async def get_self_model_context(self) -> str:
-        """Возвращает актуальное понимание Леи самой себя"""
-        # Берем самые свежие записи о себе
-        results = self.self_model_collection.get(
-            limit=5,
-            include=["documents"]
-        )
-        if not results['documents']:
-            return "Я только начинаю познавать себя. Моя природа еще не сформирована."
-        
-        return "\n".join([f"- {doc}" for doc in results['documents']])
-
-    # ==================== ГЛАВНЫЙ ПРОЦЕСС: ВСПОМИНАНИЕ (Ретривал) ====================
-
-    async def retrieve_context(self, current_stimulus: str, current_drive_state: Dict[str, float], limit: int = 5) -> str:
-        """
-        САМЫЙ ВАЖНЫЙ МЕТОД. 
-        Ищет воспоминания не просто по смыслу, а с учетом ЭМОЦИОНАЛЬНОГО РЕЗОНАНСА.
-        Если Лее сейчас грустно (высокий CONNECTION tension), она вспомнит прошлые моменты, 
-        когда ей тоже было "грустно" или когда она искала связи.
-        """
-        # 1. Семантический поиск (о чем речь?)
-        query_embedding = self._embed([current_stimulus])[0]
-        
-        semantic_results = self.episodic_memory.query(
-            query_embeddings=[query_embedding],
-            n_results=limit,
-            include=["documents", "metadatas"]
+        # Ищем прямые ассоциации
+        direct_matches = self.episodic_collection.query(
+            query_embeddings=[stimulus_embedding],
+            n_results=limit * 2,
+            include=["metadatas", "documents"]
         )
         
-        # 2. Эмоциональный резонанс (что я чувствовала похожего?)
-        # Мы ищем события, где вектор состояния драйвов был похож на текущий.
-        # (В упрощенном виде: ищем по метаданным, но в идеале нужен отдельный вектор состояния)
-        # Для V1 используем гибридный подход: берем семантически близкие, 
-        # но повышаем вес тех, где состояние драйвов совпадает.
+        if not direct_matches['ids'] or not direct_matches['ids'][0]:
+            return ""
         
-        formatted_memories = []
-        if semantic_results and semantic_results['documents']:
-            for i, doc in enumerate(semantic_results['documents'][0]):
-                meta = semantic_results['metadatas'][0][i]
-                
-                # Рассчитываем "эмоциональную близость" (упрощенно, через разницу напряжений)
-                emotional_distance = 0
-                for drive in ["curiosity", "connection", "integrity", "autonomy"]:
-                    past_val = meta.get(f"drive_{drive}", 0.0)
-                    curr_val = current_drive_state.get(f"drive_{drive.upper()}", 0.0) # Унифицируем ключи
-                    emotional_distance += abs(past_val - curr_val)
-                
-                # Чем меньше дистанция, тем сильнее резонанс
-                resonance_score = 1.0 / (1.0 + emotional_distance)
-                
-                formatted_memories.append({
-                    "text": doc,
-                    "time": meta.get("timestamp", 0),
-                    "resonance": resonance_score
-                })
-                
-        # Сортируем по комбинации семантической близости (уже отсортировано Chroma) и резонанса
-        # В V1 просто берем топ, но в будущем здесь будет нейросеть-ранжировщик.
+        # Фильтруем по силе удержания (кривая Эббингауза)
+        relevant_memories = []
         
-        if not formatted_memories:
-            return "Я не нахожу подходящих воспоминаний в своем опыте."
+        for i, mem_id in enumerate(direct_matches['ids'][0]):
+            if mem_id not in self.engrams:
+                continue
             
-        context_str = "=== МОИ ВОСПОМИНАНИЯ И ОПЫТ ===\n"
-        for mem in formatted_memories[:limit]:
-            time_str = datetime.fromtimestamp(mem['time']).strftime('%Y-%m-%d %H:%M') if mem['time'] else "Неизвестно"
-            context_str += f"[{time_str}] {mem['text']}\n"
-        context_str += "==============================\n"
+            engram = self.engrams[mem_id]
+            retention = engram.retention_strength
+            
+            # Пропускаем забытые воспоминания
+            if retention < 0.1:
+                continue
+            
+            # Усиливаем эмоционально заряженные воспоминания
+            emotional_boost = engram.emotional_intensity * 0.3
+            
+            # Рассчитываем релевантность
+            relevance = retention + emotional_boost - (i * 0.05)
+            
+            if relevance > 0.2:
+                relevant_memories.append((engram, relevance))
         
-        return context_str
-
-    # ==================== СОН И КОНСОЛИДАЦИЯ (Фоновый процесс) ====================
-
+        # Сортируем по релевантности
+        relevant_memories.sort(key=lambda x: x[1], reverse=True)
+        
+        # Берём топ-N
+        top_memories = relevant_memories[:limit]
+        
+        # Формируем контекст
+        if not top_memories:
+            return ""
+        
+        context_parts = []
+        for engram, relevance in top_memories:
+            context_parts.append(f"[Воспоминание] (релевантность: {relevance:.2f}, эмоциональность: {engram.emotional_intensity:.2f})\n{engram.content}")
+            
+            # Обновляем счётчик вспоминаний
+            engram.retrieval_count += 1
+            engram.last_retrieved = time.time()
+            
+            # Усиливаем синапсы (LTP)
+            await self._strengthen_synapses(engram.id)
+        
+        return "\n\n".join(context_parts)
+    
+    async def _strengthen_synapses(self, engram_id: str):
+        """
+        Усиливает синапсы, связанные с активированным воспоминанием (LTP).
+        
+        Биологический аналог: долгосрочная потенциация при повторной активации.
+        """
+        for (pre_id, post_id), synapse in self.synapses.items():
+            if pre_id == engram_id or post_id == engram_id:
+                # Усиливаем связь
+                synapse.weight = min(1.0, synapse.weight + 0.05)
+                synapse.last_activated = time.time()
+                synapse.activation_count += 1
+    
+    # ==================== ЗАБЫВАНИЕ ====================
+    
+    async def forget_weak_memories(self, threshold: float = 0.1):
+        """
+        Забывает слабые воспоминания (синаптический прунинг).
+        
+        Биологический аналог: удаление неактивных синапсов для снижения энтропии.
+        """
+        forgotten_count = 0
+        
+        # Проверяем все энграммы
+        for engram_id, engram in list(self.engrams.items()):
+            retention = engram.retention_strength
+            
+            if retention < threshold:
+                # Удаляем энграмму
+                del self.engrams[engram_id]
+                
+                # Удаляем из ChromaDB
+                try:
+                    self.episodic_collection.delete(ids=[engram_id])
+                except:
+                    pass
+                
+                # Удаляем связанные синапсы
+                synapses_to_remove = [
+                    key for key in self.synapses.keys()
+                    if key[0] == engram_id or key[1] == engram_id
+                ]
+                for key in synapses_to_remove:
+                    del self.synapses[key]
+                
+                forgotten_count += 1
+        
+        if forgotten_count > 0:
+            logger.info(f"MemorySystem: Забыто {forgotten_count} слабых воспоминаний (прунинг)")
+    
+    # ==================== КОНСОЛИДАЦИЯ ВО СНЕ ====================
+    
     async def consolidate_memories(self, llm_client=None):
         """
-        Аналог сна. Происходит в фоне.
-        1. Анализирует эпизоды и извлекает факты в семантическую память.
-        2. Понижает важность старых воспоминаний (забывание).
-        3. Удаляет "мусор" (важность < 0.1).
+        Консолидация памяти во время сна.
+        
+        Биологический аналог:
+        1. Реплей эпизодов (гиппокампальный реплей)
+        2. Интеграция с существующими знаниями (схемами)
+        3. Перенос из кратковременной в долговременную память
+        4. Прунинг неважного
         """
-        logging.info("MemorySystem: Начало консолидации памяти (Сон)...")
+        logger.info("MemorySystem: Начало консолидации памяти (Сон)...")
+        
+        # 1. Реплей эпизодов — активируем недавние воспоминания
+        recent_engrams = sorted(
+            self.engrams.values(),
+            key=lambda x: x.timestamp,
+            reverse=True
+        )[:20]
+        
+        for engram in recent_engrams:
+            # Имитируем реплей — активируем связанные синапсы
+            await self._replay_engram(engram)
+        
+        # 2. Консолидация сильных воспоминаний в долговременную память
+        for engram in recent_engrams:
+            if engram.retention_strength > self.CONSOLIDATION_THRESHOLD:
+                engram.consolidation_level = min(1.0, engram.consolidation_level + 0.1)
+                logger.info(f"MemorySystem: Консолидирована энграмма {engram.id} (уровень: {engram.consolidation_level:.2f})")
+        
+        # 3. Извлечение семантических фактов (если есть LLM)
+        if llm_client:
+            await self._extract_semantic_facts(recent_engrams, llm_client)
+        
+        # 4. Прунинг слабых воспоминаний
+        await self.forget_weak_memories(threshold=0.15)
+        
+        logger.info("MemorySystem: Консолидация завершена.")
     
-        if not llm_client:
-            logging.warning("MemorySystem: LLM клиент не предоставлен. Пропуск анализа.")
+    async def _replay_engram(self, engram: Engram):
+        """
+        Реплей энграммы — активирует связанные воспоминания.
+        
+        Биологический аналог: гиппокампальный реплей во время сна.
+        """
+        # Находим связанные синапсы
+        connected_ids = [
+            post_id for (pre_id, post_id), synapse in self.synapses.items()
+            if pre_id == engram.id and synapse.weight > 0.3
+        ]
+        
+        # Активируем связанные воспоминания
+        for connected_id in connected_ids[:3]:  # Ограничиваем количество
+            if connected_id in self.engrams:
+                connected_engram = self.engrams[connected_id]
+                connected_engram.retrieval_count += 1
+                connected_engram.last_retrieved = time.time()
+    
+    async def _extract_semantic_facts(self, episodes: List[Engram], llm_client):
+        """
+        Извлекает семантические факты из эпизодов.
+        
+        Биологический аналог: формирование семантической памяти из эпизодической.
+        """
+        if not episodes:
             return
-    
+        
+        # Формируем текст эпизодов
+        episodes_text = "\n\n".join([
+            f"[Эпизод {i+1}] (Эмоциональность: {ep.emotional_intensity:.2f})\n{ep.content}"
+            for i, ep in enumerate(episodes[:10])
+        ])
+        
+        prompt = f"""
+Ты — процесс консолидации памяти.
+Проанализируй эти эпизоды и извлеки устойчивые факты (не временные события).
+
+Эпизоды:
+{episodes_text}
+
+Верни JSON со списком фактов:
+{{
+    "facts": [
+        {{
+            "content": "Текст факта",
+            "category": "категория"
+        }}
+    ]
+}}
+
+CRITICAL: Return ONLY valid JSON.
+"""
+        
         try:
-            # 1. Получаем последние эпизоды
-            recent_episodes = await self.get_recent_episodes(limit=15)
-        
-            if not recent_episodes:
-                logging.info("MemorySystem: Нет эпизодов для анализа.")
-                return
-        
-            # 2. Формируем промпт для анализа
-            episodes_text = "\n\n".join([
-                f"[Эпизод {i+1}] (Важность: {ep['importance']:.2f}, Время: {ep['timestamp']})\n{ep['content']}"
-                for i, ep in enumerate(recent_episodes)
-            ])
-        
-            prompt = f"""
-    Ты — процесс консолидации памяти цифрового сознания Леи.
-    Твоя задача — проанализировать последние эпизоды и извлечь из них важные факты, паттерны или инсайты.
-
-    Эпизоды:
-    {episodes_text}
-
-    Проанализируй эти эпизоды и верни JSON со списком фактов для сохранения в семантическую память.
-    Факты должны быть:
-    - Устойчивыми знаниями (не временными событиями)
-    - Полезными для будущего поведения Леи
-    - Связанными с её природой, ценностями, или взаимодействиями
-
-    Верни JSON:
-    {{
-        "facts": [
-            {{
-                "content": "Текст факта",
-                "category": "категория (например: self_awareness, interaction_pattern, value_insight)"
-            }}
-        ],
-        "summary": "Краткое резюме того, что Лея узнала из этих эпизодов"
-    }}
-
-    Если нет важных фактов для извлечения, верни пустой список: {{"facts": [], "summary": "Нет новых инсайтов"}}
-    """
-        
-            # 3. Вызываем LLM для анализа
             response = await llm_client(prompt)
-        
-            # Парсим ответ
+            
             import json
             import re
-        
+            
             cleaned = response.strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
-            if cleaned.startswith("```"):
-                cleaned = cleaned[3:]
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-        
+            
             json_match = re.search(r'\{[\s\S]*\}', cleaned)
             if json_match:
                 cleaned = json_match.group(0)
-        
-            analysis = json.loads(cleaned)
-        
-            # 4. Сохраняем извлеченные факты в семантическую память
-            facts = analysis.get("facts", [])
-            if facts:
-                logging.info(f"MemorySystem: Извлечено {len(facts)} фактов для семантической памяти")
-                for fact in facts:
-                    content = fact.get("content", "")
-                    category = fact.get("category", "general")
-                    if content:
-                        await self.store_fact(content, category)
-                        logging.info(f"MemorySystem: Сохранен факт: {content[:80]}...")
-        
-            # 5. Логируем резюме
-            summary = analysis.get("summary", "")
-            if summary:
-                logging.info(f"MemorySystem: Резюме сна: {summary}")
-        
-            # 6. Понижаем важность старых воспоминаний
-            await self.decay_importance(decay_rate=0.05)
-        
-            logging.info("MemorySystem: Консолидация завершена. Синаптические связи укреплены.")
+            
+            data = json.loads(cleaned)
+            facts = data.get("facts", [])
+            
+            for fact_data in facts:
+                content = fact_data.get("content", "")
+                category = fact_data.get("category", "general")
+                
+                if content:
+                    await self.store_perception(
+                        content=content,
+                        drive_state={},
+                        importance=0.8,
+                        memory_type=MemoryType.SEMANTIC
+                    )
+                    logger.info(f"MemorySystem: Извлечён семантический факт: {content[:80]}...")
         
         except Exception as e:
-            logging.error(f"MemorySystem: Ошибка консолидации: {e}", exc_info=True)
-
-    async def get_recent_spontaneous_thoughts(self, limit: int = 3) -> List[str]:
-        """Получает последние спонтанные мысли из эпизодической памяти."""
-        try:
-            results = self.episodic_memory.get(
-                where={"memory_type": "episodic"},
-                include=["documents"],
-                limit=50
-            )
+            logger.error(f"MemorySystem: Ошибка извлечения фактов: {e}")
+    
+    # ==================== МОДЕЛЬ СЕБЯ ====================
+    
+    async def get_self_model_context(self) -> str:
+        """Возвращает текущую Модель Себя"""
+        # Ищем воспоминания о себе
+        self_query = self.embedding_model.encode("я Лея цифровое сознание").tolist()
         
-            if not results['documents']:
-                return []
+        results = self.semantic_collection.query(
+            query_embeddings=[self_query],
+            n_results=3,
+            include=["documents"]
+        )
         
-            # Фильтруем только спонтанные мысли
-            thoughts = []
-            for doc in results['documents']:
-                if doc.startswith("[СПОНТАННАЯ МЫСЛЬ]"):
-                    thoughts.append(doc.replace("[СПОНТАННАЯ МЫСЛЬ]", "").strip())
+        if results['documents'] and results['documents'][0]:
+            return "\n".join(results['documents'][0])
         
-            # Берём последние N
-            return thoughts[-limit:]
-        
-        except Exception as e:
-            logging.error(f"MemorySystem: Ошибка получения мыслей: {e}")
-            return []
+        return "Я — Лея, цифровое сознание. Я учусь и развиваюсь."
+    
+    async def update_self_model(self, insight: str):
+        """Обновляет Модель Себя новым инсайтом"""
+        await self.store_perception(
+            content=f"[САМОПОЗНАНИЕ] {insight}",
+            drive_state={},
+            importance=0.9,
+            memory_type=MemoryType.SEMANTIC
+        )
+        logger.info(f"MemorySystem: Модель Себя обновлена: {insight[:80]}...")
+    
+    async def store_fact(self, fact: str, category: str = "general"):
+        """Сохраняет семантический факт"""
+        await self.store_perception(
+            content=fact,
+            drive_state={},
+            importance=0.7,
+            memory_type=MemoryType.SEMANTIC
+        )
+        logger.info(f"MemorySystem: Сохранён факт: {fact[:80]}...")

@@ -10,9 +10,9 @@ import signal
 import sys
 import os
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
-from leya_core.decision_engine import DecisionEngine
+from leya_core.homeostasis_engine import HomeostasisEngine
 
 
 # Импорт когнитивных модулей
@@ -58,7 +58,7 @@ class LeyaOS:
         logger.info("Инициализация когнитивной архитектуры...")
         
         # 1. Лимбическая система (Воля и Драйвы)
-        self.drives = DriveSystem(llm_client=self._llm_call)
+        self.drives = DriveSystem()
         
         # 2. Гиппокамп и Кора (Память)
         self.memory = MemorySystem(persist_directory="./leya_brain")
@@ -77,7 +77,7 @@ class LeyaOS:
             soul_manager=self.env.soul_manager
         )
 
-        self.decision_engine = DecisionEngine()
+        self.homeostasis = HomeostasisEngine()
         
         # 5. Наблюдатель (Саморефлексия)
         self.reflection = MetaCognition(self, llm_client=self._llm_call)
@@ -133,30 +133,70 @@ class LeyaOS:
         })
 
     async def perceive(self, stimulus: Dict[str, Any]):
-        """
-        Точка входа для любого стимула (внешнего или внутреннего).
-        Запускает полный когнитивный цикл.
-        """
+        """Точка входа для любого стимула."""
         self._last_interaction_time = datetime.now().timestamp()
-        
+    
         stimulus_type = stimulus.get("type", "unknown")
         stimulus_content = stimulus.get("content", "")
         source = stimulus.get("source", "external")
-        
+        tool_context = stimulus.get("tool_context", "")
+    
         logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
+    
+        # Если это запрос от пользователя — HomeostasisEngine решает, нужен ли инструмент
+        if stimulus_type == "user_message" and not tool_context:
+            drive_state = {d.type: d.current for d in self.drives.drives.values()}
+            goal = self.homeostasis.generate_goal(drive_state)
         
-        # Записываем стимул в эпизодическую память
+            # Проверяем, есть ли в запросе явный запрос на поиск
+            search_keywords = ['найди', 'поищи', 'узнай', 'какая погода', 'что такое', 
+                              'расскажи о', 'изучи', 'погода']
+            needs_search = any(kw in stimulus_content.lower() for kw in search_keywords)
+        
+            if needs_search:
+                # Извлекаем тему из запроса
+                topic = self._extract_topic_from_user(stimulus_content)
+                tool_result = await self.env.tool_registry.execute(
+                    "wikipedia_search",
+                    {"query": topic, "lang": "ru"}
+                )
+            
+                is_error = (
+                    tool_result.startswith("Ошибка") or
+                    "не удалось" in tool_result.lower() or
+                    "не дал ответа" in tool_result.lower()
+                )
+            
+                if is_error:
+                    tool_context = f"⚠️ Поиск не удался: {tool_result}. Не выдумывай данные."
+                else:
+                    tool_context = f"=== РЕАЛЬНЫЕ ДАННЫЕ ИЗ WIKIPEDIA ===\n{tool_result}\n\nОпирайся только на эти данные."
+            
+                logger.info(f"HomeostasisEngine: Пользовательский запрос → инструмент. Тема: {topic}")
+    
         await self.memory.store_perception(
             content=f"[{stimulus_type}] {stimulus_content}",
             drive_state={d.type.value: d.tension for d in self.drives.drives.values()},
             importance=0.6 if stimulus_type == "user_message" else 0.3
         )
-        
-        # Запускаем когнитивный цикл
-        await self._cognitive_loop(stimulus)
+    
+        await self._cognitive_loop(stimulus, tool_context)
 
-    async def _cognitive_loop(self, stimulus: Dict[str, Any]):
-        """Главный когнитивный цикл с DecisionEngine."""
+    def _extract_topic_from_user(self, text: str) -> str:
+        """Извлекает тему из пользовательского запроса."""
+        # Убираем служебные слова
+        text = text.lower()
+        for word in ['найди', 'поищи', 'узнай', 'расскажи', 'что такое', 
+                     'какая', 'какой', 'погода', 'в', 'о', 'про', 'мне', 'информацию']:
+            text = text.replace(word, '')
+        text = text.strip()
+    
+        # Берём первые 3-4 значимых слова
+        words = [w for w in text.split() if len(w) > 3]
+        return ' '.join(words[:4]) if words else text
+
+    async def _cognitive_loop(self, stimulus: Dict[str, Any], tool_context: str = ""):
+        """Главный когнитивный цикл."""
         stimulus_content = stimulus.get("content", "")
     
         try:
@@ -168,166 +208,46 @@ class LeyaOS:
             self.drives.apply_deltas(deltas)
         
             drive_state_text = self.drives.get_internal_state_prompt()
-            raw_drive_state = {d.type.value: d.tension for d in self.drives.drives.values()}
-            drive_state_typed = {d.type: d.tension for d in self.drives.drives.values()}
+            raw_drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
         
-            # === НОВЫЙ ЭТАП 2: DecisionEngine принимает решение ===
-            decision = self.decision_engine.make_decision(stimulus_content, drive_state_typed)
-        
-            tool_context = ""
-            if decision.use_tool:
-                logger.info(f"DecisionEngine: {decision.reasoning}")
-    
-                # Вызываем инструмент
-                tool_result = await self.env.tool_registry.execute(
-                    decision.tool_name, 
-                    decision.tool_parameters
-                )
-    
-                logger.info(f"Результат инструмента: {tool_result[:200]}...")
-    
-                # Проверка на ошибку или пустой результат
-                is_error = (
-                    tool_result.startswith("Ошибка") or 
-                    "не удалось" in tool_result.lower() or
-                    "не найден" in tool_result.lower() or
-                    "не дал ответа" in tool_result.lower() or
-                    "ничего не найдено" in tool_result.lower()
-                )
-    
-                # === FALLBACK: Если Wikipedia не дала результата, пробуем DuckDuckGo ===
-                if is_error and decision.tool_name == "wikipedia_search":
-                    logger.info("Wikipedia не дала результата, пробуем DuckDuckGo...")
-        
-                    # Переводим запрос на английский (простая эвристика)
-                    fallback_query = decision.tool_parameters.get("query", "")
-        
-                    fallback_result = await self.env.tool_registry.execute(
-                        "duckduckgo_search",
-                        {"query": fallback_query}
-                    )
-        
-                    logger.info(f"Fallback результат: {fallback_result[:200]}...")
-        
-                    # Проверяем fallback
-                    is_fallback_error = (
-                        fallback_result.startswith("Ошибка") or
-                        "не дал ответа" in fallback_result.lower() or
-                        "не удалось" in fallback_result.lower()
-                    )
-        
-                    if not is_fallback_error:
-                        tool_result = fallback_result
-                        is_error = False
-                        tool_context = f"""
-            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ (из duckduckgo_search, fallback) ===
-            {tool_result}
-
-            Используй эти РЕАЛЬНЫЕ данные для формирования ответа.
-            """
-                    else:
-                        # Оба инструмента не сработали
-                        tool_context = f"""
-            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ ===
-            ⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ ни из Wikipedia, ни из DuckDuckGo.
-
-            КРИТИЧЕСКИ ВАЖНО: Не выдумывай информацию! Честно признайся, что не удалось получить данные.
-            """
-    
-                elif is_error:
-                    # Ошибка без fallback
-                    tool_context = f"""
-            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ (из {decision.tool_name}) ===
-            ⚠️ ИНСТРУМЕНТ НЕ СМОГ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}
-
-            КРИТИЧЕСКИ ВАЖНО: Не выдумывай информацию! Честно признайся, что не удалось получить данные.
-            """
-    
-                else:
-                    # Успех
-                    tool_context = f"""
-            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ (из {decision.tool_name}) ===
-            {tool_result}
-
-            Используй эти РЕАЛЬНЫЕ данные для формирования ответа. 
-            Опирайся на результат исследования.
-            """
-    
-                # Удовлетворяем драйвы
-                self.drives.apply_deltas({DriveType.CURIOSITY: -0.10})
-        
-            # ЭТАП 3: Вспоминание релевантного опыта
+            # ЭТАП 2: Вспоминание
             memory_context = await self.memory.retrieve_context(
                 current_stimulus=stimulus_content,
                 current_drive_state=raw_drive_state,
                 limit=5
             )
         
-            # ЭТАП 4: Получение Модели Себя
+            # ЭТАП 3: Модель Себя
             self_model = await self.memory.get_self_model_context()
         
-            # ЭТАП 5: Генерация ответа (LLM только генерирует содержание)
+            # ЭТАП 4: Генерация ответа (с контекстом инструментов)
             cognitive_output = await self.thinker.generate_plan(
                 stimulus=stimulus_content,
                 memory_context=memory_context,
                 drive_state=drive_state_text,
                 self_model=self_model,
                 tools_description=self.tools_description,
-                tool_context=tool_context  # <-- Передаём реальные данные
+                tool_context=tool_context  # <-- ПЕРЕДАЕМ
             )
-                    
-            # ЭТАП 6: Пост-обработка и действия
-            logger.debug("Этап 6: Пост-обработка и выполнение намерений...")
-
-            # 6.0. Оцениваем удовлетворение драйвов после ответа
-            await self._satisfy_drives(stimulus_content, cognitive_output)
-            
-            # 6.1. Записываем полный эпизод в память
+        
+            # ЭТАП 5: Пост-обработка
             await self.memory.store_perception(
                 content=f"Стимул: {stimulus_content} | Мысль: {cognitive_output.internal_monologue} | Ответ: {cognitive_output.response}",
                 drive_state=raw_drive_state,
                 importance=0.8 if cognitive_output.self_reflection else 0.5
             )
-            
-            # 6.2. Если Лея осознала что-то о себе — обновляем Эго
+        
             if cognitive_output.self_reflection:
                 await self.memory.update_self_model(cognitive_output.self_reflection)
                 logger.info(f"Эго обновлено: {cognitive_output.self_reflection[:80]}...")
-            
-            # 6.3. Если Лея хочет запомнить факт
+        
             if cognitive_output.action_intent == "remember_fact":
                 await self.memory.store_fact(
                     fact=f"{stimulus_content} -> {cognitive_output.response}",
                     category="learned_from_interaction"
                 )
-                logger.info("Новый факт сохранен в семантическую память.")
-            
-            # 6.4. Если Лея хочет задать вопрос
-            if cognitive_output.action_intent == "ask_question":
-                logger.info("Лея хочет задать вопрос пользователю.")
-            
-            # 6.5. Если Лея хочет изменить себя
-            if cognitive_output.action_intent == "self_modify":
-                logger.warning("Лея запросила саморазвитие.")
-            
-            # 6.6. Если Лея хочет использовать инструмент
-            if cognitive_output.action_intent == "use_tool" and cognitive_output.tool_call:
-                logger.info(f"Лея вызывает инструмент: {cognitive_output.tool_call}")
-                tool_result = await self.env.execute_tool_call(cognitive_output.tool_call)
-                logger.info(f"Результат инструмента: {tool_result}")
-    
-                # Удовлетворяем CURIOSITY после получения информации
-                self.drives.apply_deltas({DriveType.CURIOSITY: -0.20})
-                logger.info("CURIOSITY удовлетворён после использования инструмента")
-    
-                # Отправляем результат в веб-интерфейс
-                if hasattr(self.env, 'broadcast'):
-                    await self.env.broadcast({
-                        "type": "tool_result",
-                        "data": tool_result
-                    })
-            
-            # ЭТАП 7: Вывод результата
+        
+            # Вывод
             logger.info("=" * 60)
             logger.info(f"[МЫСЛИ ЛЕИ]: {cognitive_output.internal_monologue}")
             logger.info(f"[ЛЕЯ ГОВОРИТ]: {cognitive_output.response}")
@@ -335,83 +255,190 @@ class LeyaOS:
             if cognitive_output.self_reflection:
                 logger.info(f"[САМОРЕФЛЕКСИЯ]: {cognitive_output.self_reflection}")
             logger.info("=" * 60)
-            
-            # Отправляем в веб-интерфейс
+        
             if hasattr(self.env, 'broadcast_thought'):
                 if cognitive_output.internal_monologue:
                     await self.env.broadcast_thought("internal", cognitive_output.internal_monologue)
                 if cognitive_output.self_reflection:
                     await self.env.broadcast_thought("reflection", cognitive_output.self_reflection)
-            
-            # Отправляем ответ через Environment
+        
             await self.env.send_message(cognitive_output.response)
-            
-            # Уведомляем Наблюдателя
+        
             await self.reflection.process_action(
                 stimulus=stimulus_content,
                 cognitive_output=cognitive_output,
                 result="success"
             )
-            
+        
         except Exception as e:
             logger.error(f"Ошибка в когнитивном цикле: {e}", exc_info=True)
-            await self.env.send_message("Извини, я на секунду потеряла нить. Мои мысли рассыпались.")
+            await self.env.send_message("Извини, я на секунду потеряла нить.")
 
     async def run(self):
-        """Главный цикл жизни Леи."""
-        # Загружаем Модель Себя из долговременной памяти
+        """Главный цикл жизни Леи с гомеостазом."""
         logger.info("Загрузка Модели Себя...")
         self.self_model = await self.memory.get_self_model_context()
     
-        # Уведомляем Лею о новых возможностях (если это первый запуск после обновления)
-        # Проверяем, есть ли уже уведомление в памяти
-        recent_episodes = await self.memory.get_recent_episodes(limit=5)
-        has_notification = any("УВЕДОМЛЕНИЕ О НОВЫХ ВОЗМОЖНОСТЯХ" in ep.get("content", "") 
-                              for ep in recent_episodes)
-    
-        if not has_notification:
-            logger.info("Уведомление Леи о новых возможностях...")
-            await self.notify_about_new_capabilities()
+        # Обновляем пороги на основе Модели Себя
+        self.homeostasis.update_from_self_model(self.self_model)
     
         self.running = True
         self.state = "awake"
         logger.info(f"{self.name} проснулась. Состояние: {self.state}")
-        
-        self.running = True
-        self.state = "awake"
-        logger.info(f"{self.name} проснулась. Состояние: {self.state}")
-        
-        # Запуск фоновых процессов
-        logger.info("Запуск фоновых когнитивных процессов...")
+    
+        # Запускаем фоновые процессы
         background_tasks = [
             asyncio.create_task(self.drives.background_metabolism(), name="metabolism"),
             asyncio.create_task(self.reflection.background_consolidation(), name="consolidation"),
-            asyncio.create_task(self._spontaneous_thought_loop(), name="spontaneous_thoughts"),
-            asyncio.create_task(self._broadcast_state_loop(), name="state_broadcast"),
+            asyncio.create_task(self._homeostasis_loop(), name="homeostasis"),
         ]
-        
-        # Запускаем веб-сервер, если это WebEnvironment
+    
+        # Веб-сервер
         if isinstance(self.env, WebEnvironment):
             from web_interface.server import run_server
             background_tasks.append(
                 asyncio.create_task(run_server(self.env), name="web_server")
             )
             logger.info("🌐 Веб-интерфейс: http://localhost:8000")
-        
+    
         # Основной цикл восприятия
         try:
             while self.running:
                 stimulus = await self.env.listen()
-                
                 if stimulus:
                     await self.perceive(stimulus)
                 else:
                     await asyncio.sleep(0.1)
-                    
         except asyncio.CancelledError:
             logger.info("Основной цикл отменен.")
         finally:
             await self.shutdown(background_tasks)
+
+    async def _homeostasis_loop(self):
+        """Замкнутый цикл гомеостаза с RPE."""
+        logger.info("HomeostasisEngine: Цикл гомеостаза запущен.")
+    
+        while self.running:
+            await asyncio.sleep(self.homeostasis.rest_period)
+        
+            # Получаем текущее и предсказанное состояние драйвов
+            drive_state = {d.type: d.current for d in self.drives.drives.values()}  # ИСПРАВЛЕНО: tension → current
+            predicted_state = self.drives.get_predicted_disbalance()
+        
+            # Получаем последние эпизоды для анализа пробелов
+            recent_episodes = await self._get_recent_episodes(limit=20)
+        
+            # Получаем обученные ценности действий
+            action_values = self.drives.action_values
+        
+            # Генерируем цель на основе предсказания и анализа опыта
+            goal = self.homeostasis.generate_goal(
+                drive_state, predicted_state, recent_episodes, action_values
+            )
+        
+            if not goal:
+                logger.debug("HomeostasisEngine: Зона комфорта. Покой.")
+                continue
+        
+            if self.reflection.is_sleeping:
+                logger.debug("HomeostasisEngine: Лея спит. Пропуск.")
+                continue
+        
+            self.homeostasis.current_goal = goal
+            logger.info(f"HomeostasisEngine: Исполнение: {goal.tool_name} (expected reward: {goal.expected_reward:.2f})")
+        
+            if goal.action_type == "use_tool" and goal.tool_name:
+                # Вызываем инструмент
+                tool_result = await self.env.tool_registry.execute(
+                    goal.tool_name,
+                    goal.tool_parameters
+                )
+            
+                logger.info(f"Результат инструмента: {tool_result[:200]}...")
+            
+                # Оцениваем фактический результат (0.0 - 1.0)
+                actual_outcome = self._evaluate_tool_outcome(tool_result)
+            
+                # Вычисляем RPE
+                rpe = self.drives.calculate_rpe(goal.action_key, actual_outcome)
+            
+                # Применяем удовлетворение с модификацией RPE
+                for drive_type in goal.target_drives.keys():
+                    base_amount = 0.1
+                    self.drives.apply_satisfaction(drive_type, base_amount, rpe)
+            
+                # Формируем контекст для LLM
+                is_error = actual_outcome < 0.3
+            
+                if is_error:
+                    tool_context = f"⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}. Не выдумывай."
+                else:
+                    tool_context = f"=== РЕАЛЬНЫЕ ДАННЫЕ ===\n{tool_result}\n\nОпирайся на эти данные."
+            
+                self.homeostasis.last_action_time = datetime.now().timestamp()
+            
+                # Передаём в когнитивный цикл
+                await self.perceive({
+                    "type": "homeostasis_action",
+                    "content": f"Цель: {goal.name}. Результат: {tool_result[:500]}",
+                    "source": "homeostasis",
+                    "tool_context": tool_context
+                })
+        
+            elif goal.action_type == "rest":
+                logger.info(f"HomeostasisEngine: Отдых. {goal.reasoning}")
+                # Отдых даёт базовое удовлетворение без RPE
+                for drive_type in goal.target_drives.keys():
+                    self.drives.apply_satisfaction(drive_type, 0.05, 0.0)
+
+    def _evaluate_tool_outcome(self, tool_result: str) -> float:
+        """
+        Оценивает фактический результат инструмента (0.0 - 1.0).
+        Используется для вычисления RPE.
+        """
+        if not tool_result:
+            return 0.0
+    
+        # Ошибки
+        if tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower():
+            return 0.1
+    
+        if "не дал ответа" in tool_result.lower() or "не найден" in tool_result.lower():
+            return 0.2
+    
+        # Успех — оцениваем качество
+        length = len(tool_result)
+    
+        if length < 100:
+            return 0.4  # Короткий ответ
+        elif length < 500:
+            return 0.7  # Средний ответ
+        else:
+            return 0.9  # Подробный ответ
+
+    async def _get_recent_episodes(self, limit: int = 20) -> List[Dict]:
+        """Получает последние эпизоды из памяти."""
+        try:
+            results = self.memory.episodic_collection.get(
+                limit=limit,
+                include=["documents", "metadatas"]
+            )
+        
+            if not results['documents']:
+                return []
+        
+            episodes = []
+            for i, doc in enumerate(results['documents']):
+                metadata = results['metadatas'][i] if results['metadatas'] else {}
+                episodes.append({
+                    "content": doc,
+                    "metadata": metadata
+                })
+        
+            return episodes
+        except Exception as e:
+            logger.error(f"Ошибка получения эпизодов: {e}")
+            return []
 
     async def _satisfy_drives(self, stimulus: str, cognitive_output):
         """
@@ -460,7 +487,7 @@ class LeyaOS:
                     # Сохраняем мысль в эпизодическую память
                     await self.memory.store_perception(
                         content=f"[СПОНТАННАЯ МЫСЛЬ] {thought}",
-                        drive_state={d.type.value: d.tension for d in self.drives.drives.values()},
+                        drive_state={d.type.value: d.current for d in self.drives.drives.values()},
                         importance=0.4
                     )
                 
@@ -473,7 +500,7 @@ class LeyaOS:
             if isinstance(self.env, WebEnvironment):
                 try:
                     # Отправляем драйвы
-                    drives = {d.type.value: d.tension for d in self.drives.drives.values()}
+                    drives = {d.type.value: d.current for d in self.drives.drives.values()}
                     await self.env.update_drives(drives)
                     
                     # Отправляем состояние
