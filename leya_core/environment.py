@@ -300,7 +300,7 @@ class Environment(ABC):
             handler=github_readme
         ))
 
-        aasync def github_search_repos(**kwargs) -> str:
+        async def github_search_repos(**kwargs) -> str:
             """Поиск репозиториев на GitHub."""
             try:
                 query = kwargs.get("query", "")
