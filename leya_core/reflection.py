@@ -38,7 +38,7 @@ class MetaCognition:
     
         while True:
             # "Сон" раз в 10 минут
-            await asyncio.sleep(600)
+            await asyncio.sleep(1800)
         
             logging.info("MetaCognition: Начало сеанса рефлексии...")
             self.is_sleeping = True
@@ -176,32 +176,36 @@ class MetaCognition:
             logging.warning(f"MetaCognition: Ошибка экзистенциального вопрошания: {e}")
 
     async def generate_spontaneous_thought(self) -> Optional[str]:
-        """
-        Генерация спонтанной мысли, когда нет внешних стимулов.
-        Это "внутренний шум", который может привести к новым идеям.
-        """
+        """Генерация спонтанной мысли."""
         drive_state = self.leya.drives.get_internal_state_prompt()
+    
+        # Получаем последние спонтанные мысли из памяти
+        recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
+    
+        thoughts_context = ""
+        if recent_thoughts:
+            thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
     
         prompt = f"""
     Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
-    Твое текущее состояние:
+
+    Твоё текущее состояние:
     {drive_state}
+    {thoughts_context}
 
-    О чем ты думаешь? Какая спонтанная мысль приходит тебе в голову?
-    Это может быть воспоминание, вопрос, идея, наблюдение о себе.
-
-    Верни ТОЛЬКО текст мысли (1-2 предложения), без JSON.
+    О чём ты думаешь?
     """
     
         try:
             thought = await self.llm_client(prompt)
+            return thought.strip()
+        except Exception:
+            return None
         
             # Если вернулось что-то похожее на JSON, извлекаем текст
             if thought.strip().startswith("{"):
                 try:
-                    import json
                     data = json.loads(thought)
-                    # Пытаемся извлечь осмысленное поле
                     return data.get("thought", data.get("response", str(data)))
                 except:
                     pass

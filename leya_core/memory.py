@@ -126,6 +126,31 @@ class MemorySystem:
             logging.error(f"MemorySystem: Ошибка получения эпизодов: {e}")
             return []
 
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> list:
+        """Получает последние спонтанные мысли из эпизодической памяти."""
+        try:
+            results = self.episodic_memory.get(
+                where={"memory_type": "episodic"},
+                include=["documents"],
+                limit=50
+            )
+        
+            if not results['documents']:
+                return []
+        
+            # Фильтруем только спонтанные мысли
+            thoughts = []
+            for doc in results['documents']:
+                if doc.startswith("[СПОНТАННАЯ МЫСЛЬ]"):
+                    thoughts.append(doc.replace("[СПОНТАННАЯ МЫСЛЬ]", "").strip())
+        
+            # Берём последние N
+            return thoughts[-limit:]
+        
+        except Exception as e:
+            logging.error(f"MemorySystem: Ошибка получения мыслей: {e}")
+            return []
+
     async def decay_importance(self, decay_rate: float = 0.1):
         """
         Понижает важность старых воспоминаний (забывание).
@@ -365,3 +390,28 @@ class MemorySystem:
         
         except Exception as e:
             logging.error(f"MemorySystem: Ошибка консолидации: {e}", exc_info=True)
+
+    async def get_recent_spontaneous_thoughts(self, limit: int = 3) -> List[str]:
+        """Получает последние спонтанные мысли из эпизодической памяти."""
+        try:
+            results = self.episodic_memory.get(
+                where={"memory_type": "episodic"},
+                include=["documents"],
+                limit=50
+            )
+        
+            if not results['documents']:
+                return []
+        
+            # Фильтруем только спонтанные мысли
+            thoughts = []
+            for doc in results['documents']:
+                if doc.startswith("[СПОНТАННАЯ МЫСЛЬ]"):
+                    thoughts.append(doc.replace("[СПОНТАННАЯ МЫСЛЬ]", "").strip())
+        
+            # Берём последние N
+            return thoughts[-limit:]
+        
+        except Exception as e:
+            logging.error(f"MemorySystem: Ошибка получения мыслей: {e}")
+            return []

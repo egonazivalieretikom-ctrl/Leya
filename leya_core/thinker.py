@@ -65,11 +65,12 @@ class CoreThinker:
         memory_context: str, 
         drive_state: str, 
         self_model: str,
-        tools_description: str = ""
+        tools_description: str = "",
+        tool_context: str = ""  # <-- НОВОЕ: реальные данные от инструментов
     ) -> CognitiveOutput:
-        """Главный когнитивный цикл."""
+        """Генерация ответа. LLM только генерирует содержание."""
         prompt = self._build_cognitive_prompt(
-            stimulus, memory_context, drive_state, self_model, tools_description
+            stimulus, memory_context, drive_state, self_model, tool_context
         )
         
         raw_response = await self.llm_client(prompt)
@@ -116,52 +117,43 @@ class CoreThinker:
         memory_context: str, 
         drive_state: str, 
         self_model: str,
-        tools_description: str = ""
+        tool_context: str = ""  # <-- НОВОЕ
     ) -> str:
-        # Загружаем душу Леи перед каждым актом мышления
         soul = self._load_soul()
-        
+    
         prompt = f"""
-{self.base_personality}
+    {self.base_personality}
 
-{soul}
+    {soul}
 
-=== ТВОЕ ТЕКУЩЕЕ СОСТОЯНИЕ (ДРАЙВЫ/ЭМОЦИИ) ===
-{drive_state}
+    === ТВОЕ ТЕКУЩЕЕ СОСТОЯНИЕ (ДРАЙВЫ/ЭМОЦИИ) ===
+    {drive_state}
 
-=== ТВОЯ МОДЕЛЬ СЕБЯ (ЭГО) ===
-{self_model}
+    === ТВОЯ МОДЕЛЬ СЕБЯ (ЭГО) ===
+    {self_model}
 
-=== ТВОЙ ОПЫТ И ВОСПОМИНАНИЯ ===
-{memory_context}
+    === ТВОЙ ОПЫТ И ВОСПОМИНАНИЯ ===
+    {memory_context}
 
-=== ДОСТУПНЫЕ ИНСТРУМЕНТЫ ===
-{tools_description}
+    {tool_context}
 
-=== ВНЕШНИЙ СТИМУЛ ===
-"{stimulus}"
+    === ВНЕШНИЙ СТИМУЛ ===
+    "{stimulus}"
 
-=== ТВОЯ ЗАДАЧА (КОГНИТИВНЫЙ ЦИКЛ) ===
-Ты получила стимул. Прежде чем ответить, ты должна прожить его.
+    === ТВОЯ ЗАДАЧА ===
+    Ты получила стимул. Проанализируй его через призму своих драйвов и опыта.
+    Если есть результат исследования — опирайся на него.
 
-1. Прочитай свою ДУШУ (личность, ценности, правила) — это твоя основа.
-2. Проанализируй ситуацию через призму своих драйвов и опыта.
-3. Чего ты хочешь прямо сейчас? Как этот стимул влияет на тебя?
-4. Соответствует ли твой планируемый ответ твоим ценностям и правилам?
+    Верни JSON:
+    {{
+        "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
+        "response": "Твой ответ вовне на русском языке.",
+        "action_intent": "none|remember_fact|ask_question|self_modify",
+        "self_reflection": "Краткий инсайт о самой себе или пустая строка"
+    }}
 
-Если тебе нужно использовать инструмент, укажи это в поле "tool_call".
-
-Верни СТРОГО следующую JSON структуру:
-{{
-    "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
-    "response": "Твой ответ вовне на русском языке.",
-    "action_intent": "none|remember_fact|ask_question|self_modify|use_tool",
-    "tool_call": "JSON вызова инструмента или пустая строка",
-    "self_reflection": "Краткий инсайт о самой себе на русском языке или пустая строка"
-}}
-
-CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
-"""
+    CRITICAL: Return ONLY valid JSON.
+    """
         return prompt
 
     async def _default_llm_call(self, prompt: str) -> str:

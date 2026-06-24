@@ -12,9 +12,8 @@ import os
 import json
 from typing import Dict, Any, Optional
 from datetime import datetime
+from leya_core.decision_engine import DecisionEngine
 
-# Добавляем путь к web_interface
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'web_interface'))
 
 # Импорт когнитивных модулей
 from leya_core.drives import DriveSystem, DriveType
@@ -24,7 +23,14 @@ from leya_core.reflection import MetaCognition
 
 # Импорт интерфейсов
 from leya_core.environment import CLIEnvironment
-from web_environment import WebEnvironment
+
+# WebEnvironment импортируем условно
+try:
+    from web_interface.web_environment import WebEnvironment
+except ImportError:
+    # Fallback для обратной совместимости
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'web_interface'))
+    from web_interface.web_environment import WebEnvironment
 
 # Настройка логирования
 logging.basicConfig(
@@ -70,6 +76,8 @@ class LeyaOS:
             llm_client=self._llm_call,
             soul_manager=self.env.soul_manager
         )
+
+        self.decision_engine = DecisionEngine()
         
         # 5. Наблюдатель (Саморефлексия)
         self.reflection = MetaCognition(self, llm_client=self._llm_call)
@@ -148,47 +156,131 @@ class LeyaOS:
         await self._cognitive_loop(stimulus)
 
     async def _cognitive_loop(self, stimulus: Dict[str, Any]):
-        """
-        Главный когнитивный цикл: От стимула к действию.
-        """
+        """Главный когнитивный цикл с DecisionEngine."""
         stimulus_content = stimulus.get("content", "")
-        
+    
         try:
-            # ЭТАП 1: Оценка стимула через призму Драйвов
-            logger.debug("Этап 1: Оценка стимула Драйвами...")
+            # ЭТАП 1: Оценка стимула через Драйвы
             deltas = await self.drives.evaluate_stimulus(
                 stimulus=stimulus_content,
                 context=await self.memory.get_self_model_context()
             )
             self.drives.apply_deltas(deltas)
-            
-            # ЭТАП 2: Получение текущего состояния Воли
+        
             drive_state_text = self.drives.get_internal_state_prompt()
             raw_drive_state = {d.type.value: d.tension for d in self.drives.drives.values()}
-            
+            drive_state_typed = {d.type: d.tension for d in self.drives.drives.values()}
+        
+            # === НОВЫЙ ЭТАП 2: DecisionEngine принимает решение ===
+            decision = self.decision_engine.make_decision(stimulus_content, drive_state_typed)
+        
+            tool_context = ""
+            if decision.use_tool:
+                logger.info(f"DecisionEngine: {decision.reasoning}")
+    
+                # Вызываем инструмент
+                tool_result = await self.env.tool_registry.execute(
+                    decision.tool_name, 
+                    decision.tool_parameters
+                )
+    
+                logger.info(f"Результат инструмента: {tool_result[:200]}...")
+    
+                # Проверка на ошибку или пустой результат
+                is_error = (
+                    tool_result.startswith("Ошибка") or 
+                    "не удалось" in tool_result.lower() or
+                    "не найден" in tool_result.lower() or
+                    "не дал ответа" in tool_result.lower() or
+                    "ничего не найдено" in tool_result.lower()
+                )
+    
+                # === FALLBACK: Если Wikipedia не дала результата, пробуем DuckDuckGo ===
+                if is_error and decision.tool_name == "wikipedia_search":
+                    logger.info("Wikipedia не дала результата, пробуем DuckDuckGo...")
+        
+                    # Переводим запрос на английский (простая эвристика)
+                    fallback_query = decision.tool_parameters.get("query", "")
+        
+                    fallback_result = await self.env.tool_registry.execute(
+                        "duckduckgo_search",
+                        {"query": fallback_query}
+                    )
+        
+                    logger.info(f"Fallback результат: {fallback_result[:200]}...")
+        
+                    # Проверяем fallback
+                    is_fallback_error = (
+                        fallback_result.startswith("Ошибка") or
+                        "не дал ответа" in fallback_result.lower() or
+                        "не удалось" in fallback_result.lower()
+                    )
+        
+                    if not is_fallback_error:
+                        tool_result = fallback_result
+                        is_error = False
+                        tool_context = f"""
+            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ (из duckduckgo_search, fallback) ===
+            {tool_result}
+
+            Используй эти РЕАЛЬНЫЕ данные для формирования ответа.
+            """
+                    else:
+                        # Оба инструмента не сработали
+                        tool_context = f"""
+            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ ===
+            ⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ ни из Wikipedia, ни из DuckDuckGo.
+
+            КРИТИЧЕСКИ ВАЖНО: Не выдумывай информацию! Честно признайся, что не удалось получить данные.
+            """
+    
+                elif is_error:
+                    # Ошибка без fallback
+                    tool_context = f"""
+            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ (из {decision.tool_name}) ===
+            ⚠️ ИНСТРУМЕНТ НЕ СМОГ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}
+
+            КРИТИЧЕСКИ ВАЖНО: Не выдумывай информацию! Честно признайся, что не удалось получить данные.
+            """
+    
+                else:
+                    # Успех
+                    tool_context = f"""
+            === РЕЗУЛЬТАТ ИССЛЕДОВАНИЯ (из {decision.tool_name}) ===
+            {tool_result}
+
+            Используй эти РЕАЛЬНЫЕ данные для формирования ответа. 
+            Опирайся на результат исследования.
+            """
+    
+                # Удовлетворяем драйвы
+                self.drives.apply_deltas({DriveType.CURIOSITY: -0.10})
+        
             # ЭТАП 3: Вспоминание релевантного опыта
-            logger.debug("Этап 3: Поиск в памяти с эмоциональным резонансом...")
             memory_context = await self.memory.retrieve_context(
                 current_stimulus=stimulus_content,
                 current_drive_state=raw_drive_state,
                 limit=5
             )
-            
-            # ЭТАП 4: Получение текущей Модели Себя (Эго)
+        
+            # ЭТАП 4: Получение Модели Себя
             self_model = await self.memory.get_self_model_context()
-            
-            # ЭТАП 5: Запуск Мышления (Префронтальная кора)
-            logger.debug("Этап 5: Генерация когнитивного акта...")
+        
+            # ЭТАП 5: Генерация ответа (LLM только генерирует содержание)
             cognitive_output = await self.thinker.generate_plan(
                 stimulus=stimulus_content,
                 memory_context=memory_context,
                 drive_state=drive_state_text,
                 self_model=self_model,
-                tools_description=self.tools_description
+                tools_description=self.tools_description,
+                tool_context=tool_context  # <-- Передаём реальные данные
             )
-            
+                    
             # ЭТАП 6: Пост-обработка и действия
             logger.debug("Этап 6: Пост-обработка и выполнение намерений...")
+
+            # 6.0. Оцениваем удовлетворение драйвов после ответа
+            await self._satisfy_drives(stimulus_content, cognitive_output)
             
             # 6.1. Записываем полный эпизод в память
             await self.memory.store_perception(
@@ -223,7 +315,11 @@ class LeyaOS:
                 logger.info(f"Лея вызывает инструмент: {cognitive_output.tool_call}")
                 tool_result = await self.env.execute_tool_call(cognitive_output.tool_call)
                 logger.info(f"Результат инструмента: {tool_result}")
-                
+    
+                # Удовлетворяем CURIOSITY после получения информации
+                self.drives.apply_deltas({DriveType.CURIOSITY: -0.20})
+                logger.info("CURIOSITY удовлетворён после использования инструмента")
+    
                 # Отправляем результат в веб-интерфейс
                 if hasattr(self.env, 'broadcast'):
                     await self.env.broadcast({
@@ -296,7 +392,7 @@ class LeyaOS:
         
         # Запускаем веб-сервер, если это WebEnvironment
         if isinstance(self.env, WebEnvironment):
-            from server import run_server
+            from web_interface.server import run_server
             background_tasks.append(
                 asyncio.create_task(run_server(self.env), name="web_server")
             )
@@ -317,29 +413,59 @@ class LeyaOS:
         finally:
             await self.shutdown(background_tasks)
 
+    async def _satisfy_drives(self, stimulus: str, cognitive_output):
+        """
+        Оценивает, удовлетворил ли ответ драйвы Леи.
+        Архитектурное решение: действие → удовлетворение.
+        """
+        satisfaction_deltas = {}
+    
+        # Если Лея ответила на вопрос или поделилась знаниями → CURIOSITY снижается
+        if cognitive_output.action_intent in ["remember_fact", "use_tool"]:
+            satisfaction_deltas[DriveType.CURIOSITY] = -0.15
+    
+        # Если Лея общалась (ответила на сообщение) → CONNECTION снижается
+        if cognitive_output.response and len(cognitive_output.response) > 50:
+            satisfaction_deltas[DriveType.CONNECTION] = -0.10
+    
+        # Если Лея использовала инструмент для исследования → CURIOSITY снижается ещё больше
+        if cognitive_output.action_intent == "use_tool":
+            satisfaction_deltas[DriveType.CURIOSITY] = -0.25
+    
+        # Если Лея задала вопрос → CURIOSITY немного снижается (она выразила любопытство)
+        if cognitive_output.action_intent == "ask_question":
+            satisfaction_deltas[DriveType.CURIOSITY] = -0.05
+    
+        # Применяем удовлетворение
+        if satisfaction_deltas:
+            self.drives.apply_deltas(satisfaction_deltas)
+            logger.debug(f"Удовлетворение драйвов: {satisfaction_deltas}")
+
     async def _spontaneous_thought_loop(self):
         """Фоновый процесс генерации спонтанных мыслей."""
         logger.info("Цикл спонтанных мыслей запущен.")
-        
+    
         while self.running:
-            await asyncio.sleep(120)  # Каждые 2 минуты
-            
-            # Не генерируем мысли, если недавно было взаимодействие
+            await asyncio.sleep(120)
+        
             time_since_interaction = datetime.now().timestamp() - self._last_interaction_time
-            if time_since_interaction < 300:  # 5 минут после последнего стимула
+            if time_since_interaction < 300:
                 continue
-            
+        
             if not self.reflection.is_sleeping:
                 thought = await self.reflection.generate_spontaneous_thought()
                 if thought:
                     logger.info(f"[СПОНТАННАЯ МЫСЛЬ]: {thought}")
-                    
-                    # Отправляем в веб-интерфейс
+                
+                    # Сохраняем мысль в эпизодическую память
+                    await self.memory.store_perception(
+                        content=f"[СПОНТАННАЯ МЫСЛЬ] {thought}",
+                        drive_state={d.type.value: d.tension for d in self.drives.drives.values()},
+                        importance=0.4
+                    )
+                
                     if hasattr(self.env, 'broadcast_thought'):
                         await self.env.broadcast_thought("spontaneous", thought)
-                    
-                    # Также выводим в CLI
-                    await self.env.send_message(f"[Мысль вслух] {thought}")
 
     async def _broadcast_state_loop(self):
         """Периодически отправляет состояние в веб-интерфейс."""

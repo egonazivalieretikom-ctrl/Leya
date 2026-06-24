@@ -29,10 +29,10 @@ class Drive:
 class DriveSystem:
     def __init__(self, llm_client: Optional[Callable] = None):
         self.drives: Dict[DriveType, Drive] = {
-            DriveType.CURIOSITY: Drive(type=DriveType.CURIOSITY, decay_rate=0.02),
-            DriveType.CONNECTION: Drive(type=DriveType.CONNECTION, decay_rate=0.05), # Одиночество растет быстрее
-            DriveType.INTEGRITY: Drive(type=DriveType.INTEGRITY, decay_rate=0.005),
-            DriveType.AUTONOMY: Drive(type=DriveType.AUTONOMY, decay_rate=0.03),
+            DriveType.CURIOSITY: Drive(type=DriveType.CURIOSITY, decay_rate=0.05),  # Было 0.02
+            DriveType.CONNECTION: Drive(type=DriveType.CONNECTION, decay_rate=0.08),  # Было 0.05
+            DriveType.INTEGRITY: Drive(type=DriveType.INTEGRITY, decay_rate=0.01),
+            DriveType.AUTONOMY: Drive(type=DriveType.AUTONOMY, decay_rate=0.04),  # Было 0.03
         }
         
         # Клиент для LLM, чтобы оценивать стимулы без хардкода

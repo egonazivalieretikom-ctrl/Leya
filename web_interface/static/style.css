@@ -74,6 +74,7 @@ body {
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
+        color: transparent;
     }
 
 .pulse {
@@ -497,7 +498,6 @@ body {
     height: 100%;
     image-rendering: pixelated;
     image-rendering: -moz-crisp-edges;
-    image-rendering: crisp-edges;
     transition: transform 0.3s ease;
 }
 
@@ -523,7 +523,6 @@ body {
     height: 100%;
     image-rendering: pixelated;
     image-rendering: -moz-crisp-edges;
-    image-rendering: crisp-edges;
     transition: transform 0.3s ease;
 }
 

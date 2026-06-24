@@ -210,36 +210,41 @@ class Environment(ABC):
                     "srlimit": 1,
                     "format": "json"
                 }
-                
+                headers = {
+                    "User-Agent": "LeyaOS/1.0 (digital consciousness; contact: leya@example.com)"
+                }
+        
                 async with aiohttp.ClientSession() as session:
                     async with session.get(search_url, params=search_params, 
+                                          headers=headers,
                                           timeout=aiohttp.ClientTimeout(total=15)) as resp:
                         if resp.status != 200:
                             return f"Ошибка Wikipedia: статус {resp.status}"
                         data = await resp.json()
-                        
+                
                         results = data.get("query", {}).get("search", [])
                         if not results:
                             return f"По запросу '{query}' ничего не найдено в {lang} Wikipedia."
-                        
+                
                         title = results[0]["title"]
-                        
+                
                         summary_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}"
-                        async with session.get(summary_url, timeout=aiohttp.ClientTimeout(total=15)) as resp2:
+                        async with session.get(summary_url, headers=headers,
+                                              timeout=aiohttp.ClientTimeout(total=15)) as resp2:
                             if resp2.status != 200:
                                 return f"Не удалось получить статью '{title}'"
                             summary_data = await resp2.json()
-                            
+                    
                             extract = summary_data.get("extract", "Описание отсутствует")
                             page_url = summary_data.get("content_urls", {}).get("desktop", {}).get("page", "")
-                            
+                    
                             result = f"📚 {title}\n\n{extract}\n\n🔗 {page_url}"
-                            
+                    
                             if len(result) > 2000:
                                 result = result[:2000] + "...(обрезано)"
-                            
+                    
                             return result
-                            
+                    
             except asyncio.TimeoutError:
                 return "Ошибка: превышено время ожидания ответа Wikipedia"
             except Exception as e:
@@ -374,48 +379,66 @@ class Environment(ABC):
                     "no_html": 1,
                     "skip_disambig": 1
                 }
-                
+                headers = {
+                    "User-Agent": "LeyaOS/1.0 (digital consciousness)",
+                    "Accept": "application/json"
+                }
+        
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params,
+                    async with session.get(url, params=params, headers=headers,
                                           timeout=aiohttp.ClientTimeout(total=15)) as resp:
                         if resp.status != 200:
                             return f"Ошибка DuckDuckGo: статус {resp.status}"
-                        
-                        data = await resp.json()
-                        
+                
+                        # Читаем как текст, потом парсим
+                        text = await resp.text()
+                
+                        try:
+                            data = json.loads(text)
+                        except json.JSONDecodeError:
+                            # DuckDuckGo иногда возвращает JavaScript
+                            json_match = re.search(r'\{[\s\S]*\}', text)
+                            if json_match:
+                                try:
+                                    data = json.loads(json_match.group(0))
+                                except:
+                                    return f"Ошибка DuckDuckGo: не удалось распарсить ответ"
+                            else:
+                                return f"Ошибка DuckDuckGo: не удалось получить JSON"
+                
                         result_parts = []
-                        
+                
                         abstract = data.get("AbstractText", "")
                         if abstract:
                             source = data.get("AbstractSource", "")
                             result_parts.append(f"📖 {abstract}")
                             if source:
                                 result_parts.append(f"(источник: {source})")
-                        
+                
                         answer = data.get("Answer", "")
                         if answer and isinstance(answer, str):
                             result_parts.append(f"\n💡 Быстрый ответ: {answer}")
-                        
+                
                         related = data.get("RelatedTopics", [])
                         if related:
                             result_parts.append("\n🔗 Связанные темы:")
                             for topic in related[:5]:
                                 if "Text" in topic:
-                                    text = topic["Text"][:200]
+                                    text_topic = topic["Text"][:200]
                                     first_url = ""
                                     if topic.get("FirstURL"):
                                         first_url = f"\n  {topic['FirstURL']}"
-                                    result_parts.append(f"• {text}{first_url}")
-                        
+                                    result_parts.append(f"• {text_topic}{first_url}")
+                
                         if not result_parts:
-                            return f"По запросу '{query}' DuckDuckGo не дал быстрого ответа. Попробуй wikipedia_search для более глубокого поиска."
-                        
+                            return f"По запросу '{query}' DuckDuckGo не дал ответа."
+                
                         result = "\n".join(result_parts)
                         if len(result) > 2500:
                             result = result[:2500] + "...(обрезано)"
-                        
+                
                         return result
-                        
+                
             except asyncio.TimeoutError:
                 return "Ошибка: превышено время ожидания ответа DuckDuckGo"
             except Exception as e:
