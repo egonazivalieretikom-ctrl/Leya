@@ -1,13 +1,11 @@
 """
-WebEnvironment — веб-интерфейс для Леи через FastAPI + WebSocket.
-Альтернатива CLIEnvironment.
+web_interface/web_environment.py — Веб-интерфейс для Леи через FastAPI + WebSocket.
 """
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
-from fastapi import WebSocket
+from typing import Dict, Any, Optional, List
 
 from leya_core.environment import Environment
 
@@ -15,122 +13,122 @@ logger = logging.getLogger("WebEnvironment")
 
 
 class WebEnvironment(Environment):
-    """
-    Веб-интерфейс для Леи.
-    Принимает сообщения через WebSocket, отправляет обновления в реальном времени.
-    """
+    """Веб-интерфейс для Леи."""
     
     def __init__(self, leya_os):
         super().__init__(leya_os)
-        self.message_queue = asyncio.Queue()
-        self.connected_clients: Set[WebSocket] = set()
-        self.message_history: List[Dict] = []
-        self.max_history = 100
+        self.active_connections: List = []
+        self.input_queue = asyncio.Queue()
+        self.state = type('State', (), {
+            'state': 'initializing',
+            'drives': {},
+            'self_model': '',
+            'connected_clients': 0
+        })()
     
-    async def connect(self, websocket: WebSocket):
-        """Подключение нового клиента"""
-        await websocket.accept()
-        self.connected_clients.add(websocket)
-        logger.info(f"WebEnvironment: Клиент подключен. Всего: {len(self.connected_clients)}")
+    async def connect(self, websocket):
+        """Подключает нового клиента."""
+        self.active_connections.append(websocket)
+        self.state.connected_clients = len(self.active_connections)
+        logger.info(f"WebEnvironment: Клиент подключен. Всего: {self.state.connected_clients}")
         
-        # Отправляем историю сообщений новому клиенту
-        for msg in self.message_history[-20:]:
-            await websocket.send_json(msg)
-    
-    def disconnect(self, websocket: WebSocket):
-        """Отключение клиента"""
-        self.connected_clients.discard(websocket)
-        logger.info(f"WebEnvironment: Клиент отключен. Всего: {len(self.connected_clients)}")
-    
-    async def broadcast(self, message: Dict[str, Any]):
-        """Отправка сообщения всем подключенным клиентам"""
-        # Сохраняем в историю
-        message["timestamp"] = datetime.now().timestamp()
-        self.message_history.append(message)
-        if len(self.message_history) > self.max_history:
-            self.message_history.pop(0)
+        # Отправляем текущее состояние
+        drives = {d.type.value: d.current for d in self.leya.drives.drives.values()}
+        self_model = await self.leya.memory.get_self_model_context()
         
-        # Отправляем всем клиентам
-        disconnected = set()
-        for client in self.connected_clients:
-            try:
-                await client.send_json(message)
-            except Exception as e:
-                logger.warning(f"WebEnvironment: Ошибка отправки клиенту: {e}")
-                disconnected.add(client)
-        
-        # Удаляем отключившихся
-        for client in disconnected:
-            self.connected_clients.discard(client)
-    
-    async def listen(self) -> Optional[Dict[str, Any]]:
-        """Получает следующее сообщение из очереди"""
-        try:
-            return self.message_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
-    
-    async def send_message(self, message: str):
-        """Отправляет сообщение всем клиентам"""
         await self.broadcast({
-            "type": "leya_response",
-            "content": message
+            "type": "state_update",
+            "data": self.state.state
         })
-    
-    async def handle_user_message(self, content: str):
-        """Обрабатывает входящее сообщение от пользователя"""
-        await self.message_queue.put({
-            "type": "user_message",
-            "content": content,
-            "source": "web",
-            "timestamp": datetime.now().timestamp()
-        })
-        
-        # Логируем в историю
-        await self.broadcast({
-            "type": "user_message",
-            "content": content
-        })
-    
-    async def update_drives(self, drive_state: Dict[str, float]):
-        """Отправляет обновления драйвов клиентам"""
         await self.broadcast({
             "type": "drives_update",
-            "data": drive_state
+            "data": drives
         })
-    
-    async def update_memory(self, memory_info: Dict):
-        """Отправляет обновления памяти"""
-        await self.broadcast({
-            "type": "memory_update",
-            "data": memory_info
-        })
-    
-    async def update_self_model(self, self_model: str):
-        """Отправляет обновления Модели Себя"""
         await self.broadcast({
             "type": "self_model_update",
             "data": self_model
         })
     
-    async def broadcast_thought(self, thought_type: str, content: str):
-        """Отправляет мысли Леи (внутренний монолог, спонтанные мысли)"""
+    async def disconnect(self, websocket):
+        """Отключает клиента."""
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        self.state.connected_clients = len(self.active_connections)
+        logger.info(f"WebEnvironment: Клиент отключен. Всего: {self.state.connected_clients}")
+    
+    async def broadcast(self, event: Dict[str, Any]):
+        """Отправляет событие всем подключённым клиентам."""
+
+        disconnected = []
+        for ws in self.active_connections:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                disconnected.append(ws)
+        
+        for ws in disconnected:
+            if ws in self.active_connections:
+                self.active_connections.remove(ws)
+    
+    async def listen(self) -> Optional[Dict[str, Any]]:
+        """Получает следующий стимул из очереди."""
+        try:
+            return self.input_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+    
+    async def send_message(self, message: str):
+        """Отправляет сообщение Леи в веб-интерфейс (формат app.js)."""
+        await self.broadcast({
+            "type": "leya_response",
+            "content": message
+        })
+    
+    async def broadcast_thought(self, thought_type: str, thought: str):
+        """Транслирует мысль в веб-интерфейс (формат app.js)."""
         await self.broadcast({
             "type": "thought",
-            "thought_type": thought_type,  # "internal", "spontaneous", "reflection"
-            "content": content
+            "thought_type": thought_type,
+            "content": thought
         })
     
     async def broadcast_state(self, state: str):
-        """Отправляет состояние Леи (awake, sleeping, reflecting)"""
+        """Транслирует состояние (формат app.js)."""
+        self.state.state = state
         await self.broadcast({
             "type": "state_update",
             "data": state
         })
     
-    async def broadcast_soul_update(self, soul_files: Dict[str, str]):
-        """Отправляет содержимое души"""
+    async def update_drives(self, drives: Dict[str, float]):
+        """Обновляет значения драйвов (формат app.js)."""
+        self.state.drives = drives
         await self.broadcast({
-            "type": "soul_update",
-            "data": soul_files
+            "type": "drives_update",
+            "data": drives
+        })
+    
+    async def update_self_model(self, self_model: str):
+        """Обновляет Модель Себя (отправляет только если изменилась)."""
+        if self_model != self.state.self_model:
+            self.state.self_model = self_model
+            await self.broadcast({
+                "type": "self_model_update",
+                "data": self_model
+            })
+    
+    async def receive_user_message(self, content: str):
+        """Получает сообщение от пользователя через WebSocket."""
+        await self.input_queue.put({
+            "type": "user_message",
+            "content": content,
+            "source": "web",
+            "timestamp": datetime.now().timestamp()
+        })
+    async def update_state(self, state: str):
+        """Обновляет состояние Леи."""
+        self.state.state = state
+        await self.broadcast({
+            "type": "state_update",
+            "data": state
         })

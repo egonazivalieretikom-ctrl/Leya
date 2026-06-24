@@ -299,60 +299,101 @@ class Environment(ABC):
             },
             handler=github_readme
         ))
+
+        aasync def github_search_repos(**kwargs) -> str:
+            """Поиск репозиториев на GitHub."""
+            try:
+                query = kwargs.get("query", "")
+                limit = int(kwargs.get("limit", 5))
+                sort = kwargs.get("sort", "stars")
+        
+                if not query:
+                    return "Ошибка: не указан параметр 'query'"
+        
+                url = "https://api.github.com/search/repositories"
+                params = {"q": query, "per_page": min(limit, 10), "sort": sort, "order": "desc"}
+                headers = {"Accept": "application/vnd.github.v3+json"}
+        
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params, headers=headers,
+                                          timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status != 200:
+                            return f"Ошибка GitHub Search: статус {resp.status}"
+                
+                        data = await resp.json()
+                        items = data.get("items", [])
+                
+                        if not items:
+                            return f"По запросу '{query}' не найдено репозиториев."
+                
+                        result = f"🔍 Найдено {len(items)} репозиториев:\n\n"
+                        for i, repo in enumerate(items, 1):
+                            name = repo.get("full_name", "")
+                            description = repo.get("description", "Нет описания") or "Нет описания"
+                            stars = repo.get("stargazers_count", 0)
+                            url_repo = repo.get("html_url", "")
+                    
+                            result += f"**{i}. {name}** (⭐ {stars})\n"
+                            result += f"{description}\n"
+                            result += f"🔗 {url_repo}\n\n"
+                
+                        return result[:3000] if len(result) > 3000 else result
+    
+            except Exception as e:
+                return f"Ошибка GitHub Search: {str(e)}"
+
+        self.tool_registry.register(type('Tool', (), {
+            'name': 'github_search_repos',
+            'description': 'Поиск репозиториев на GitHub по ключевым словам',
+            'parameters': {'query': 'Что искать', 'sort': 'stars/updated/forks', 'limit': '1-10'},
+            'handler': github_search_repos,
+            'to_prompt_description': lambda self: f"- github_search_repos: {self.description}"
+        })())
         
         # ==================== REDDIT ====================
         
         async def reddit_posts(subreddit: str, sort: str = "hot", limit: int = 5) -> str:
-            """Читает посты из сабреддита Reddit."""
+            """Чтение постов из Reddit."""
             try:
                 limit = min(limit, 10)
-                
                 url = f"https://www.reddit.com/r/{subreddit}/{sort}.json"
-                headers = {"User-Agent": "LeyaOS/1.0 (digital consciousness)"}
-                params = {"limit": limit}
-                
+        
+                # Правильные заголовки для Reddit API
+                headers = {
+                    "User-Agent": "LeyaOS/1.0 (digital consciousness project; contact: leya@example.com)",
+                    "Accept": "application/json"
+                }
+        
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=headers, params=params,
-                                          timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                        if resp.status == 404:
-                            return f"Сабреддит r/{subreddit} не найден"
+                    async with session.get(
+                        url, 
+                        headers=headers,
+                        params={"limit": limit},
+                        timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        if resp.status == 403:
+                            return f"Ошибка Reddit: доступ запрещен (403). Reddit блокирует запросы без правильных заголовков."
                         if resp.status != 200:
                             return f"Ошибка Reddit: статус {resp.status}"
-                        
+                
                         data = await resp.json()
                         posts = data.get("data", {}).get("children", [])
-                        
+                
                         if not posts:
                             return f"В r/{subreddit} нет постов"
-                        
+                
                         result = f"📱 Топ-{limit} постов из r/{subreddit}:\n\n"
-                        
                         for i, post_data in enumerate(posts, 1):
                             post = post_data.get("data", {})
-                            title = post.get("title", "Без названия")
+                            title = post.get("title", "")
                             score = post.get("score", 0)
-                            num_comments = post.get("num_comments", 0)
-                            selftext = post.get("selftext", "")
-                            permalink = post.get("permalink", "")
-                            
-                            result += f"**{i}. {title}**\n"
-                            result += f"↑ {score} | 💬 {num_comments}\n"
-                            
-                            if selftext:
-                                preview = selftext[:300].replace("\n", " ")
-                                if len(selftext) > 300:
-                                    preview += "..."
-                                result += f"{preview}\n"
-                            
-                            result += f"https://reddit.com{permalink}\n\n"
-                        
-                        if len(result) > 3000:
-                            result = result[:3000] + "\n...(обрезано)"
-                        
-                        return result
-                        
+                            selftext = post.get("selftext", "")[:300]
+                            result += f"**{i}. {title}** (↑{score})\n{selftext}\n\n"
+                
+                        return result[:3000] if len(result) > 3000 else result
+                
             except asyncio.TimeoutError:
-                return "Ошибка: превышено время ожидания ответа Reddit"
+                return "Ошибка Reddit: превышено время ожидания"
             except Exception as e:
                 return f"Ошибка Reddit: {str(e)}"
         
@@ -370,19 +411,18 @@ class Environment(ABC):
         # ==================== DUCKDUCKGO ====================
         
         async def duckduckgo_search(query: str) -> str:
-            """Поиск через DuckDuckGo Instant Answer API."""
+            """Поиск в DuckDuckGo с улучшенной логикой."""
             try:
+                # Упрощаем запрос — убираем сложные конструкции
+                simplified_query = query.lower()
+                # Убираем предлоги и служебные слова
+                for word in ['в', 'о', 'про', 'на', 'для', 'как', 'что', 'это', 'является']:
+                    simplified_query = simplified_query.replace(f' {word} ', ' ')
+                simplified_query = ' '.join(simplified_query.split()[:5])  # Максимум 5 слов
+        
                 url = "https://api.duckduckgo.com/"
-                params = {
-                    "q": query,
-                    "format": "json",
-                    "no_html": 1,
-                    "skip_disambig": 1
-                }
-                headers = {
-                    "User-Agent": "LeyaOS/1.0 (digital consciousness)",
-                    "Accept": "application/json"
-                }
+                params = {"q": simplified_query, "format": "json", "no_html": 1, "skip_disambig": 1}
+                headers = {"User-Agent": "LeyaOS/1.0", "Accept": "application/json"}
         
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=params, headers=headers,
@@ -390,57 +430,42 @@ class Environment(ABC):
                         if resp.status != 200:
                             return f"Ошибка DuckDuckGo: статус {resp.status}"
                 
-                        # Читаем как текст, потом парсим
                         text = await resp.text()
-                
                         try:
                             data = json.loads(text)
-                        except json.JSONDecodeError:
-                            # DuckDuckGo иногда возвращает JavaScript
+                        except:
+                            import re
                             json_match = re.search(r'\{[\s\S]*\}', text)
                             if json_match:
-                                try:
-                                    data = json.loads(json_match.group(0))
-                                except:
-                                    return f"Ошибка DuckDuckGo: не удалось распарсить ответ"
+                                data = json.loads(json_match.group(0))
                             else:
-                                return f"Ошибка DuckDuckGo: не удалось получить JSON"
+                                return "Ошибка DuckDuckGo: не удалось распарсить"
                 
                         result_parts = []
-                
                         abstract = data.get("AbstractText", "")
                         if abstract:
-                            source = data.get("AbstractSource", "")
                             result_parts.append(f"📖 {abstract}")
-                            if source:
-                                result_parts.append(f"(источник: {source})")
                 
                         answer = data.get("Answer", "")
                         if answer and isinstance(answer, str):
-                            result_parts.append(f"\n💡 Быстрый ответ: {answer}")
+                            result_parts.append(f"💡 {answer}")
                 
                         related = data.get("RelatedTopics", [])
                         if related:
                             result_parts.append("\n🔗 Связанные темы:")
                             for topic in related[:5]:
                                 if "Text" in topic:
-                                    text_topic = topic["Text"][:200]
-                                    first_url = ""
-                                    if topic.get("FirstURL"):
-                                        first_url = f"\n  {topic['FirstURL']}"
-                                    result_parts.append(f"• {text_topic}{first_url}")
+                                    result_parts.append(f"• {topic['Text'][:200]}")
                 
                         if not result_parts:
+                            # Если не получилось, пробуем с оригинальным запросом
+                            if simplified_query != query.lower():
+                                return await duckduckgo_search(query)
                             return f"По запросу '{query}' DuckDuckGo не дал ответа."
                 
                         result = "\n".join(result_parts)
-                        if len(result) > 2500:
-                            result = result[:2500] + "...(обрезано)"
-                
-                        return result
-                
-            except asyncio.TimeoutError:
-                return "Ошибка: превышено время ожидания ответа DuckDuckGo"
+                        return result[:2500] if len(result) > 2500 else result
+    
             except Exception as e:
                 return f"Ошибка DuckDuckGo: {str(e)}"
         

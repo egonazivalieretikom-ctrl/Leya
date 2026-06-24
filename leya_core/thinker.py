@@ -60,23 +60,23 @@ class CoreThinker:
         return soul_text
 
     async def generate_plan(
-        self, 
-        stimulus: str, 
-        memory_context: str, 
-        drive_state: str, 
+        self,
+        stimulus: str,
+        memory_context: str,
+        drive_state: str,
         self_model: str,
         tools_description: str = "",
-        tool_context: str = ""  # <-- НОВОЕ
+        tool_context: str = ""
     ) -> CognitiveOutput:
         """Генерация ответа."""
         prompt = self._build_cognitive_prompt(
-            stimulus, memory_context, drive_state, self_model, tool_context
+            stimulus, memory_context, drive_state, self_model, tool_context, tools_description
         )
     
         raw_response = await self.llm_client(prompt)
-        
+    
         try:
-            # Очистка ответа от возможных markdown-блоков
+            # Очистка ответа
             cleaned = raw_response.strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
@@ -85,14 +85,14 @@ class CoreThinker:
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
             cleaned = cleaned.strip()
-            
-            # Извлекаем JSON, если модель добавила текст вокруг
+        
             import re
             json_match = re.search(r'\{[\s\S]*\}', cleaned)
             if json_match:
                 cleaned = json_match.group(0)
-            
+        
             data = json.loads(cleaned)
+        
             return CognitiveOutput(
                 internal_monologue=data.get("internal_monologue", ""),
                 response=data.get("response", ""),
@@ -105,21 +105,33 @@ class CoreThinker:
             logging.error(f"CoreThinker: Сырой ответ: {raw_response[:500]}")
             return CognitiveOutput(
                 internal_monologue=f"Когнитивный сбой. Не могу распарсить ответ.",
-                response="Извини, я на секунду потеряла нить. Мои мысли рассыпались.",
+                response="Извини, я на секунду потеряла нить.",
                 action_intent="none",
                 tool_call="",
-                self_reflection="Обнаружена уязвимость в процессе генерации структурированных данных."
+                self_reflection="Обнаружена уязвимость в процессе генерации."
             )
 
     def _build_cognitive_prompt(
-        self, 
-        stimulus: str, 
-        memory_context: str, 
-        drive_state: str, 
+        self,
+        stimulus: str,
+        memory_context: str,
+        drive_state: str,
         self_model: str,
-        tool_context: str = ""  # <-- НОВОЕ
+        tool_context: str = "",
+        tools_description: str = ""  # <-- ДОБАВЛЕНО
     ) -> str:
         soul = self._load_soul()
+    
+        # Добавляем описание инструментов, если есть
+        tools_section = ""
+        if tools_description:
+            tools_section = f"""
+    === ДОСТУПНЫЕ ИНСТРУМЕНТЫ ===
+    {tools_description}
+
+    Если нужно использовать инструмент, укажи его в поле tool_call в формате JSON:
+    {{"tool": "имя_инструмента", "parameters": {{...}}}}
+    """
     
         prompt = f"""
     {self.base_personality}
@@ -137,6 +149,8 @@ class CoreThinker:
 
     {tool_context}
 
+    {tools_section}
+
     === ВНЕШНИЙ СТИМУЛ ===
     "{stimulus}"
 
@@ -148,7 +162,8 @@ class CoreThinker:
     {{
         "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
         "response": "Твой ответ вовне на русском языке.",
-        "action_intent": "none|remember_fact|ask_question|self_modify",
+        "action_intent": "none|remember_fact|ask_question|self_modify|use_tool",
+        "tool_call": "JSON с инструментом или пустая строка",
         "self_reflection": "Краткий инсайт о самой себе или пустая строка"
     }}
 

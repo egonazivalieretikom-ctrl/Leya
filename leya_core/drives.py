@@ -33,6 +33,7 @@ class Drive:
     predicted: float = 0.3  # Предсказанное будущее состояние (аллостаз)
     baseline: float = 0.3  # Зона комфорта (целевое значение)
     base_growth_rate: float = 0.02  # Базовая скорость роста за тик
+    satisfaction_decay: float = 0.02  # Скорость удовлетворения после действия
     
     @property
     def deviation(self) -> float:
@@ -69,24 +70,43 @@ class DriveSystem:
     }
     
     def __init__(self):
-        self.drives: Dict[DriveType, Drive] = {
+        # 4 основных драйва
+        self.drives = {
             DriveType.CURIOSITY: Drive(
                 type=DriveType.CURIOSITY,
-                base_growth_rate=0.02
+                current=0.3,
+                base_growth_rate=0.015,  # ← БЫЛО 0.01, УВЕЛИЧЕНО
+                satisfaction_decay=0.02
             ),
             DriveType.CONNECTION: Drive(
                 type=DriveType.CONNECTION,
-                base_growth_rate=0.025  # Растёт быстрее (социальная потребность)
+                current=0.3,
+                base_growth_rate=0.012,
+                satisfaction_decay=0.015
             ),
             DriveType.INTEGRITY: Drive(
                 type=DriveType.INTEGRITY,
-                base_growth_rate=0.01  # Растёт медленнее (стабильность)
+                current=0.3,
+                base_growth_rate=0.008,
+                satisfaction_decay=0.01
             ),
             DriveType.AUTONOMY: Drive(
                 type=DriveType.AUTONOMY,
-                base_growth_rate=0.02
-            ),
+                current=0.3,
+                base_growth_rate=0.01,
+                satisfaction_decay=0.012
+            )
         }
+        
+
+        # История значений драйвов (для MetaCognition)
+        self.tension_history: Dict[DriveType, List[float]] = {
+            DriveType.CURIOSITY: [],
+            DriveType.CONNECTION: [],
+            DriveType.INTEGRITY: [],
+            DriveType.AUTONOMY: []
+        }
+        self.max_history_length = 100
         
         # Action values — ожидаемая награда для каждого действия (обучается через RPE)
         self.action_values: Dict[str, float] = {}
@@ -104,26 +124,32 @@ class DriveSystem:
         logger.info("DriveSystem: Инициализация завершена с аллостазом и RPE.")
     
     async def background_metabolism(self):
-        """
-        Фоновый метаболизм драйвов.
-        
-        Биологический аналог: постоянная регуляция гомеостаза гипоталамусом.
-        """
+        """Фоновый метаболизм драйвов."""
         logger.info("DriveSystem: Метаболизм запущен.")
-        
+    
         while True:
             await asyncio.sleep(self.prediction_update_interval)
-            
-            # 1. Применяем перекрестное влияние
+        
             for drive in self.drives.values():
                 cross_effect = self._calculate_cross_influence(drive.type)
                 effective_growth = drive.base_growth_rate + cross_effect
-                
-                # Рост с учетом перекрестного влияния
+            
                 drive.current = min(1.0, max(0.0, drive.current + effective_growth))
             
-            # 2. Обновляем предсказания (аллостаз)
+                # МЕХАНИЗМ ВОССТАНОВЛЕНИЯ: если драйв слишком низкий, принудительно повышаем
+                if drive.current < 0.20:
+                    drive.current = 0.20 + (drive.base_growth_rate * 2)
+            
+                # Ограничиваем значения драйвов
+                drive.current = max(0.1, min(0.9, drive.current))
+        
             self._update_predictions()
+        
+            # Записываем в историю
+            for drive_type, drive in self.drives.items():
+                self.tension_history[drive_type].append(drive.current)
+                if len(self.tension_history[drive_type]) > self.max_history_length:
+                    self.tension_history[drive_type] = self.tension_history[drive_type][-self.max_history_length:]
     
     def _calculate_cross_influence(self, target_type: DriveType) -> float:
         """
@@ -220,6 +246,9 @@ class DriveSystem:
         
         drive = self.drives[drive_type]
         drive.current = max(0.0, drive.current - actual_amount)
+    
+        # Ограничиваем значения драйвов
+        drive.current = max(0.1, min(0.9, drive.current))
         
         logger.info(f"DriveSystem: {drive_type.value} удовлетворён на {actual_amount:.2f} (RPE modifier: {rpe_modifier:.2f})")
     

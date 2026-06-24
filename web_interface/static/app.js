@@ -152,6 +152,8 @@ function connectWebSocket() {
 
 // Обработка сообщений
 function handleMessage(data) {
+    console.log('Received:', data);  // Для отладки
+
     switch (data.type) {
         case 'user_message':
             addMessage(data.content, 'user');
@@ -159,13 +161,11 @@ function handleMessage(data) {
 
         case 'leya_response':
             addMessage(data.content, 'leya');
-            // Лея ответила - она активна
             updateAvatar(currentDrives, 'awake', false);
             break;
 
         case 'thought':
             addThought(data.thought_type, data.content);
-            // Лея думает - она в рефлексии
             updateAvatar(currentDrives, 'reflecting', true);
             break;
 
@@ -197,11 +197,18 @@ function handleMessage(data) {
 function addMessage(content, type) {
     const msg = document.createElement('div');
     msg.className = `message ${type}`;
-    msg.textContent = content;
+
+    if (type === 'leya') {
+        msg.innerHTML = `<span class="message-author">🦊 Лея</span><br>${escapeHtml(content)}`;
+    } else if (type === 'user') {
+        msg.innerHTML = `<span class="message-author">👤 Ты</span><br>${escapeHtml(content)}`;
+    } else {
+        msg.textContent = content;
+    }
+
     messagesDiv.appendChild(msg);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-    // Ограничиваем количество сообщений
     while (messagesDiv.children.length > 100) {
         messagesDiv.removeChild(messagesDiv.firstChild);
     }

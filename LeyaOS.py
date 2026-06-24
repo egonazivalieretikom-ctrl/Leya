@@ -143,43 +143,16 @@ class LeyaOS:
     
         logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
     
-        # Если это запрос от пользователя — HomeostasisEngine решает, нужен ли инструмент
-        if stimulus_type == "user_message" and not tool_context:
-            drive_state = {d.type: d.current for d in self.drives.drives.values()}
-            goal = self.homeostasis.generate_goal(drive_state)
-        
-            # Проверяем, есть ли в запросе явный запрос на поиск
-            search_keywords = ['найди', 'поищи', 'узнай', 'какая погода', 'что такое', 
-                              'расскажи о', 'изучи', 'погода']
-            needs_search = any(kw in stimulus_content.lower() for kw in search_keywords)
-        
-            if needs_search:
-                # Извлекаем тему из запроса
-                topic = self._extract_topic_from_user(stimulus_content)
-                tool_result = await self.env.tool_registry.execute(
-                    "wikipedia_search",
-                    {"query": topic, "lang": "ru"}
-                )
-            
-                is_error = (
-                    tool_result.startswith("Ошибка") or
-                    "не удалось" in tool_result.lower() or
-                    "не дал ответа" in tool_result.lower()
-                )
-            
-                if is_error:
-                    tool_context = f"⚠️ Поиск не удался: {tool_result}. Не выдумывай данные."
-                else:
-                    tool_context = f"=== РЕАЛЬНЫЕ ДАННЫЕ ИЗ WIKIPEDIA ===\n{tool_result}\n\nОпирайся только на эти данные."
-            
-                logger.info(f"HomeostasisEngine: Пользовательский запрос → инструмент. Тема: {topic}")
+        # Сохраняем в память
+        drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
     
         await self.memory.store_perception(
             content=f"[{stimulus_type}] {stimulus_content}",
-            drive_state={d.type.value: d.tension for d in self.drives.drives.values()},
+            drive_state=drive_state_dict,
             importance=0.6 if stimulus_type == "user_message" else 0.3
         )
     
+        # Запускаем когнитивный цикл
         await self._cognitive_loop(stimulus, tool_context)
 
     def _extract_topic_from_user(self, text: str) -> str:
@@ -200,46 +173,109 @@ class LeyaOS:
         stimulus_content = stimulus.get("content", "")
     
         try:
-            # ЭТАП 1: Оценка стимула через Драйвы
-            deltas = await self.drives.evaluate_stimulus(
-                stimulus=stimulus_content,
-                context=await self.memory.get_self_model_context()
-            )
-            self.drives.apply_deltas(deltas)
-        
             drive_state_text = self.drives.get_internal_state_prompt()
             raw_drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
         
-            # ЭТАП 2: Вспоминание
             memory_context = await self.memory.retrieve_context(
                 current_stimulus=stimulus_content,
                 current_drive_state=raw_drive_state,
                 limit=5
             )
         
-            # ЭТАП 3: Модель Себя
             self_model = await self.memory.get_self_model_context()
         
-            # ЭТАП 4: Генерация ответа (с контекстом инструментов)
+            # ЭТАП 1: Генерация ответа (с описанием инструментов)
             cognitive_output = await self.thinker.generate_plan(
                 stimulus=stimulus_content,
                 memory_context=memory_context,
                 drive_state=drive_state_text,
                 self_model=self_model,
-                tools_description=self.tools_description,
-                tool_context=tool_context  # <-- ПЕРЕДАЕМ
+                tools_description=self.tools_description,  # <-- ПЕРЕДАЕМ
+                tool_context=tool_context
             )
         
-            # ЭТАП 5: Пост-обработка
+            # ЭТАП 2: Проверка, хочет ли LLM вызвать инструмент
+            if cognitive_output.tool_call and cognitive_output.action_intent == "use_tool":
+                try:
+                    tool_data = json.loads(cognitive_output.tool_call)
+                    tool_name = tool_data.get("tool", "")
+                    tool_params = tool_data.get("parameters", {})
+        
+                    if tool_name:
+                        logger.info(f"LeyaOS: LLM хочет вызвать инструмент: {tool_name}")
+            
+                        # Вызываем инструмент
+                        tool_result = await self.env.tool_registry.execute(tool_name, tool_params)
+            
+                        logger.info(f"LeyaOS: Результат инструмента: {tool_result[:200]}...")
+            
+                        # Формируем контекст с результатом
+                        is_error = tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower() or "не найден" in tool_result.lower() or "не дал ответа" in tool_result.lower()
+            
+                        # МЕХАНИЗМ АЛЬТЕРНАТИВНЫХ ВЫЗОВОВ
+                        if is_error:
+                            if tool_name == "duckduckgo_search":
+                                # Fallback на Wikipedia
+                                logger.info("LeyaOS: DuckDuckGo не дал ответа, пытаемся Wikipedia")
+                                query = tool_params.get("query", "")
+                                tool_result = await self.env.tool_registry.execute(
+                                    "wikipedia_search",
+                                    {"query": query, "lang": "ru"}
+                                )
+                                is_error = tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower()
+                
+                            elif tool_name == "github_readme":
+                                # Fallback на поиск через DuckDuckGo
+                                logger.info("LeyaOS: GitHub не найден, пытаемся duckduckgo_search")
+                                owner = tool_params.get("owner", "")
+                                repo = tool_params.get("repo", "")
+                                search_query = f"{owner} {repo} github repository"
+                                tool_result = await self.env.tool_registry.execute(
+                                    "duckduckgo_search",
+                                    {"query": search_query}
+                                )
+                                is_error = tool_result.startswith("Ошибка") or "не дал ответа" in tool_result.lower()
+            
+                        if is_error:
+                            new_tool_context = f"⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}. Не выдумывай."
+                        else:
+                            new_tool_context = f"=== РЕЗУЛЬТАТ ИНСТРУМЕНТА ===\n{tool_result}\n\nОпирайся на эти данные."
+            
+                        # ЭТАП 3: Повторный вызов LLM с результатом инструмента
+                        cognitive_output = await self.thinker.generate_plan(
+                            stimulus=stimulus_content,
+                            memory_context=memory_context,
+                            drive_state=drive_state_text,
+                            self_model=self_model,
+                            tools_description=self.tools_description,
+                            tool_context=new_tool_context
+                        )
+            
+                        # Удовлетворяем драйвы за использование инструмента
+                        self.drives.apply_satisfaction(DriveType.CURIOSITY, 0.15, 0.0)
+            
+                except json.JSONDecodeError as e:
+                    logger.error(f"LeyaOS: Ошибка парсинга tool_call: {e}")
+                except Exception as e:
+                    logger.error(f"LeyaOS: Ошибка вызова инструмента: {e}")
+        
+            # ЭТАП 4: Пост-обработка
             await self.memory.store_perception(
                 content=f"Стимул: {stimulus_content} | Мысль: {cognitive_output.internal_monologue} | Ответ: {cognitive_output.response}",
                 drive_state=raw_drive_state,
                 importance=0.8 if cognitive_output.self_reflection else 0.5
             )
         
+            # Ограничиваем частоту обновления Модели Себя (не чаще раза в 5 минут)
             if cognitive_output.self_reflection:
-                await self.memory.update_self_model(cognitive_output.self_reflection)
-                logger.info(f"Эго обновлено: {cognitive_output.self_reflection[:80]}...")
+                current_time = datetime.now().timestamp()
+                if not hasattr(self, '_last_self_model_update'):
+                    self._last_self_model_update = 0
+            
+                if current_time - self._last_self_model_update > 300:  # 5 минут
+                    await self.memory.update_self_model(cognitive_output.self_reflection)
+                    logger.info(f"Эго обновлено: {cognitive_output.self_reflection[:80]}...")
+                    self._last_self_model_update = current_time
         
             if cognitive_output.action_intent == "remember_fact":
                 await self.memory.store_fact(
@@ -284,6 +320,8 @@ class LeyaOS:
     
         self.running = True
         self.state = "awake"
+        if isinstance(self.env, WebEnvironment):
+            await self.env.update_state("awake")
         logger.info(f"{self.name} проснулась. Состояние: {self.state}")
     
         # Запускаем фоновые процессы
@@ -291,6 +329,7 @@ class LeyaOS:
             asyncio.create_task(self.drives.background_metabolism(), name="metabolism"),
             asyncio.create_task(self.reflection.background_consolidation(), name="consolidation"),
             asyncio.create_task(self._homeostasis_loop(), name="homeostasis"),
+            asyncio.create_task(self._broadcast_state_loop(), name="broadcast"),
         ]
     
         # Веб-сервер
@@ -353,30 +392,58 @@ class LeyaOS:
                     goal.tool_name,
                     goal.tool_parameters
                 )
-            
+    
                 logger.info(f"Результат инструмента: {tool_result[:200]}...")
-            
-                # Оцениваем фактический результат (0.0 - 1.0)
+    
+                # Оцениваем фактический результат
                 actual_outcome = self._evaluate_tool_outcome(tool_result)
-            
+    
                 # Вычисляем RPE
                 rpe = self.drives.calculate_rpe(goal.action_key, actual_outcome)
-            
+    
                 # Применяем удовлетворение с модификацией RPE
                 for drive_type in goal.target_drives.keys():
-                    base_amount = 0.1
-                    self.drives.apply_satisfaction(drive_type, base_amount, rpe)
-            
+                    self.drives.apply_satisfaction(drive_type, 0.1, rpe)
+    
+                # === ИЗВЛЕЧЕНИЕ КЛЮЧЕВЫХ ФАКТОВ И НОВЫХ ТЕРМИНОВ ===
+                key_facts = []
+                if actual_outcome >= 0.3 and tool_result:
+                    # Извлекаем ключевые факты
+                    key_facts = await self.homeostasis.extract_key_facts(
+                        goal.name, tool_result, self._llm_call
+                    )
+        
+                    # Сохраняем факты в семантическую память
+                    for fact in key_facts:
+                        await self.memory.store_fact(
+                            fact=f"[ИЗУЧЕНО: {goal.name}] {fact}",
+                            category="extracted_from_research"
+                        )
+        
+                    # Извлекаем новые термины
+                    new_terms = await self.homeostasis.extract_new_terms(
+                        tool_result, self._llm_call
+                    )
+        
+                    # Добавляем в динамические ключевые слова
+                    if new_terms:
+                        self.homeostasis.add_dynamic_keywords(new_terms)
+    
                 # Формируем контекст для LLM
                 is_error = actual_outcome < 0.3
-            
+    
                 if is_error:
                     tool_context = f"⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}. Не выдумывай."
                 else:
-                    tool_context = f"=== РЕАЛЬНЫЕ ДАННЫЕ ===\n{tool_result}\n\nОпирайся на эти данные."
-            
+                    # Если есть извлечённые факты — включаем их в контекст
+                    if key_facts:
+                        facts_text = "\n".join([f"- {fact}" for fact in key_facts])
+                        tool_context = f"=== КЛЮЧЕВЫЕ ФАКТЫ ===\n{facts_text}\n\n=== ПОЛНЫЙ ТЕКСТ ===\n{tool_result}\n\nОпирайся на эти факты."
+                    else:
+                        tool_context = f"=== РЕАЛЬНЫЕ ДАННЫЕ ===\n{tool_result}\n\nОпирайся на эти данные."
+    
                 self.homeostasis.last_action_time = datetime.now().timestamp()
-            
+    
                 # Передаём в когнитивный цикл
                 await self.perceive({
                     "type": "homeostasis_action",
@@ -384,6 +451,22 @@ class LeyaOS:
                     "source": "homeostasis",
                     "tool_context": tool_context
                 })
+    
+                if "Исследовать пробел:" in goal.name:
+                    topic = goal.name.replace("Исследовать пробел:", "").strip()
+                    self.homeostasis.mark_as_researched(topic)
+
+                # Передаём в когнитивный цикл
+                await self.perceive({
+                    "type": "homeostasis_action",
+                    "content": f"Цель: {goal.name}. Результат: {tool_result[:500]}",
+                    "source": "homeostasis",
+                    "tool_context": tool_context
+                })
+
+                if "Исследовать пробел:" in goal.name:
+                    topic = goal.name.replace("Исследовать пробел:", "").strip()
+                    self.homeostasis.mark_as_researched(topic)
         
             elif goal.action_type == "rest":
                 logger.info(f"HomeostasisEngine: Отдых. {goal.reasoning}")

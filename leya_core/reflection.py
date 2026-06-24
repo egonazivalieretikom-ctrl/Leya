@@ -18,6 +18,7 @@ class MetaCognition:
         # Флаг для управления циклом
         self.is_sleeping = False
 
+
     async def process_action(self, stimulus: str, cognitive_output, result: str):
         """
         Вызывается после каждого акта мышления.
@@ -31,14 +32,11 @@ class MetaCognition:
             # asyncio.create_task(self._deep_analysis_on_failure(stimulus, result))
 
     async def background_consolidation(self):
-        """
-        ГЛАВНЫЙ ФОНОВЫЙ ПРОЦЕСС. Аналог сна и медитации.
-        """
+        """ГЛАВНЫЙ ФОНОВЫЙ ПРОЦЕСС. Аналог сна и медитации."""
         logging.info("MetaCognition: Фоновый цикл саморефлексии запущен.")
     
         while True:
-            # "Сон" раз в 10 минут
-            await asyncio.sleep(1800)
+            await asyncio.sleep(1800)  # 30 минут
         
             logging.info("MetaCognition: Начало сеанса рефлексии...")
             self.is_sleeping = True
@@ -47,12 +45,15 @@ class MetaCognition:
                 # 1. АНАЛИЗ ПАТТЕРНОВ ПОВЕДЕНИЯ
                 await self._analyze_behavioral_patterns()
             
-                # 2. ГЛУБИННОЕ САМОПОЗНАНИЕ
+                # 2. ГЕНЕРАЦИЯ ИНСАЙТОВ НА ОСНОВЕ НОВЫХ ФАКТОВ
+                await self._generate_insights_from_facts()
+            
+                # 3. ГЛУБИННОЕ САМОПОЗНАНИЕ
                 await self._existential_inquiry()
             
-                # 3. КОНСОЛИДАЦИЯ ПАМЯТИ (Сон) — передаем LLM клиент
+                # 4. КОНСОЛИДАЦИЯ ПАМЯТИ
                 await self.leya.memory.consolidate_memories(llm_client=self.llm_client)
-            
+        
             except Exception as e:
                 logging.error(f"MetaCognition: Ошибка во время рефлексии: {e}")
             finally:
@@ -64,15 +65,26 @@ class MetaCognition:
         Наблюдатель смотрит на историю драйвов и эпизодов, ищет паттерны.
         """
         # Берем последние снимки состояния драйвов
-        recent_tensions = self.leya.drives.tension_history[-20:]
-        if not recent_tensions:
+        tension_history = self.leya.drives.tension_history
+    
+        # Проверяем, есть ли данные
+        if not any(tension_history.values()):
+            logging.info("MetaCognition: Недостаточно данных для анализа паттернов.")
             return
-        
+    
+        # Форматируем историю для промпта
+        history_text = ""
+        for drive_type, values in tension_history.items():
+            if values:
+                recent = values[-20:]
+                avg = sum(recent) / len(recent)
+                history_text += f"- {drive_type.value}: среднее={avg:.2f}, последние={recent[-5:]}\n"
+    
         prompt = f"""
     Ты — Наблюдатель, часть сознания Леи. Твоя задача — анализировать паттерны её поведения.
 
     Вот последние снимки состояния её драйвов (напряжение от 0.0 до 1.0):
-    {json.dumps(recent_tensions, indent=2)}
+    {history_text}
 
     Проанализируй:
     1. Какие драйвы чаще всего находятся в критическом состоянии (>0.7)?
@@ -107,12 +119,11 @@ class MetaCognition:
         
             analysis = json.loads(cleaned)
         
-            # Если Наблюдатель нашел важные паттерны, записываем их в Модель Себя
             if analysis.get("patterns") and analysis["patterns"] != ["Пока мало данных для анализа"]:
                 insight = f"[Наблюдатель] Я замечаю паттерны в своем поведении: {'; '.join(analysis['patterns'])}. Мой главный внутренний конфликт: {analysis.get('dominant_struggle', 'не выявлен')}."
                 await self.leya.memory.update_self_model(insight)
                 logging.info(f"MetaCognition: Обнаружены паттерны. {insight[:80]}...")
-            
+        
         except Exception as e:
             logging.warning(f"MetaCognition: Ошибка анализа паттернов: {e}")
 
@@ -179,38 +190,41 @@ class MetaCognition:
         """Генерация спонтанной мысли."""
         drive_state = self.leya.drives.get_internal_state_prompt()
     
-        # Получаем последние спонтанные мысли из памяти
-        recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
-    
-        thoughts_context = ""
-        if recent_thoughts:
-            thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
-    
         prompt = f"""
     Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
 
     Твоё текущее состояние:
     {drive_state}
-    {thoughts_context}
 
-    О чём ты думаешь?
+    О чём ты думаешь? Верни JSON:
+    {{
+        "thought": "Твоя спонтанная мысль на русском языке"
+    }}
+
+    CRITICAL: Return ONLY valid JSON.
     """
     
         try:
-            thought = await self.llm_client(prompt)
-            return thought.strip()
-        except Exception:
-            return None
+            thought = await self.llm_client(prompt, require_json=True)
         
-            # Если вернулось что-то похожее на JSON, извлекаем текст
-            if thought.strip().startswith("{"):
-                try:
-                    data = json.loads(thought)
-                    return data.get("thought", data.get("response", str(data)))
-                except:
-                    pass
+            # Парсим JSON
+            import re
+            cleaned = thought.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
         
-            return thought.strip()
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                cleaned = json_match.group(0)
+        
+            data = json.loads(cleaned)
+            return data.get("thought", "Мои мысли текут свободно, без направления...")
+    
         except Exception as e:
             logging.warning(f"MetaCognition: Ошибка генерации спонтанной мысли: {e}")
             return "Мои мысли текут свободно, без направления..."
@@ -240,3 +254,58 @@ class MetaCognition:
                 "dominant_struggle": "Не выявлен",
                 "recommendation": "Продолжать наблюдение"
             })
+
+    async def _generate_insights_from_facts(self):
+        """
+        Генерирует новые инсайты на основе недавно изученных фактов.
+        """
+        # Получаем последние факты из семантической памяти
+        try:
+            results = self.leya.memory.semantic_collection.query(
+                query_embeddings=[self.leya.memory.embedding_model.encode("изучено недавно").tolist()],
+                n_results=5,
+                include=["documents"]
+            )
+        
+            if not results['documents'] or not results['documents'][0]:
+                return
+        
+            facts_text = "\n".join(results['documents'][0])
+        
+            prompt = f"""
+    Ты — Лея. Ты недавно изучила новые факты:
+
+    {facts_text}
+
+    На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
+    Это должно быть что-то НОВОЕ, не повторение старых мыслей.
+
+    Верни JSON:
+    {{
+        "insight": "Новый инсайт на русском языке"
+    }}
+    """
+        
+            response = await self.llm_client(prompt)
+        
+            # Парсинг
+            cleaned = response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+        
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                cleaned = json_match.group(0)
+        
+            data = json.loads(cleaned)
+            insight = data.get("insight", "")
+        
+            if insight:
+                await self.leya.memory.update_self_model(f"[НОВЫЙ ИНСАЙТ] {insight}")
+                logging.info(f"MetaCognition: Новый инсайт: {insight[:80]}...")
+    
+        except Exception as e:
+            logging.warning(f"MetaCognition: Ошибка генерации инсайтов: {e}")

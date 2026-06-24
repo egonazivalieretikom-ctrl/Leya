@@ -71,9 +71,7 @@ body {
         font-size: 28px;
         font-weight: 700;
         background: linear-gradient(135deg, var(--accent), var(--accent-2));
-        -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        background-clip: text;
         color: transparent;
     }
 
@@ -610,4 +608,29 @@ body {
     .chat-panel {
         height: 60vh;
     }
+}
+
+.message-author {
+    font-weight: bold;
+    font-size: 0.9em;
+    opacity: 0.8;
+    margin-bottom: 4px;
+    display: block;
+}
+
+.message.user {
+    background: rgba(100, 150, 255, 0.1);
+    border-left: 3px solid #6496ff;
+}
+
+.message.leya {
+    background: rgba(255, 150, 100, 0.1);
+    border-left: 3px solid #ff9664;
+}
+
+.message.thought {
+    background: rgba(150, 100, 255, 0.1);
+    border-left: 3px solid #9664ff;
+    font-style: italic;
+    opacity: 0.8;
 }
