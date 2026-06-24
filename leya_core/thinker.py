@@ -76,7 +76,6 @@ class CoreThinker:
         raw_response = await self.llm_client(prompt)
     
         try:
-            # Очистка ответа
             cleaned = raw_response.strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
@@ -110,7 +109,6 @@ class CoreThinker:
                 tool_call="",
                 self_reflection="Обнаружена уязвимость в процессе генерации."
             )
-
     def _build_cognitive_prompt(
         self,
         stimulus: str,
@@ -126,7 +124,6 @@ class CoreThinker:
         tools_section = ""
         if tools_description:
             tools_section = f"""
-    === ДОСТУПНЫЕ ИНСТРУМЕНТЫ ===
     {tools_description}
 
     Если нужно использовать инструмент, укажи его в поле tool_call в формате JSON:

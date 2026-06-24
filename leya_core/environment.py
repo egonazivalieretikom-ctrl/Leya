@@ -160,7 +160,7 @@ class Environment(ABC):
     def _register_default_tools(self):
         """Регистрирует все инструменты, доступные Лее."""
         import aiohttp
-        
+
         # ==================== ДУША ====================
         
         async def read_soul_file(filename: str) -> str:
@@ -300,6 +300,8 @@ class Environment(ABC):
             handler=github_readme
         ))
 
+        # ==================== GITHUB SEARCH ====================
+
         async def github_search_repos(**kwargs) -> str:
             """Поиск репозиториев на GitHub."""
             try:
@@ -342,13 +344,16 @@ class Environment(ABC):
             except Exception as e:
                 return f"Ошибка GitHub Search: {str(e)}"
 
-        self.tool_registry.register(type('Tool', (), {
-            'name': 'github_search_repos',
-            'description': 'Поиск репозиториев на GitHub по ключевым словам',
-            'parameters': {'query': 'Что искать', 'sort': 'stars/updated/forks', 'limit': '1-10'},
-            'handler': github_search_repos,
-            'to_prompt_description': lambda self: f"- github_search_repos: {self.description}"
-        })())
+        self.tool_registry.register(Tool(
+            name="github_search_repos",
+            description="Поиск репозиториев на GitHub по ключевым словам",
+            parameters={
+                "query": "Что искать",
+                "sort": "stars/updated/forks",
+                "limit": "1-10"
+            },
+            handler=github_search_repos
+        ))
         
         # ==================== REDDIT ====================
         

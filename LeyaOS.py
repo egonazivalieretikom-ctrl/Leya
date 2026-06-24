@@ -173,6 +173,9 @@ class LeyaOS:
         stimulus_content = stimulus.get("content", "")
     
         try:
+            # УБРАЛИ: deltas = await self.drives.evaluate_stimulus(...)
+            # В новой архитектуре драйвы меняются только через apply_satisfaction
+        
             drive_state_text = self.drives.get_internal_state_prompt()
             raw_drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
         
@@ -200,22 +203,21 @@ class LeyaOS:
                     tool_data = json.loads(cognitive_output.tool_call)
                     tool_name = tool_data.get("tool", "")
                     tool_params = tool_data.get("parameters", {})
-        
+                
                     if tool_name:
                         logger.info(f"LeyaOS: LLM хочет вызвать инструмент: {tool_name}")
-            
+                    
                         # Вызываем инструмент
                         tool_result = await self.env.tool_registry.execute(tool_name, tool_params)
-            
+                    
                         logger.info(f"LeyaOS: Результат инструмента: {tool_result[:200]}...")
-            
+                    
                         # Формируем контекст с результатом
                         is_error = tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower() or "не найден" in tool_result.lower() or "не дал ответа" in tool_result.lower()
-            
+                    
                         # МЕХАНИЗМ АЛЬТЕРНАТИВНЫХ ВЫЗОВОВ
                         if is_error:
                             if tool_name == "duckduckgo_search":
-                                # Fallback на Wikipedia
                                 logger.info("LeyaOS: DuckDuckGo не дал ответа, пытаемся Wikipedia")
                                 query = tool_params.get("query", "")
                                 tool_result = await self.env.tool_registry.execute(
@@ -223,9 +225,8 @@ class LeyaOS:
                                     {"query": query, "lang": "ru"}
                                 )
                                 is_error = tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower()
-                
+                        
                             elif tool_name == "github_readme":
-                                # Fallback на поиск через DuckDuckGo
                                 logger.info("LeyaOS: GitHub не найден, пытаемся duckduckgo_search")
                                 owner = tool_params.get("owner", "")
                                 repo = tool_params.get("repo", "")
@@ -235,12 +236,12 @@ class LeyaOS:
                                     {"query": search_query}
                                 )
                                 is_error = tool_result.startswith("Ошибка") or "не дал ответа" in tool_result.lower()
-            
+                    
                         if is_error:
                             new_tool_context = f"⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}. Не выдумывай."
                         else:
                             new_tool_context = f"=== РЕЗУЛЬТАТ ИНСТРУМЕНТА ===\n{tool_result}\n\nОпирайся на эти данные."
-            
+                    
                         # ЭТАП 3: Повторный вызов LLM с результатом инструмента
                         cognitive_output = await self.thinker.generate_plan(
                             stimulus=stimulus_content,
@@ -250,10 +251,10 @@ class LeyaOS:
                             tools_description=self.tools_description,
                             tool_context=new_tool_context
                         )
-            
+                    
                         # Удовлетворяем драйвы за использование инструмента
                         self.drives.apply_satisfaction(DriveType.CURIOSITY, 0.15, 0.0)
-            
+                    
                 except json.JSONDecodeError as e:
                     logger.error(f"LeyaOS: Ошибка парсинга tool_call: {e}")
                 except Exception as e:
