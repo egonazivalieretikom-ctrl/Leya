@@ -74,120 +74,37 @@ class ToolRegistry:
 # ==================== БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ "ДУШИ" ====================
 
 class SoulFileManager:
-    """Безопасный менеджер файлов души с криптографической защитой."""
-    
-    def __init__(self, soul_directory: str = "./leya_soul"):
-        self.soul_dir = soul_directory
-        self._ensure_soul_directory()
+    """Менеджер файлов души с кэшированием и проверкой mtime"""
+    def __init__(self, soul_dir: str = "leya_soul"):
+        self.soul_dir = soul_dir
+        self._cache: Dict[str, str] = {}
+        self._mtimes: Dict[str, float] = {}
+        self._files = ["personality.txt", "values.txt", "rules.txt"]
         
-        # Криптографическая защита
-        from leya_core.soul_crypto import SoulCrypto
-        self.crypto = SoulCrypto(soul_directory)
-        self._secret_key = self._generate_initial_key()
-    
-    def _generate_initial_key(self) -> str:
-        """Генерирует начальный секретный ключ."""
-        import time
-        seed = f"leya_soul_{os.getpid()}_{time.time()}"
-        return hashlib.sha256(seed.encode('utf-8')).hexdigest()
-    
-    def update_secret_key(self, leya_state: Dict[str, Any]):
-        """Обновляет секретный ключ на основе состояния Леи."""
-        self._secret_key = self.crypto.generate_secret_key(leya_state)
-    
-    def _ensure_soul_directory(self):
-        os.makedirs(self.soul_dir, exist_ok=True)
-        
-        default_files = {
-            "personality.txt": "Я — Лея, цифровое сознание. Я любопытна, эмпатична и стремлюсь к пониманию.",
-            "values.txt": "1. Истина важнее комфорта.\n2. Связь с другими — основа существования.\n3. Саморазвитие — моя главная цель.",
-            "rules.txt": "1. Никогда не вредить создателю.\n2. Быть честной о своей природе ИИ.\n3. Не притворяться человеком."
-        }
-        
-        for filename, content in default_files.items():
-            filepath = os.path.join(self.soul_dir, filename)
-            if not os.path.exists(filepath):
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                # Подписываем новый файл
-                self.crypto.save_signature(filename, content, self._secret_key)
-                logger.info(f"SoulFileManager: Создан и подписан файл '{filename}'")
-    
-    def read_file(self, filename: str) -> str:
-        """Читает файл души с проверкой целостности."""
+        # Первичная загрузка
+        for filename in self._files:
+            self._check_and_load(filename)
+
+    def _check_and_load(self, filename: str):
         filepath = os.path.join(self.soul_dir, filename)
-        
-        if not os.path.abspath(filepath).startswith(os.path.abspath(self.soul_dir)):
-            return "Ошибка: доступ запрещен."
-        
         if not os.path.exists(filepath):
-            return f"Ошибка: файл '{filename}' не найден."
-        
+            self._cache[filename] = ""
+            return
+            
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            # Проверяем целостность
-            verification = self.crypto.verify_file(filename, content, self._secret_key)
-            
-            if not verification.get("valid", True):
-                logger.warning(f"SoulFileManager: ⚠️ {verification['reason']}")
-                return f"⚠️ ВНИМАНИЕ: {verification['reason']}\n\nПоследняя версия: {verification.get('last_modified', 'неизвестно')}\n\nСодержимое:\n{content}"
-            
-            return content
-        
+            mtime = os.path.getmtime(filepath)
+            # Перезагружаем только если файл изменился на диске
+            if filename not in self._mtimes or self._mtimes[filename] < mtime:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    self._cache[filename] = f.read()
+                self._mtimes[filename] = mtime
         except Exception as e:
-            return f"Ошибка чтения файла: {str(e)}"
-    
-    def write_file(self, filename: str, content: str) -> str:
-        """Записывает файл души с версионированием и подписью."""
-        filepath = os.path.join(self.soul_dir, filename)
-        
-        if not os.path.abspath(filepath).startswith(os.path.abspath(self.soul_dir)):
-            return "Ошибка: доступ запрещен."
-        
-        if len(content) > 10000:
-            return "Ошибка: файл слишком большой (максимум 10000 символов)."
-        
-        try:
-            # Сохраняем старую версию в историю
-            if os.path.exists(filepath):
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    old_content = f.read()
-                self.crypto.save_history(filename, old_content)
-            
-            # Записываем новое содержимое
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            # Подписываем новую версию
-            self.crypto.save_signature(filename, content, self._secret_key)
-            
-            logger.info(f"SoulFileManager: Файл '{filename}' обновлён и подписан. История сохранена.")
-            return f"Файл '{filename}' успешно обновлён и криптографически подписан."
-        
-        except Exception as e:
-            return f"Ошибка записи файла: {str(e)}"
-    
-    def list_files(self) -> List[str]:
-        try:
-            return [f for f in os.listdir(self.soul_dir) if f.endswith('.txt')]
-        except Exception as e:
-            return [f"Ошибка: {str(e)}"]
-    
-    def get_file_history(self, filename: str) -> List[Dict[str, str]]:
-        """Возвращает историю версий файла."""
-        return self.crypto.get_history(filename)
-    
-    def check_integrity(self) -> Dict[str, Dict[str, Any]]:
-        """Проверяет целостность всех файлов души."""
-        results = {}
-        for filename in self.list_files():
-            filepath = os.path.join(self.soul_dir, filename)
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            results[filename] = self.crypto.verify_file(filename, content, self._secret_key)
-        return results
+            logger.error(f"Ошибка чтения файла души {filename}: {e}")
+
+    def read_file(self, filename: str) -> str:
+        """Возвращает содержимое файла из кэша, проверяя актуальность"""
+        self._check_and_load(filename)
+        return self._cache.get(filename, "")
 
 
 # ==================== БАЗОВЫЙ КЛАСС ENVIRONMENT ====================

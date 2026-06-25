@@ -90,6 +90,7 @@ class Engram:
         # Усиление от консолидации
         consolidation_factor = 1 + (self.consolidation_level * 3)
         
+        return max(0.01, stability)
         return base_stability * repetition_factor * emotion_factor * consolidation_factor
 
 
@@ -179,54 +180,51 @@ class MemorySystem:
     # ==================== ФОРМИРОВАНИЕ ПАМЯТИ ====================
     
     async def store_perception(
-        self,
-        content: str,
-        drive_state: Dict[str, float],
-        importance: float = 0.5,
-        memory_type: MemoryType = MemoryType.EPISODIC
+        self, 
+        content: str, 
+        drive_state: Dict[str, float], 
+        importance: float = 0.5
     ):
-        """
-        Формирует новое воспоминание (энграмму).
+        """Сохраняет новый след памяти (Энграмму)"""
+        timestamp = time.time()
         
-        Биологический аналог: кодирование в гиппокампе с эмоциональным тегированием.
-        """
-        # Вычисляем эмоциональный заряд на основе силы драйвов
-        emotional_intensity = self._calculate_emotional_intensity(drive_state)
+        # 1. Генерируем ID
+        import uuid
+        engram_id = str(uuid.uuid4())
         
-        # Создаём энграмму
-        engram_id = f"engram_{int(time.time() * 1000)}"
+        # 2. Создаем энграмму
         engram = Engram(
             id=engram_id,
             content=content,
-            memory_type=memory_type,
-            timestamp=time.time(),
-            emotional_intensity=emotional_intensity,
+            memory_type=MemoryType.EPISODIC,
+            timestamp=timestamp,
+            emotional_intensity=importance,
             drive_state=drive_state
         )
         
-        self.engrams[engram_id] = engram
+        # 3. ИСПРАВЛЕНО: Генерация эмбеддинга и сохранение в ChromaDB вынесены в поток
+        # Это предотвращает блокировку asyncio event loop
+        embedding = await asyncio.to_thread(self._generate_embedding, content)
         
-        # Сохраняем в ChromaDB
-        collection = self.episodic_collection if memory_type == MemoryType.EPISODIC else self.semantic_collection
-        
-        embedding = self.embedding_model.encode(content).tolist()
-        
-        collection.add(
-            ids=[engram_id],
-            embeddings=[embedding],
+        await asyncio.to_thread(
+            self.episodic_collection.add,
             documents=[content],
+            embeddings=[embedding],
             metadatas=[{
-                "memory_type": memory_type.value,
-                "emotional_intensity": emotional_intensity,
-                "timestamp": engram.timestamp,
-                "decay_rate": engram.decay_rate
-            }]
+                "timestamp": timestamp,
+                "importance": importance,
+                "drive_state": str(drive_state)
+            }],
+            ids=[engram_id]
         )
         
-        logger.info(f"MemorySystem: Сформирована энграмма {engram_id} (эмоциональный заряд: {emotional_intensity:.2f})")
-        
-        # Формируем синаптические связи с похожими воспоминаниями
-        await self._form_synaptic_connections(engram, collection)
+        self.engrams[engram_id] = engram
+        logger.debug(f"Сохранена энграмма: {engram_id}")
+
+    def _generate_embedding(self, text: str) -> List[float]:
+        """Синхронный метод для генерации эмбеддинга (вызывается через to_thread)"""
+        #SentenceTransformer вызов
+        return self.embedding_model.encode(text).tolist()
     
     def _calculate_emotional_intensity(self, drive_state: Dict[str, float]) -> float:
         """

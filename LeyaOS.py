@@ -97,9 +97,8 @@ class LeyaOS:
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
-    async def perceive(self, stimulus: Dict[str, Any]):
-        """Точка входа для любого стимула."""
-        async with self._perceive_lock:
+        async def perceive(self, stimulus: Dict[str, Any]):
+            """Точка входа для любого стимула."""
             self._last_interaction_time = datetime.now().timestamp()
 
             stimulus_type = stimulus.get("type", "unknown")
@@ -109,173 +108,135 @@ class LeyaOS:
 
             logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
 
-            # Получаем состояние драйвов
-            drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
-
-            # Сохраняем в память с правильной сигнатурой
-            try:
-                await self.memory.store_perception(
-                    content=f"[{stimulus_type}] {stimulus_content}",
-                    drive_state=drive_state_dict,
-                    importance=0.6 if stimulus_type == "user_message" else 0.3
+            # Если это запрос от пользователя — HomeostasisEngine решает, нужен ли инструмент
+            if stimulus_type == "user_message" and not tool_context:
+                drive_state = {d.type: d.current for d in self.drives.drives.values()}
+                predicted_state = self.drives.get_predicted_disbalance()
+                recent_episodes = await self._get_recent_episodes(limit=5)
+            
+                # ИСПРАВЛЕНО: Передаем все необходимые аргументы
+                goal = self.homeostasis.generate_goal(
+                    drive_state=drive_state,
+                    predicted_state=predicted_state,
+                    recent_episodes=recent_episodes,
+                    action_values=self.drives.action_values
                 )
-            except Exception as e:
-                logger.warning(f"Не удалось сохранить восприятие в память: {e}")
-                # Fallback с минимальными параметрами
-                try:
-                    await self.memory.store_perception(
-                        content=f"[{stimulus_type}] {stimulus_content}",
-                        drive_state=drive_state_dict
-                    )
-                except Exception as e2:
-                    logger.error(f"Критическая ошибка сохранения в память: {e2}")
 
-            # Обновляем драйвы
+                # Проверяем, есть ли в запросе явный запрос на поиск
+                search_keywords = ['найди', 'поищи', 'узнай', 'какая погода', 'что такое',
+                                   'расскажи о', 'изучи', 'погода']
+                needs_search = any(kw in stimulus_content.lower() for kw in search_keywords)
+
+                if needs_search:
+                    topic = self._extract_topic_from_user(stimulus_content)
+                    if topic: # Защита от пустых запросов
+                        tool_result = await self.env.tool_registry.execute(
+                            "wikipedia_search",
+                            {"query": topic, "lang": "ru"}
+                        )
+
+                        is_error = (
+                            tool_result.startswith("Ошибка") or
+                            "не удалось" in tool_result.lower() or
+                            "не дал ответа" in tool_result.lower()
+                        )
+
+                        if is_error:
+                            tool_context = f"⚠️ Поиск не удался: {tool_result}. Не выдумывай данные."
+                        else:
+                            tool_context = f"=== РЕАЛЬНЫЕ ДАННЫЕ ИЗ WIKIPEDIA ===\n{tool_result}\n\nОпирайся только на эти данные."
+
+                        logger.info(f"HomeostasisEngine: Пользовательский запрос → инструмент. Тема: {topic}")
+
+            await self.memory.store_perception(
+                content=f"[{stimulus_type}] {stimulus_content}",
+                drive_state={d.type.value: d.tension for d in self.drives.drives.values()},
+                importance=0.6 if stimulus_type == "user_message" else 0.3
+            )
+
+            await self._cognitive_loop(stimulus, tool_context)
+
+        async def _cognitive_loop(self, stimulus: Dict[str, Any], tool_context: str = ""):
+            """Главный когнитивный цикл."""
+            stimulus_content = stimulus.get("content", "")
+
             try:
-                deltas = await self.drives.evaluate_stimulus(stimulus_content)
+                # ЭТАП 1: Оценка стимула через Драйвы
+                deltas = await self.drives.evaluate_stimulus(
+                    stimulus=stimulus_content,
+                    context=await self.memory.get_self_model_context()
+                )
                 self.drives.apply_deltas(deltas)
-            except Exception as e:
-                logger.warning(f"Ошибка оценки стимула: {e}")
 
-            # ✅ КРИТИЧНО: Для пользовательских сообщений запускаем когнитивный цикл
-            if stimulus_type == "user_message":
-                logger.info(f"Запуск когнитивного цикла для user_message")
-                asyncio.create_task(self._cognitive_loop(stimulus, tool_context))
+                drive_state_text = self.drives.get_internal_state_prompt()
+                raw_drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
 
-    async def _cognitive_loop(self, stimulus: Dict[str, Any], tool_context: str = ""):
-        """Когнитивный цикл — обработка стимула через CoreThinker."""
-        stimulus_type = stimulus.get("type", "unknown")
-        content = stimulus.get("content", "")
+                # ЭТАП 2: Вспоминание
+                memory_context = await self.memory.retrieve_context(
+                    current_stimulus=stimulus_content,
+                    current_drive_state=raw_drive_state,
+                    limit=5
+                )
 
-        is_user_message = stimulus_type == "user_message"
-        logger.info(f"_cognitive_loop запущен для {stimulus_type}, is_user_message={is_user_message}")
+                # ЭТАП 3: Модель Себя
+                self_model = await self.memory.get_self_model_context()
 
-        try:
-            # Собираем контекст
-            drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
-
-            try:
-                if hasattr(self.memory, 'get_recent_context'):
-                    recent_memories = await self.memory.get_recent_context(limit=5)
-                elif hasattr(self.memory, 'retrieve_context'):
-                    # ✅ ИСПРАВЛЕНО: передаём как позиционные аргументы
-                    recent_memories = await self.memory.retrieve_context(
-                        content,
-                        drive_state_dict,
-                        limit=5
-                    )
-                else:
-                    recent_memories = []
-            except Exception as e:
-                logger.warning(f"Ошибка получения воспоминаний: {e}")
-                recent_memories = []
-
-            try:
-                if hasattr(self.memory, 'get_self_model_context'):
-                    self_model = await self.memory.get_self_model_context()
-                else:
-                    self_model = self.self_model or "Модель себя не сформирована"
-            except Exception as e:
-                logger.warning(f"Ошибка получения модели себя: {e}")
-                self_model = self.self_model or "Модель себя не сформирована"
-
-            # ✅ ИСПОЛЬЗУЕМ CoreThinker для генерации ответа
-            logger.info(f"Вызов thinker.generate_plan()")
-            try:
+                # ЭТАП 4: Генерация ответа
                 cognitive_output = await self.thinker.generate_plan(
-                    stimulus=stimulus,
-                    memory_context=recent_memories if isinstance(recent_memories, list) else [],
-                    drive_state=drive_state_dict,
-                    self_model={"self_model": self_model} if isinstance(self_model, str) else self_model,
+                    stimulus=stimulus_content,
+                    memory_context=memory_context,
+                    drive_state=drive_state_text,
+                    self_model=self_model,
                     tools_description=self.tools_description,
                     tool_context=tool_context
                 )
-                logger.info(f"Получен ответ от thinker: {str(cognitive_output)[:100]}...")
-            except Exception as e:
-                logger.warning(f"Ошибка generate_plan, fallback на прямой LLM вызов: {e}")
-                # Fallback: прямой вызов LLM
-                prompt = self._build_fallback_prompt(content, drive_state_dict, self_model, recent_memories, tool_context, is_user_message)
-                response_text = await self._llm_call(prompt)
-                cognitive_output = {
-                    "response": response_text,
-                    "action": "respond",
-                    "reasoning": "Fallback из-за ошибки generate_plan",
-                    "confidence": 0.5
-                }
 
-            # Извлекаем ответ — пытаемся несколько полей
-            response = ""
-            if isinstance(cognitive_output, dict):
-                response = (
-                    cognitive_output.get("response", "") or 
-                    cognitive_output.get("internal_monologue", "") or
-                    str(cognitive_output)
+                # ЭТАП 5: Пост-обработка
+                await self.memory.store_perception(
+                    content=f"Стимул: {stimulus_content} | Мысль: {cognitive_output.internal_monologue} | Ответ: {cognitive_output.response}",
+                    drive_state=raw_drive_state,
+                    importance=0.8 if cognitive_output.self_reflection else 0.5
                 )
-            else:
-                response = str(cognitive_output)
 
-            # Если ответ всё ещё пустой — используем fallback
-            if not response or response.strip() == "{}" or response.strip() == "":
-                response = "Мне нужно немного времени, чтобы осмыслить это. Попробуй спросить иначе."
+                if cognitive_output.self_reflection:
+                    await self.memory.update_self_model(cognitive_output.self_reflection)
+                    logger.info(f"Эго обновлено: {cognitive_output.self_reflection[:80]}...")
 
-            logger.info(f"Извлечён ответ: {response[:100]}...")
-
-            if response:
-                # Сохраняем ответ как мысль
-                try:
-                    await self.memory.store_perception(
-                        content=f"[МОЯ МЫСЛЬ] {response}",
-                        drive_state=drive_state_dict,
-                        importance=0.5
+                if cognitive_output.action_intent == "remember_fact":
+                    await self.memory.store_fact(
+                        fact=f"{stimulus_content} -> {cognitive_output.response}",
+                        category="learned_from_interaction"
                     )
-                except Exception as e:
-                    logger.warning(f"Не удалось сохранить ответ в память: {e}")
-                    try:
-                        await self.memory.store_perception(
-                            content=f"[МОЯ МЫСЛЬ] {response}",
-                            drive_state=drive_state_dict
-                        )
-                    except Exception:
-                        pass
 
-                # ✅ ВАЖНО: Если это было сообщение пользователя — отправляем ответ через WebSocket
-                if is_user_message:
-                    logger.info(f"Отправка ответа пользователю через WebSocket")
-                    try:
-                        if hasattr(self.env, 'broadcast'):
-                            await self.env.broadcast({
-                                "type": "leya_message",
-                                "content": response
-                            })
-                        elif hasattr(self.env, 'send_message'):
-                            await self.env.send_message(response)
-                        logger.info(f"💬 Лея ответила пользователю: {response[:100]}...")
-                    except Exception as e:
-                        logger.error(f"Ошибка отправки ответа: {e}", exc_info=True)
+                # ИСПРАВЛЕНО: Вызываем удовлетворение драйвов от самого акта общения
+                await self._satisfy_drives(stimulus_content, cognitive_output)
 
-                # Обрабатываем удовлетворение драйвов
-                try:
-                    await self._satisfy_drives_simple(response)
-                except Exception as e:
-                    logger.warning(f"Ошибка удовлетворения драйвов: {e}")
+                # Вывод
+                logger.info("=" * 60)
+                logger.info(f"[МЫСЛИ ЛЕИ]: {cognitive_output.internal_monologue}")
+                logger.info(f"[ЛЕЯ ГОВОРИТ]: {cognitive_output.response}")
+                logger.info(f"[НАМЕРЕНИЕ]: {cognitive_output.action_intent}")
+                if cognitive_output.self_reflection:
+                    logger.info(f"[САМОРЕФЛЕКСИЯ]: {cognitive_output.self_reflection}")
+                logger.info("=" * 60)
 
-                # Обрабатываем использование инструментов
-                if isinstance(cognitive_output, dict):
-                    tool_call = cognitive_output.get("tool_call") or cognitive_output.get("tool")
-                    if tool_call:
-                        await self._handle_tool_call(tool_call, cognitive_output.get("tool_input", {}))
+                if hasattr(self.env, 'broadcast_thought'):
+                    if cognitive_output.internal_monologue:
+                        await self.env.broadcast_thought("internal", cognitive_output.internal_monologue)
+                    if cognitive_output.self_reflection:
+                        await self.env.broadcast_thought("reflection", cognitive_output.self_reflection)
 
-        except Exception as e:
-            logger.error(f"Ошибка в когнитивном цикле: {e}", exc_info=True)
-            if is_user_message:
-                try:
-                    fallback_msg = "Сейчас мои когнитивные процессы перегружены. Попробуй позже."
-                    if hasattr(self.env, 'broadcast'):
-                        await self.env.broadcast({"type": "leya_message", "content": fallback_msg})
-                    elif hasattr(self.env, 'send_message'):
-                        await self.env.send_message(fallback_msg)
-                except Exception:
-                    pass
+                await self.env.send_message(cognitive_output.response)
+
+                await self.reflection.process_action(
+                    stimulus=stimulus_content,
+                    cognitive_output=cognitive_output,
+                    result="success"
+                )
+
+            except Exception as e:
+                logger.error(f"Ошибка в когнитивном цикле: {e}", exc_info=True)
+                await self.env.send_message("Извини, я на секунду потеряла нить.")
 
     def _build_fallback_prompt(self, content, drive_state, self_model, recent_memories, tool_context, is_user_message):
         """Строит fallback-промпт для прямого LLM вызова."""

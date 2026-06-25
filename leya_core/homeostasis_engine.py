@@ -36,17 +36,6 @@ class Goal:
     reasoning: str = ""
 
 
-class HomeostasisEngine:
-    """
-    Движок гомеостаза с обучением через RPE.
-    
-    Архитектура:
-    1. Анализирует предсказанное состояние драйвов (аллостаз)
-    2. Находит пробелы в знаниях из памяти
-    3. Выбирает действия на основе обученных ценностей
-    4. Возвращает цели с ожидаемой наградой для RPE
-    """
-    
     def __init__(self):
         # Зона комфорта
         self.comfort_zone = {
@@ -69,18 +58,11 @@ class HomeostasisEngine:
         self.last_action_time = 0
         self.rest_period = 60  # Минимум секунд между действиями
 
-        # История исследованных тем (чтобы не повторяться)
+        # Персистентное состояние и история исследований
         self.recently_researched: Dict[str, float] = {}  # {topic: timestamp}
-        self.research_cooldown = 1800  # 10 минут перед повторным исследованием
-
-        # Динамические ключевые слова (добавляются автоматически)
+        self.research_cooldown = 1800  # 30 минут перед повторным исследованием
         self.dynamic_keywords: List[str] = []
         self.max_dynamic_keywords = 50
-
-        # Персистентное состояние
-        self.recently_researched: Dict[str, float] = {}  # topic -> timestamp
-        self.dynamic_keywords: List[str] = []
-        self.research_cooldown = 1800  # 30 минут
     
         logger.info("HomeostasisEngine: Инициализация завершена.")
     

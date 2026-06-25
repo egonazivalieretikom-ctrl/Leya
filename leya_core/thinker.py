@@ -50,52 +50,56 @@ class CoreThinker:
 """
         return soul_text
 
-    async def generate_plan(
-        self,
-        stimulus: Dict[str, Any],
-        memory_context: List[Dict],
-        drive_state: Dict[str, float],
-        self_model: Dict[str, Any],
-        tools_description: str,
-        tool_context: str = ""
-    ) -> Dict[str, Any]:
-        """Генерация когнитивного плана действия"""
-        prompt = self._build_cognitive_prompt(
-            stimulus, memory_context, drive_state, self_model, tool_context, tools_description
-        )
+        async def generate_plan(
+            self,
+            stimulus: Dict[str, Any],
+            memory_context: List[Dict],
+            drive_state: Dict[str, float],
+            self_model: Dict[str, Any],
+            tools_description: str,
+            tool_context: str = ""
+        ) -> Dict[str, Any]:
+            """Генерация когнитивного плана действия"""
+            prompt = self._build_cognitive_prompt(
+                stimulus, memory_context, drive_state, self_model, tool_context, tools_description
+            )
     
-        response = await self.llm_client(prompt, require_json=True)
+            response = await self.llm_client(prompt, require_json=True)
     
-        try:
-            plan = json.loads(response)
-            # ✅ ИСПРАВЛЕНО: возвращаем ВСЕ поля из ответа LLM, включая response и internal_monologue
+            plan = self._safe_parse_json(response)
+        
             return {
-                "response": plan.get("response", ""),
-                "internal_monologue": plan.get("internal_monologue", ""),
+                "response": plan.get("response", "..."),
+                "internal_monologue": plan.get("internal_monologue", "Обработка..."),
                 "action_intent": plan.get("action_intent", "none"),
                 "action": plan.get("action_intent", plan.get("action", "think")),
                 "reasoning": plan.get("reasoning", plan.get("internal_monologue", "")),
-                "tool": plan.get("tool_call", plan.get("tool")),
-                "tool_input": plan.get("tool_input", plan.get("parameters", {})),
-                "tool_call": plan.get("tool_call", ""),
-                "self_reflection": plan.get("self_reflection", ""),
-                "confidence": plan.get("confidence", 0.5)
+                "tool_call": plan.get("tool_call", plan.get("tool", "")),
+                "self_reflection": plan.get("self_reflection", "")
             }
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse plan: {response}")
-            # Fallback: пытаемся извлечь текст из не-JSON ответа
-            return {
-                "response": response.strip() if response else "Мне нужно время, чтобы осмыслить это.",
-                "internal_monologue": "Не удалось сформировать структурированный ответ",
-                "action_intent": "none",
-                "action": "think",
-                "reasoning": "Failed to parse JSON",
-                "tool": None,
-                "tool_input": {},
-                "tool_call": "",
-                "self_reflection": "",
-                "confidence": 0.3
-            }
+
+        def _safe_parse_json(self, response: str) -> dict:
+            """Безопасный парсинг JSON с учетом markdown-блоков LLM"""
+            import re
+            import json
+        
+            if not response:
+                return {}
+            
+            # Ищем JSON блок внутри текста
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    pass
+                
+            # Если не нашли, пытаемся парсить как есть
+            try:
+                return json.loads(response)
+            except Exception as e:
+                logger.error(f"Не удалось распарсить JSON от LLM: {e}. Ответ: {response[:100]}")
+                return {}
 
     def _build_cognitive_prompt(
         self,
