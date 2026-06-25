@@ -125,7 +125,6 @@ class MemorySystem:
             name="semantic_memory",
             metadata={"hnsw:space": "cosine"}
         )
-        self.chroma_client = chromadb.PersistentClient(path=persist_directory)
         self.collection = self.chroma_client.get_or_create_collection(
             name="leya_memories",
             metadata={"hnsw:space": "cosine"}
@@ -441,36 +440,6 @@ class MemorySystem:
         if forgotten_count > 0:
             logger.info(f"MemorySystem: Забыто {forgotten_count} слабых воспоминаний (прунинг)")
 
-
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
-        """
-        Возвращает последние спонтанные мысли из памяти.
-        """
-        try:
-            results = self.episodic_collection.get(
-                where={"memory_type": "episodic"},
-                limit=limit * 2,  # Берём больше, чтобы отфильтровать
-                include=["documents"]
-            )
-        
-            if not results['documents']:
-                return []
-        
-            # Фильтруем только спонтанные мысли
-            thoughts = []
-            for doc in results['documents']:
-                if '[СПОНТАННАЯ МЫСЛЬ]' in doc or 'спонтанн' in doc.lower():
-                    # Извлекаем текст после маркера
-                    thought = doc.replace('[СПОНТАННАЯ МЫСЛЬ]', '').strip()
-                    if thought:
-                        thoughts.append(thought)
-                        if len(thoughts) >= limit:
-                            break
-        
-            return thoughts
-        except Exception as e:
-            logger.error(f"Ошибка получения спонтанных мыслей: {e}")
-            return []
     
     # ==================== КОНСОЛИДАЦИЯ ВО СНЕ ====================
     
@@ -629,20 +598,6 @@ CRITICAL: Return ONLY valid JSON.
             memory_type=MemoryType.SEMANTIC
         )
         logger.info(f"MemorySystem: Модель Себя обновлена: {insight[:80]}...")
-
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
-        """Возвращает недавние спонтанные мысли из семантической памяти."""
-        query_embedding = self.embedding_model.encode("спонтанная мысль размышление").tolist()
-
-        results = self.semantic_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=limit,
-            include=["documents"]
-        )
-
-        if results['documents'] and results['documents'][0]:
-            return results['documents'][0]
-        return []
     
     async def store_fact(self, fact: str, category: str = "general"):
         """Сохраняет семантический факт"""
