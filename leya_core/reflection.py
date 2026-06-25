@@ -44,6 +44,18 @@ class MetaCognition:
             try:
                 # 1. АНАЛИЗ ПАТТЕРНОВ ПОВЕДЕНИЯ
                 await self._analyze_behavioral_patterns()
+
+                # 1.5 ГЕНЕРАЦИЯ НОВЫХ ИНСТРУМЕНТОВ
+                if hasattr(self.leya, 'tool_generator'):
+                    try:
+                        recent_episodes = await self.leya._get_recent_episodes(limit=20)
+                        drive_state = {d.type.value: d.current for d in self.leya.drives.drives.values()}
+        
+                        new_tool = await self.leya.tool_generator.analyze_and_generate(recent_episodes, drive_state)
+                        if new_tool:
+                            logging.info(f"MetaCognition: 🛠️ Сгенерирован новый инструмент: {new_tool}")
+                    except Exception as e:
+                        logging.warning(f"MetaCognition: Ошибка генерации инструмента: {e}")
             
                 # 2. ГЕНЕРАЦИЯ ИНСАЙТОВ НА ОСНОВЕ НОВЫХ ФАКТОВ
                 await self._generate_insights_from_facts()
@@ -172,13 +184,27 @@ class MetaCognition:
             question = inquiry.get("question", "")
             if question:
                 logging.info(f"MetaCognition: Внутренний вопрос: {question}")
-            
-                # Запускаем когнитивный цикл с этим вопросом как стимулом
-                await self.leya.perceive({
-                    "type": "internal_question",
-                    "content": question,
-                    "source": "MetaCognition"
-                })
+    
+                # Подача в глобальное рабочее пространство вместо прямого вызова
+                if hasattr(self.leya, 'workspace'):
+                    from leya_core.global_workspace import WorkspaceProposal, Priority
+        
+                    self.leya.workspace.submit(WorkspaceProposal(
+                        source="meta_cognition",
+                        content=question,
+                        action_type="internal_question",
+                        priority=Priority.LOW,
+                        urgency=0.3,
+                        drive_relevance=0.2,
+                        metadata={"reasoning": inquiry.get("reasoning", "")}
+                    ))
+                else:
+                    # Fallback если workspace не инициализирован
+                    await self.leya.perceive({
+                        "type": "internal_question",
+                        "content": question,
+                        "source": "MetaCognition"
+                    })
             
         except json.JSONDecodeError as e:
             logging.warning(f"MetaCognition: Ошибка парсинга JSON: {e}")

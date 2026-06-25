@@ -15,7 +15,9 @@ from datetime import datetime
 from leya_core.homeostasis_engine import HomeostasisEngine
 from leya_core.state_persistence import StatePersistence
 from leya_core.system_metrics import SystemMetrics
-
+from leya_core.global_workspace import GlobalWorkspace, WorkspaceProposal, Priority
+from leya_core.constitutional import ConstitutionalLayer
+from leya_core.tool_generator import ToolGenerator
 
 # Импорт когнитивных модулей
 from leya_core.drives import DriveSystem, DriveType
@@ -56,6 +58,12 @@ class LeyaOS:
         self.name = "Лея"
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
+
+        # Конституционный слой
+        self.constitutional = ConstitutionalLayer()
+
+        # Глобальное рабочее пространство (сознание)
+        self.workspace = GlobalWorkspace()
         
         logger.info("Инициализация когнитивной архитектуры...")
         
@@ -86,6 +94,9 @@ class LeyaOS:
         
         # Описание инструментов для промпта
         self.tools_description = self.env.tool_registry.get_all_descriptions()
+
+        # Генератор новых инструментов (Meta-learning)
+        self.tool_generator = ToolGenerator(self.env.tool_registry, self._llm_call)
         
         # Инициализируем пустой строкой, загрузим в run()
         self.self_model = ""
@@ -212,9 +223,16 @@ class LeyaOS:
                     if tool_name:
                         logger.info(f"LeyaOS: LLM хочет вызвать инструмент: {tool_name}")
                     
-                        # Вызываем инструмент
-                        tool_result = await self.env.tool_registry.execute(tool_name, tool_params)
-                    
+                        # === КОНСТИТУЦИОННАЯ ПРОВЕРКА ===
+                        verdict = self.constitutional.verify_tool_call(tool_name, tool_params)
+                        if not verdict.allowed:
+                            logger.warning(f"LeyaOS: ⛔ Действие заблокировано: {verdict.reason}")
+                            # Сообщаем LLM о блокировке
+                            tool_result = f"⛔ ДЕЙСТВИЕ ЗАБЛОКИРОВАНО КОНСТИТУЦИОННЫМ СЛОЕМ: {verdict.reason}"
+                        else:
+                            # Вызываем инструмент
+                            tool_result = await self.env.tool_registry.execute(tool_name, tool_params)
+            
                         logger.info(f"LeyaOS: Результат инструмента: {tool_result[:200]}...")
                     
                         # Формируем контекст с результатом
@@ -303,6 +321,12 @@ class LeyaOS:
                     await self.env.broadcast_thought("internal", cognitive_output.internal_monologue)
                 if cognitive_output.self_reflection:
                     await self.env.broadcast_thought("reflection", cognitive_output.self_reflection)
+
+            # === ПРОВЕРКА ОТВЕТА ===
+            response_verdict = self.constitutional.verify_response(cognitive_output.response)
+            if not response_verdict.allowed:
+                logger.warning(f"LeyaOS: ⛔ Ответ заблокирован: {response_verdict.reason}")
+                cognitive_output.response = "Извини, я не могу ответить на этот вопрос."
         
             await self.env.send_message(cognitive_output.response)
         
@@ -320,6 +344,16 @@ class LeyaOS:
         """Главный цикл жизни Леи с гомеостазом."""
         logger.info("Загрузка Модели Себя...")
         self.self_model = await self.memory.get_self_model_context()
+
+        # Обновляем криптографический ключ на основе состояния Леи
+        if hasattr(self.env, 'soul_manager') and hasattr(self.env.soul_manager, 'update_secret_key'):
+            leya_state = {
+                "self_model": self.self_model[:500],
+                "drives": {d.type.value: d.current for d in self.drives.drives.values()},
+                "state": self.state
+            }
+            self.env.soul_manager.update_secret_key(leya_state)
+            logger.info("SoulCrypto: Секретный ключ обновлён на основе состояния Леи")
     
         # Обновляем пороги на основе Модели Себя
         self.homeostasis.update_from_self_model(self.self_model)
@@ -350,6 +384,7 @@ class LeyaOS:
             asyncio.create_task(self._homeostasis_loop(), name="homeostasis"),
             asyncio.create_task(self._broadcast_state_loop(), name="broadcast"),
             asyncio.create_task(self._system_metrics_loop(), name="system_metrics"), 
+            asyncio.create_task(self._workspace_loop(), name="workspace"),
         ]
     
         # Веб-сервер
@@ -407,6 +442,38 @@ class LeyaOS:
             except Exception as e:
                 logger.error(f"SystemMetrics: Ошибка: {e}")
 
+    async def _workspace_loop(self):
+        """Цикл глобального рабочего пространства — выбирает победителя."""
+        logger.info("GlobalWorkspace: Цикл сознания запущен.")
+    
+        while self.running:
+            await asyncio.sleep(3)  # Каждые 3 секунды
+        
+            try:
+                # Очищаем устаревшие предложения
+                self.workspace.clear_expired()
+            
+                # Получаем текущее состояние драйвов
+                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
+            
+                # Выбираем победителя
+                winner = self.workspace.select_winner(drive_state)
+            
+                if winner:
+                    logger.info(f"GlobalWorkspace: Сознание фокусируется на: {winner.content[:100]}...")
+                
+                    # Транслируем победителя как внутренний стимул
+                    await self.perceive({
+                        "type": winner.action_type,
+                        "content": winner.content,
+                        "source": f"workspace:{winner.source}",
+                        "tool_context": winner.metadata.get("tool_context", ""),
+                        "workspace_score": winner.compute_score(drive_state)
+                    })
+        
+            except Exception as e:
+                logger.error(f"GlobalWorkspace: Ошибка: {e}", exc_info=True)
+
     async def _homeostasis_loop(self):
         """Замкнутый цикл гомеостаза с RPE."""
         logger.info("HomeostasisEngine: Цикл гомеостаза запущен.")
@@ -439,6 +506,24 @@ class LeyaOS:
         
             self.homeostasis.current_goal = goal
             logger.info(f"HomeostasisEngine: Исполнение: {goal.tool_name} (expected reward: {goal.expected_reward:.2f})")
+            
+            # Подача предложения в глобальное рабочее пространство
+            drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
+            max_drive = max(drive_state.values()) if drive_state else 0.5
+
+            self.workspace.submit(WorkspaceProposal(
+                source="homeostasis",
+                content=f"Цель: {goal.name}",
+                action_type="homeostasis_action",
+                priority=Priority.HIGH if goal.expected_reward > 0.6 else Priority.MEDIUM,
+                urgency=goal.expected_reward,
+                drive_relevance=max_drive,
+                metadata={
+                    "tool_name": goal.tool_name,
+                    "tool_parameters": goal.tool_parameters,
+                    "expected_reward": goal.expected_reward
+                }
+            ))
         
             if goal.action_type == "use_tool" and goal.tool_name:
                 # Вызываем инструмент
@@ -668,6 +753,15 @@ class LeyaOS:
         logger.info("Финальная консолидация памяти...")
         await self.memory.consolidate_memories(llm_client=self._llm_call)
     
+        # Проверка целостности soul-файлов
+        if hasattr(self.env, 'soul_manager') and hasattr(self.env.soul_manager, 'check_integrity'):
+            integrity = self.env.soul_manager.check_integrity()
+            for filename, result in integrity.items():
+                if not result.get("valid", True):
+                    logger.warning(f"SoulCrypto: ⚠️ Файл {filename}: {result.get('reason', 'неизвестно')}")
+                else:
+                    logger.info(f"SoulCrypto: ✅ Файл {filename} цел (версия {result.get('version', '?')})")
+
         # СОХРАНЕНИЕ СОСТОЯНИЯ
         logger.info("Сохранение состояния для следующей сессии...")
         state = {

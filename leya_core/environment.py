@@ -8,6 +8,7 @@ import logging
 import json
 import os
 import re
+import hashlib
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass
@@ -73,14 +74,28 @@ class ToolRegistry:
 # ==================== БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ "ДУШИ" ====================
 
 class SoulFileManager:
-    """Безопасный менеджер файлов "души" Леи."""
+    """Безопасный менеджер файлов души с криптографической защитой."""
     
     def __init__(self, soul_directory: str = "./leya_soul"):
         self.soul_dir = soul_directory
         self._ensure_soul_directory()
+        
+        # Криптографическая защита
+        from leya_core.soul_crypto import SoulCrypto
+        self.crypto = SoulCrypto(soul_directory)
+        self._secret_key = self._generate_initial_key()
+    
+    def _generate_initial_key(self) -> str:
+        """Генерирует начальный секретный ключ."""
+        import time
+        seed = f"leya_soul_{os.getpid()}_{time.time()}"
+        return hashlib.sha256(seed.encode('utf-8')).hexdigest()
+    
+    def update_secret_key(self, leya_state: Dict[str, Any]):
+        """Обновляет секретный ключ на основе состояния Леи."""
+        self._secret_key = self.crypto.generate_secret_key(leya_state)
     
     def _ensure_soul_directory(self):
-        """Создает папку души с базовыми файлами, если их нет"""
         os.makedirs(self.soul_dir, exist_ok=True)
         
         default_files = {
@@ -94,26 +109,38 @@ class SoulFileManager:
             if not os.path.exists(filepath):
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write(content)
-                logger.info(f"SoulFileManager: Создан файл '{filename}'")
+                # Подписываем новый файл
+                self.crypto.save_signature(filename, content, self._secret_key)
+                logger.info(f"SoulFileManager: Создан и подписан файл '{filename}'")
     
     def read_file(self, filename: str) -> str:
-        """Читает файл души"""
+        """Читает файл души с проверкой целостности."""
         filepath = os.path.join(self.soul_dir, filename)
         
         if not os.path.abspath(filepath).startswith(os.path.abspath(self.soul_dir)):
-            return "Ошибка: доступ запрещен. Можно читать только файлы из папки души."
+            return "Ошибка: доступ запрещен."
         
         if not os.path.exists(filepath):
             return f"Ошибка: файл '{filename}' не найден."
         
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
+                content = f.read()
+            
+            # Проверяем целостность
+            verification = self.crypto.verify_file(filename, content, self._secret_key)
+            
+            if not verification.get("valid", True):
+                logger.warning(f"SoulFileManager: ⚠️ {verification['reason']}")
+                return f"⚠️ ВНИМАНИЕ: {verification['reason']}\n\nПоследняя версия: {verification.get('last_modified', 'неизвестно')}\n\nСодержимое:\n{content}"
+            
+            return content
+        
         except Exception as e:
             return f"Ошибка чтения файла: {str(e)}"
     
     def write_file(self, filename: str, content: str) -> str:
-        """Записывает файл души (с ограничениями)"""
+        """Записывает файл души с версионированием и подписью."""
         filepath = os.path.join(self.soul_dir, filename)
         
         if not os.path.abspath(filepath).startswith(os.path.abspath(self.soul_dir)):
@@ -123,27 +150,44 @@ class SoulFileManager:
             return "Ошибка: файл слишком большой (максимум 10000 символов)."
         
         try:
+            # Сохраняем старую версию в историю
             if os.path.exists(filepath):
-                backup_path = filepath + ".backup"
                 with open(filepath, 'r', encoding='utf-8') as f:
                     old_content = f.read()
-                with open(backup_path, 'w', encoding='utf-8') as f:
-                    f.write(old_content)
+                self.crypto.save_history(filename, old_content)
             
+            # Записываем новое содержимое
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
             
-            logger.info(f"SoulFileManager: Файл '{filename}' обновлен. Резервная копия сохранена.")
-            return f"Файл '{filename}' успешно обновлен."
+            # Подписываем новую версию
+            self.crypto.save_signature(filename, content, self._secret_key)
+            
+            logger.info(f"SoulFileManager: Файл '{filename}' обновлён и подписан. История сохранена.")
+            return f"Файл '{filename}' успешно обновлён и криптографически подписан."
+        
         except Exception as e:
             return f"Ошибка записи файла: {str(e)}"
     
     def list_files(self) -> List[str]:
-        """Возвращает список файлов души"""
         try:
             return [f for f in os.listdir(self.soul_dir) if f.endswith('.txt')]
         except Exception as e:
             return [f"Ошибка: {str(e)}"]
+    
+    def get_file_history(self, filename: str) -> List[Dict[str, str]]:
+        """Возвращает историю версий файла."""
+        return self.crypto.get_history(filename)
+    
+    def check_integrity(self) -> Dict[str, Dict[str, Any]]:
+        """Проверяет целостность всех файлов души."""
+        results = {}
+        for filename in self.list_files():
+            filepath = os.path.join(self.soul_dir, filename)
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            results[filename] = self.crypto.verify_file(filename, content, self._secret_key)
+        return results
 
 
 # ==================== БАЗОВЫЙ КЛАСС ENVIRONMENT ====================
