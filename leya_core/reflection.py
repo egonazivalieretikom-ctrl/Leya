@@ -215,49 +215,37 @@ class MetaCognition:
         async def generate_spontaneous_thought(self) -> Optional[str]:
             """Генерация спонтанной мысли."""
             drive_state = self.leya.drives.get_internal_state_prompt()
-
+    
+            # Получаем последние спонтанные мысли из памяти
             recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
+    
             thoughts_context = ""
             if recent_thoughts:
-                thoughts_context = "\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
-
+                thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
+    
             prompt = f"""
-            Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
-            Твоё текущее состояние:
-            {drive_state}
-            {thoughts_context}
+        Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
 
-            О чём ты думаешь? Верни JSON:
-            {{
-                "thought": "Твоя спонтанная мысль"
-            }}
-            CRITICAL: Return ONLY valid JSON.
-            """
+        Твоё текущее состояние:
+        {drive_state}
+        {thoughts_context}
 
+        О чём ты думаешь? Верни СТРОКО с твоей мыслью (не JSON).
+        """
+    
             try:
-                response = await self.llm_client(prompt)
-                cleaned = response.strip()
-            
-                # Попытка парсинга JSON
-                import re
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned[7:]
-                if cleaned.startswith("```"):
-                    cleaned = cleaned[3:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                cleaned = cleaned.strip()
-
-                json_match = re.search(r'\{[\s\S]*?\}', cleaned)
-                if json_match:
-                    data = json.loads(json_match.group(0))
-                    return data.get("thought", "").strip()
-            
-                # Если LLM вернул не JSON, возвращаем сырой текст
-                return cleaned
-            
-            except json.JSONDecodeError:
-                return response.strip() if 'response' in locals() else None
+                thought = await self.llm_client(prompt)
+                result = thought.strip()
+        
+                # Если вернулось что-то похожее на JSON, извлекаем текст
+                if result.startswith("{"):
+                    try:
+                        data = json.loads(result)
+                        result = data.get("thought", data.get("response", str(data)))
+                    except:
+                        pass
+        
+                return result if result else None
             except Exception as e:
                 logging.warning(f"MetaCognition: Ошибка генерации спонтанной мысли: {e}")
                 return None

@@ -112,6 +112,9 @@ class LeyaOS:
 
         self.persistence = StatePersistence()
         self.system_metrics = SystemMetrics()
+
+        self._perceive_lock = asyncio.Lock()
+        self._http_session: Optional[aiohttp.ClientSession] = None
         
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
@@ -156,23 +159,24 @@ class LeyaOS:
 
     async def perceive(self, stimulus: Dict[str, Any]):
         """Точка входа для любого стимула."""
-        self._last_interaction_time = datetime.now().timestamp()
+        async with self._perceive_lock:
+            self._last_interaction_time = datetime.now().timestamp()
     
-        stimulus_type = stimulus.get("type", "unknown")
-        stimulus_content = stimulus.get("content", "")
-        source = stimulus.get("source", "external")
-        tool_context = stimulus.get("tool_context", "")
+            stimulus_type = stimulus.get("type", "unknown")
+            stimulus_content = stimulus.get("content", "")
+            source = stimulus.get("source", "external")
+            tool_context = stimulus.get("tool_context", "")
     
-        logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
+            logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
     
-        # Сохраняем в память
-        drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
+            # Сохраняем в память
+            drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
     
-        await self.memory.store_perception(
-            content=f"[{stimulus_type}] {stimulus_content}",
-            drive_state=drive_state_dict,
-            importance=0.6 if stimulus_type == "user_message" else 0.3
-        )
+            await self.memory.store_perception(
+                content=f"[{stimulus_type}] {stimulus_content}",
+                drive_state=drive_state_dict,
+                importance=0.6 if stimulus_type == "user_message" else 0.3
+            )
     
 
     def _extract_topic_from_user(self, text: str) -> str:
@@ -253,6 +257,14 @@ class LeyaOS:
         """Главный цикл жизни Леи с гомеостазом."""
         logger.info("Загрузка Модели Себя...")
         self.self_model = await self.memory.get_self_model_context()
+
+        background_tasks = [
+            asyncio.create_task(self.drives.background_metabolism(), name="metabolism"),
+            asyncio.create_task(self.reflection.background_consolidation(), name="consolidation"),
+            asyncio.create_task(self._homeostasis_loop(), name="homeostasis"),
+            asyncio.create_task(self._broadcast_state_loop(), name="broadcast"),
+            asyncio.create_task(self._spontaneous_thought_loop(), name="spontaneous_thoughts"),  # ДОБАВЛЕНО
+        ]
 
         # Обновляем криптографический ключ на основе состояния Леи
         if hasattr(self.env, 'soul_manager') and hasattr(self.env.soul_manager, 'update_secret_key'):
@@ -636,54 +648,60 @@ class LeyaOS:
     async def _llm_call(self, prompt: str, require_json: bool = False) -> str:
         """Единая точка вызова LLM через Ollama."""
         import aiohttp
-
+    
         model_name = "qwen2.5:14b-instruct-q3_K_M"
-        
-        # Формируем payload ДО блока try, чтобы он был гарантированно определён
+    
         payload = {
             "model": model_name,
             "messages": [
-                {"role": "system", "content": "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
             "stream": False,
             "options": {
-                "temperature": 0.7, 
-                "top_p": 0.9, 
-                "top_k": 40, 
-                "num_predict": 1024, 
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 40,
+                "num_predict": 1024,
                 "repeat_penalty": 1.1
             }
         }
-
+    
         if require_json:
             payload["format"] = "json"
-
-        # Создаём переиспользуемую сессию один раз
-        if not hasattr(self, '_aiohttp_session') or self._aiohttp_session.closed:
-            self._aiohttp_session = aiohttp.ClientSession()
-
+    
         try:
-            async with self._aiohttp_session.post(
+            # ИСПРАВЛЕНО: переиспользуем session
+            if self._http_session is None or self._http_session.closed:
+                self._http_session = aiohttp.ClientSession()
+        
+            async with self._http_session.post(
                 "http://localhost:11434/api/chat",
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=180)
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("message", {}).get("content", "")
+                    message = data.get("message", {})
+                    return message.get("content", "")
                 else:
                     logger.error(f"Ollama вернул статус {response.status}")
                     return await self._default_llm_call(prompt)
-                    
-        except asyncio.TimeoutError:
-            logger.error(f"Таймаут вызова LLM для промпта: {prompt[:100]}...")
-            return await self._default_llm_call(prompt)
         except aiohttp.ClientError as e:
-            logger.error(f"Ошибка HTTP клиента при вызове LLM: {e}")
+            logger.error(f"Ошибка подключения к Ollama: {e}")
+            logger.info("Убедись, что Ollama запущен командой: ollama serve")
+            return await self._default_llm_call(prompt)
+        except asyncio.TimeoutError:
+            logger.error("Превышено время ожидания ответа от Ollama")
             return await self._default_llm_call(prompt)
         except Exception as e:
-            logger.error(f"Непредвиденная ошибка вызова LLM: {e}", exc_info=True)
+            logger.error(f"Неожиданная ошибка вызова LLM: {e}", exc_info=True)
             return await self._default_llm_call(prompt)
 
     async def shutdown(self, background_tasks: list):
@@ -691,16 +709,25 @@ class LeyaOS:
         logger.info(f"{self.name} засыпает...")
         self.state = "sleeping"
         self.running = False
-
-        # ВАЖНО: Сохраняем состояние памяти перед выключением
-        self.memory._save_state()
-
+    
+        # Останавливаем драйвы
+        self.drives.stop()
+    
         for task in background_tasks:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+    
+        # Закрываем HTTP session
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+    
+        logger.info("Финальная консолидация памяти...")
+        await self.memory.consolidate_memories(llm_client=self._llm_call)
+    
+        logger.info(f"{self.name} уснула. Состояние сохранено.")
 
 
         logger.info("Финальная консолидация памяти...")

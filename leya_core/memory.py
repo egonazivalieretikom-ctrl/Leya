@@ -426,8 +426,8 @@ class MemorySystem:
                 # Удаляем из ChromaDB
                 try:
                     self.episodic_collection.delete(ids=[engram_id])
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить энграмму {engram_id}: {e}")
                 
                 # Удаляем связанные синапсы
                 synapses_to_remove = [
@@ -441,6 +441,37 @@ class MemorySystem:
         
         if forgotten_count > 0:
             logger.info(f"MemorySystem: Забыто {forgotten_count} слабых воспоминаний (прунинг)")
+
+
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
+        """
+        Возвращает последние спонтанные мысли из памяти.
+        """
+        try:
+            results = self.episodic_collection.get(
+                where={"memory_type": "episodic"},
+                limit=limit * 2,  # Берём больше, чтобы отфильтровать
+                include=["documents"]
+            )
+        
+            if not results['documents']:
+                return []
+        
+            # Фильтруем только спонтанные мысли
+            thoughts = []
+            for doc in results['documents']:
+                if '[СПОНТАННАЯ МЫСЛЬ]' in doc or 'спонтанн' in doc.lower():
+                    # Извлекаем текст после маркера
+                    thought = doc.replace('[СПОНТАННАЯ МЫСЛЬ]', '').strip()
+                    if thought:
+                        thoughts.append(thought)
+                        if len(thoughts) >= limit:
+                            break
+        
+            return thoughts
+        except Exception as e:
+            logger.error(f"Ошибка получения спонтанных мыслей: {e}")
+            return []
     
     # ==================== КОНСОЛИДАЦИЯ ВО СНЕ ====================
     

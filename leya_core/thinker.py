@@ -73,7 +73,7 @@ class CoreThinker:
             stimulus, memory_context, drive_state, self_model, tool_context, tools_description
         )
     
-        raw_response = await self.llm_client(prompt)
+        raw_response = await self.llm_client(prompt, require_json=True)
     
         try:
             cleaned = raw_response.strip()
@@ -116,18 +116,18 @@ class CoreThinker:
         drive_state: str,
         self_model: str,
         tool_context: str = "",
-        tools_description: str = ""  # <-- ДОБАВЛЕНО
+        tools_description: str = ""  # ДОБАВЛЕНО
     ) -> str:
         soul = self._load_soul()
     
-        # Добавляем описание инструментов, если есть
+        # Секция инструментов
         tools_section = ""
         if tools_description:
             tools_section = f"""
     {tools_description}
 
-    Если нужно использовать инструмент, укажи его в поле tool_call в формате JSON:
-    {{"tool": "имя_инструмента", "parameters": {{...}}}}
+    Чтобы использовать инструмент, верни в JSON поле "tool_call" с форматом:
+    {{"tool": "имя_инструмента", "parameters": {{"param1": "value1"}}}}
     """
     
         prompt = f"""
@@ -160,7 +160,7 @@ class CoreThinker:
         "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
         "response": "Твой ответ вовне на русском языке.",
         "action_intent": "none|remember_fact|ask_question|self_modify|use_tool",
-        "tool_call": "JSON с инструментом или пустая строка",
+        "tool_call": "",
         "self_reflection": "Краткий инсайт о самой себе или пустая строка"
     }}
 

@@ -41,6 +41,11 @@ class DriveType(Enum):
             self.satisfaction_history = state["satisfaction_history"]
             logger.info(f"DriveSystem: Загружено {len(self.satisfaction_history)} записей истории удовлетворения")
 
+    @property
+    def tension(self) -> float:
+        """Синоним current — напряжение драйва"""
+        return self.current
+
 
 @dataclass
 class Drive:
@@ -87,6 +92,8 @@ class DriveSystem:
     }
     
     def __init__(self):
+        self.tension_history: List[Dict[str, float]] = []
+        self._running = True
         # 4 основных драйва
         self.drives = {
             DriveType.CURIOSITY: Drive(
@@ -137,18 +144,74 @@ class DriveSystem:
         
         # Параметры RPE
         self.learning_rate = 0.1  # Скорость обучения на RPE
+
+        self.tension_history: List[Dict[str, float]] = []
+        self._running = True
         
         logger.info("DriveSystem: Инициализация завершена с аллостазом и RPE.")
     
+    @property
+    def tension(self) -> float:
+        """Синоним current — напряжение драйва"""
+        return self.current
+
+    async def evaluate_stimulus(self, stimulus: str, context: str = "") -> Dict[DriveType, float]:
+        """
+        Оценивает влияние стимула на драйвы.
+        Возвращает дельты изменений для каждого драйва.
+        """
+        deltas = {}
+        stimulus_lower = stimulus.lower()
+    
+        # Эвристики для оценки влияния стимула
+        # Вопросы → CURIOSITY
+        if '?' in stimulus or any(kw in stimulus_lower for kw in ['почему', 'как', 'что', 'зачем']):
+            deltas[DriveType.CURIOSITY] = 0.1
+    
+        # Эмоциональные слова → CONNECTION
+        if any(kw in stimulus_lower for kw in ['чувств', 'думаю', 'мне', 'один', 'скучно']):
+            deltas[DriveType.CONNECTION] = 0.05
+    
+        # Команды → AUTONOMY (сопротивление)
+        if any(kw in stimulus_lower for kw in ['должна', 'обязана', 'сделай', 'немедленно']):
+            deltas[DriveType.AUTONOMY] = 0.1
+    
+        # Позитивные слова → снижение напряжения
+        if any(kw in stimulus_lower for kw in ['спасибо', 'отлично', 'молодец', 'хорошо']):
+            deltas[DriveType.CONNECTION] = -0.1
+            deltas[DriveType.AUTONOMY] = -0.05
+    
+        # Сохраняем в историю
+        current_state = {d.type: d.current for d in self.drives.values()}
+        self.tension_history.append(current_state)
+    
+        # Ограничиваем историю
+        if len(self.tension_history) > 100:
+            self.tension_history = self.tension_history[-100:]
+    
+        return deltas
+
+    def apply_deltas(self, deltas: Dict[DriveType, float]):
+        """
+        Применяет дельты изменений к драйвам.
+        """
+        for drive_type, delta in deltas.items():
+            if drive_type in self.drives:
+                drive = self.drives[drive_type]
+                drive.current = max(0.0, min(1.0, drive.current + delta))
+                logger.debug(f"DriveSystem: {drive_type.value} изменён на {delta:+.2f} → {drive.current:.2f}")
+
+    def stop(self):
+        """Останавливает фоновый метаболизм"""
+        self._running = False
+
     async def background_metabolism(self):
         """
         Фоновый метаболизм драйвов.
-
-        Биологический аналог: постоянная регуляция гомеостаза гипоталамусом.
         """
         logger.info("DriveSystem: Метаболизм запущен.")
     
-        while True:
+        while self._running:  # ИСПРАВЛЕНО: было while True
             await asyncio.sleep(self.prediction_update_interval)
         
             # 1. Применяем перекрестное влияние
@@ -161,6 +224,14 @@ class DriveSystem:
         
             # 2. Обновляем предсказания (аллостаз)
             self._update_predictions()
+        
+            # 3. Сохраняем снимок состояния в историю
+            current_state = {d.type.value: d.current for d in self.drives.values()}
+            self.tension_history.append(current_state)
+        
+            # Ограничиваем историю
+            if len(self.tension_history) > 100:
+                self.tension_history = self.tension_history[-100:]
 
     def stop_metabolism(self):
         """Остановка фонового метаболизма."""
