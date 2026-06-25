@@ -303,3 +303,46 @@ class DriveSystem:
             drive_type: drive.predicted_deviation
             for drive_type, drive in self.drives.items()
         }
+
+    def update_from_system_metrics(self, modifiers: Dict[str, float]):
+        """Применяет модификаторы от системных метрик к драйвам."""
+        drive_map = {
+            "curiosity": DriveType.CURIOSITY,
+            "connection": DriveType.CONNECTION,
+            "integrity": DriveType.INTEGRITY,
+            "autonomy": DriveType.AUTONOMY
+        }
+    
+        for metric_name, modifier in modifiers.items():
+            if modifier != 0.0 and metric_name in drive_map:
+                drive_type = drive_map[metric_name]
+                drive = self.drives[drive_type]
+                drive.current = max(0.1, min(0.9, drive.current + modifier))
+
+    def save_state(self) -> Dict[str, Any]:
+        """Сохраняет состояние DriveSystem."""
+        return {
+            "action_values": self.action_values,
+            "satisfaction_history": self.satisfaction_history[-100:],
+            "current_drives": {
+                drive_type.value: drive.current 
+                for drive_type, drive in self.drives.items()
+            }
+        }
+
+    def load_state(self, state: Dict[str, Any]):
+        """Загружает состояние DriveSystem."""
+        if "action_values" in state:
+            self.action_values = state["action_values"]
+            logger.info(f"DriveSystem: Загружено {len(self.action_values)} обученных ценностей действий")
+    
+        if "satisfaction_history" in state:
+            self.satisfaction_history = state["satisfaction_history"]
+    
+        if "current_drives" in state:
+            for drive_type_str, value in state["current_drives"].items():
+                for drive_type in DriveType:
+                    if drive_type.value == drive_type_str:
+                        self.drives[drive_type].current = max(0.1, min(0.9, value))
+                        break
+            logger.info(f"DriveSystem: Загружены текущие значения драйвов: {state['current_drives']}")

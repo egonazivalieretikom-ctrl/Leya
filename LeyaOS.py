@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from leya_core.homeostasis_engine import HomeostasisEngine
 from leya_core.state_persistence import StatePersistence
+from leya_core.system_metrics import SystemMetrics
 
 
 # Импорт когнитивных модулей
@@ -93,6 +94,7 @@ class LeyaOS:
         self.running = False
 
         self.persistence = StatePersistence()
+        self.system_metrics = SystemMetrics()
         
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
@@ -321,6 +323,19 @@ class LeyaOS:
     
         # Обновляем пороги на основе Модели Себя
         self.homeostasis.update_from_self_model(self.self_model)
+
+        # ЗАГРУЗКА СОСТОЯНИЯ ИЗ ПРЕДЫДУЩЕЙ СЕССИИ
+        logger.info("Загрузка состояния из предыдущей сессии...")
+        saved_state = self.persistence.load_state()
+
+        if saved_state:
+            if "drives" in saved_state:
+                self.drives.load_state(saved_state["drives"])
+            if "homeostasis" in saved_state:
+                self.homeostasis.load_state(saved_state["homeostasis"])
+            logger.info("✅ Состояние загружено из предыдущей сессии")
+        else:
+            logger.info("🆕 Начинаем с чистого листа")
     
         self.running = True
         self.state = "awake"
@@ -334,6 +349,7 @@ class LeyaOS:
             asyncio.create_task(self.reflection.background_consolidation(), name="consolidation"),
             asyncio.create_task(self._homeostasis_loop(), name="homeostasis"),
             asyncio.create_task(self._broadcast_state_loop(), name="broadcast"),
+            asyncio.create_task(self._system_metrics_loop(), name="system_metrics"), 
         ]
     
         # Веб-сервер
@@ -373,6 +389,23 @@ class LeyaOS:
             logger.info("✅ Состояние загружено из предыдущей сессии")
         else:
             logger.info("🆕 Начинаем с чистого листа")
+
+    async def _system_metrics_loop(self):
+        """Периодически собирает системные метрики и применяет их к драйвам."""
+        logger.info("SystemMetrics: Цикл мониторинга запущен.")
+    
+        # Первоначальный сбор для инициализации
+        self.system_metrics.collect()
+    
+        while self.running:
+            await asyncio.sleep(5)  # Каждые 5 секунд
+        
+            try:
+                self.system_metrics.collect()
+                modifiers = self.system_metrics.get_drive_modifiers()
+                self.drives.update_from_system_metrics(modifiers)
+            except Exception as e:
+                logger.error(f"SystemMetrics: Ошибка: {e}")
 
     async def _homeostasis_loop(self):
         """Замкнутый цикл гомеостаза с RPE."""
@@ -620,33 +653,29 @@ class LeyaOS:
             await asyncio.sleep(2)  # Каждые 2 секунды
 
     async def shutdown(self, background_tasks: list):
-        """Graceful shutdown."""
+        """Graceful shutdown с сохранением состояния."""
         logger.info(f"{self.name} засыпает...")
         self.state = "sleeping"
         self.running = False
-        
-        # Отменяем фоновые задачи
+    
         for task in background_tasks:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-
-            logger.info("Завершение работы Леи...")
+    
+        logger.info("Финальная консолидация памяти...")
+        await self.memory.consolidate_memories(llm_client=self._llm_call)
     
         # СОХРАНЕНИЕ СОСТОЯНИЯ
         logger.info("Сохранение состояния для следующей сессии...")
         state = {
             "drives": self.drives.save_state(),
-            "homeostasis": self.homeostasis.save_state(),
-            "shutdown_time": datetime.now().isoformat()
+            "homeostasis": self.homeostasis.save_state()
         }
-        
-        # Финальная консолидация памяти
-        logger.info("Финальная консолидация памяти...")
-        await self.memory.consolidate_memories(llm_client=self._llm_call)
-        
+        self.persistence.save_state(state)
+    
         logger.info(f"{self.name} уснула. Состояние сохранено.")
 
     async def _llm_call(self, prompt: str, require_json: bool = False) -> str:

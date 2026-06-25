@@ -5,6 +5,7 @@ leya_core/state_persistence.py — Сохранение и загрузка со
 import json
 import os
 import logging
+from datetime import datetime
 from typing import Dict, Any
 
 logger = logging.getLogger("StatePersistence")
@@ -18,46 +19,53 @@ class StatePersistence:
         self._ensure_directory()
     
     def _ensure_directory(self):
-        """Создает директорию для файла состояния."""
         directory = os.path.dirname(self.state_file)
         if directory:
             os.makedirs(directory, exist_ok=True)
     
     def save_state(self, state: Dict[str, Any]) -> bool:
-        """
-        Сохраняет состояние в JSON файл.
-        
-        Args:
-            state: Словарь с данными для сохранения
-            
-        Returns:
-            True если успешно, False если ошибка
-        """
+        """Сохраняет состояние в JSON файл."""
         try:
+            state["_saved_at"] = datetime.now().isoformat()
+            
+            # Создаём резервную копию предыдущего состояния
+            if os.path.exists(self.state_file):
+                backup_path = self.state_file + ".backup"
+                try:
+                    os.replace(self.state_file, backup_path)
+                except Exception:
+                    pass
+            
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
-            logger.info(f"StatePersistence: Состояние сохранено в {self.state_file}")
+            
+            logger.info(f"StatePersistence: Состояние сохранено ({os.path.getsize(self.state_file)} байт)")
             return True
+        
         except Exception as e:
-            logger.error(f"StatePersistence: Ошибка сохранения состояния: {e}")
+            logger.error(f"StatePersistence: Ошибка сохранения: {e}")
             return False
     
     def load_state(self) -> Dict[str, Any]:
-        """
-        Загружает состояние из JSON файла.
-        
-        Returns:
-            Словарь с загруженными данными или пустой словарь если файл не найден
-        """
+        """Загружает состояние из JSON файла."""
         if not os.path.exists(self.state_file):
-            logger.info("StatePersistence: Файл состояния не найден, начинаем с чистого листа")
-            return {}
+            # Пробуем загрузить из резервной копии
+            backup_path = self.state_file + ".backup"
+            if os.path.exists(backup_path):
+                logger.info("StatePersistence: Основной файл не найден, загружаем из резервной копии")
+                self.state_file = backup_path
+            else:
+                logger.info("StatePersistence: Файл состояния не найден, начинаем с чистого листа")
+                return {}
         
         try:
             with open(self.state_file, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            logger.info(f"StatePersistence: Состояние загружено из {self.state_file}")
+            
+            saved_at = state.get("_saved_at", "неизвестно")
+            logger.info(f"StatePersistence: Состояние загружено (сохранено: {saved_at})")
             return state
+        
         except Exception as e:
-            logger.error(f"StatePersistence: Ошибка загрузки состояния: {e}")
+            logger.error(f"StatePersistence: Ошибка загрузки: {e}")
             return {}
