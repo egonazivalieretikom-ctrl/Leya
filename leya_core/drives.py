@@ -141,32 +141,55 @@ class DriveSystem:
         logger.info("DriveSystem: Инициализация завершена с аллостазом и RPE.")
     
     async def background_metabolism(self):
-        """Фоновый метаболизм драйвов."""
+        """Фоновый метаболизм: обновление предсказаний и гомеостаза."""
         logger.info("DriveSystem: Метаболизм запущен.")
     
-        while running_flag is None or running_flag():
-            await asyncio.sleep(self.prediction_update_interval)
-        
-            for drive in self.drives.values():
-                cross_effect = self._calculate_cross_influence(drive.type)
-                effective_growth = drive.base_growth_rate + cross_effect
+        # Инициализируем флаг, если его нет
+        if not hasattr(self, '_metabolism_running'):
+            self._metabolism_running = True
+    
+        while self._metabolism_running:
+            try:
+                await asyncio.sleep(self.prediction_update_interval)
             
-                drive.current = min(1.0, max(0.0, drive.current + effective_growth))
+                if not self._metabolism_running:
+                    break
             
-                # МЕХАНИЗМ ВОССТАНОВЛЕНИЯ: если драйв слишком низкий, принудительно повышаем
-                if drive.current < 0.20:
-                    drive.current = 0.20 + (drive.base_growth_rate * 2)
+                # Обновляем предсказания для каждого драйва
+                for drive in self.drives.values():
+                    predicted = self._predict_next_state(drive)
+                    drive.update_prediction(predicted)
+                
+                    # Вычисляем RPE (Reward Prediction Error)
+                    rpe = self._calculate_rpe(drive)
+                    drive.update_rpe(rpe)
+                
+                    # Обновляем аллостаз
+                    allostasis = self._update_allostasis(drive)
+                    drive.update_allostasis(allostasis)
             
-                # Ограничиваем значения драйвов
-                drive.current = max(0.1, min(0.9, drive.current))
-        
-            self._update_predictions()
-        
-            # Записываем в историю
-            for drive_type, drive in self.drives.items():
-                self.tension_history[drive_type].append(drive.current)
-                if len(self.tension_history[drive_type]) > self.max_history_length:
-                    self.tension_history[drive_type] = self.tension_history[drive_type][-self.max_history_length:]
+                # Логируем состояние каждые 10 циклов
+                if hasattr(self, '_metabolism_cycle_count'):
+                    self._metabolism_cycle_count += 1
+                else:
+                    self._metabolism_cycle_count = 1
+            
+                if self._metabolism_cycle_count % 10 == 0:
+                    drive_states = {d.type.value: round(d.current, 3) for d in self.drives.values()}
+                    logger.debug(f"DriveSystem: Метаболизм цикл {self._metabolism_cycle_count}. Состояние: {drive_states}")
+                
+            except asyncio.CancelledError:
+                logger.info("DriveSystem: Метаболизм отменён.")
+                break
+            except Exception as e:
+                logger.error(f"DriveSystem: Ошибка в фоновом метаболизме: {e}")
+                await asyncio.sleep(5)  # Пауза перед повтором
+    
+        logger.info("DriveSystem: Метаболизм остановлен.")
+
+    def stop_metabolism(self):
+        """Остановка фонового метаболизма."""
+        self._metabolism_running = False
     
     def _calculate_cross_influence(self, target_type: DriveType) -> float:
         """
