@@ -107,3 +107,6 @@ docker-compose.override.yml
 # =================================================================================
 Thumbs.db
 .DS_Store
+
+# Настройки Visual Studio / VS Code
+.vs/

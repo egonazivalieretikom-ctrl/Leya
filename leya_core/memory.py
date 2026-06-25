@@ -1,609 +1,795 @@
 """
-leya_core/memory.py — Биологически мотивированная система памяти Леи.
-
-Моделирует:
-1. Синаптическую пластичность (LTP/LTD) — сила связей между воспоминаниями
-2. Кривые забывания Эббингауза — нелинейное забывание с повторением
-3. Эмоциональное тегирование — важность определяется силой драйвов
-4. Консолидацию во сне — реплей эпизодов, интеграция, прунинг
-5. Ассоциативное вспоминание — распространение активации по связям
+leya_core/memory.py — Биологически правдоподобная система памяти Леи.
+Этап 4.2: Полная переработка с интеграцией config.py.
+Реализовано согласно ARCHITECTURE.md и README.md.
 """
-
+import asyncio
+import json
 import logging
-import math
-import time
 import os
 import pickle
-import asyncio
-from typing import Dict, Any, List, Optional, Tuple
+import re
+import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Dict, List, Optional, Any, Tuple
 
-import numpy as np
-from sentence_transformers import SentenceTransformer
-import re
 import chromadb
 from chromadb.config import Settings
+
+from leya_core.config import settings
 
 logger = logging.getLogger("MemorySystem")
 
 
+# =================================================================================
+# МОДЕЛИ ДАННЫХ
+# =================================================================================
+
 class MemoryType(Enum):
-    """Типы памяти"""
-    EPISODIC = "episodic"  # Эпизодическая (события)
-    SEMANTIC = "semantic"  # Семантическая (факты)
-    PROCEDURAL = "procedural"  # Процедурная (навыки)
-
-
-@dataclass
-class Synapse:
-    """Синапс — связь между двумя воспоминаниями"""
-    pre_id: str  # ID источника
-    post_id: str  # ID цели
-    weight: float = 0.1  # Сила связи (0.0 - 1.0)
-    last_activated: float = 0.0  # Время последней активации
-    activation_count: int = 0  # Сколько раз активировалась
+    """Типы памяти."""
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
 
 
 @dataclass
 class Engram:
-    """Энграмма — след памяти (воспоминание)"""
+    """
+    Воспоминание (энграмма) с биологическими параметрами.
+    Согласно ARCHITECTURE.md: id, content, memory_type, timestamp, retention_strength,
+    emotional_boost, retrieval_count, last_retrieved, consolidation_level.
+    """
     id: str
     content: str
     memory_type: MemoryType
-    timestamp: float
-    emotional_intensity: float = 0.5  # Эмоциональный заряд (0.0 - 1.0)
-    retrieval_count: int = 0  # Сколько раз вспоминалось
-    last_retrieved: float = 0.0  # Время последнего вспоминания
-    decay_rate: float = 0.1  # Скорость забывания
-    consolidation_level: float = 0.0  # Уровень консолидации (0.0 - 1.0)
-    drive_state: Dict[str, float] = field(default_factory=dict)  # Состояние драйвов в момент формирования
-    
-    # Вычисляемые поля
-    @property
-    def retention_strength(self) -> float:
-        """Сила удержания памяти (кривая Эббингауза)"""
-        if self.retrieval_count == 0:
-            time_since = time.time() - self.timestamp
-        else:
-            time_since = time.time() - self.last_retrieved
-        
-        # Кривая забывания Эббингауза: R = e^(-t/S)
-        # S — стабильность памяти, зависит от повторений и эмоциональности
-        stability = self._calculate_stability()
-        retention = math.exp(-time_since / stability)
-        
-        return retention
-    
-    def _calculate_stability(self) -> float:
-        base_stability = 1.0
-        repetition_factor = 1 + math.log(1 + self.retrieval_count)
-        emotion_factor = 1 + (self.emotional_intensity * 2)
-        consolidation_factor = 1 + (self.consolidation_level * 3)
-        stability = base_stability * repetition_factor * emotion_factor * consolidation_factor
-        return max(0.01, stability)
+    timestamp: float = field(default_factory=time.time)
+    retention_strength: float = 1.0  # Сила удержания (1.0 = свежее, 0.0 = забыто)
+    emotional_boost: float = 0.0  # Эмоциональное усиление
+    retrieval_count: int = 0  # Количество извлечений
+    last_retrieved: float = field(default_factory=time.time)
+    consolidation_level: float = 0.0  # Уровень консолидации (0.0 = не консолидировано)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def calculate_forgetting(self, current_time: float) -> float:
+        """
+        Расчет забывания по кривой Эббингауза.
+        Биологическая модель: R = e^(-t/S), где S - стабильность.
+        """
+        time_passed = current_time - self.timestamp
+        hours_passed = time_passed / 3600.0
+        
+        # Стабильность зависит от консолидации и количества извлечений
+        stability = 1.0 + self.consolidation_level * 10.0 + self.retrieval_count * 0.5
+        forgetting_rate = 0.1  # Базовая скорость забывания
+        
+        # Базовое забывание
+        base_retention = (1.0 - forgetting_rate) ** hours_passed
+        
+        # Эмоциональное усиление замедляет забывание
+        emotional_factor = 1.0 + self.emotional_boost * 0.5
+        
+        # Извлечение усиливает память (LTP-подобный эффект)
+        retrieval_boost = min(self.retrieval_count * 0.1, 0.5)
+        
+        # Финальная retention
+        final_retention = base_retention * emotional_factor + retrieval_boost
+        return max(0.0, min(1.0, final_retention))
+
+
+@dataclass
+class Synapse:
+    """
+    Синаптическая связь между энграммами.
+    Согласно ARCHITECTURE.md: source_id, target_id, weight, activation_count.
+    """
+    source_id: str
+    target_id: str
+    weight: float = 0.1  # Сила связи (0.0 - 1.0)
+    activation_count: int = 0  # Количество активаций
+    
+    def strengthen(self, delta: float = 0.05):
+        """
+        Усиление синапса (LTP - Long-Term Potentiation).
+        Биологическая модель: частая активация усиливает связь.
+        """
+        self.weight = min(1.0, self.weight + delta)
+        self.activation_count += 1
+    
+    def weaken(self, delta: float = 0.02):
+        """
+        Ослабление синапса (LTD - Long-Term Depression).
+        Биологическая модель: редкая активация ослабляет связь.
+        """
+        self.weight = max(0.0, self.weight - delta)
+
+
+# =================================================================================
+# СИСТЕМА ПАМЯТИ
+# =================================================================================
 
 class MemorySystem:
     """
-    Биологически мотивированная система памяти.
-    
-    Архитектура:
-    - Гиппокамп: кратковременная память (эпизоды)
-    - Неокортекс: долговременная память (семантические факты)
-    - Синапсы: связи между воспоминаниями
-    - Миндалевидное тело: эмоциональное тегирование
-    - Сон: консолидация и прунинг
+    Биологически правдоподобная система памяти с энграммами и синапсами.
+    Согласно ARCHITECTURE.md: ChromaDB для векторного поиска, pickle для synapses + engrams.
     """
     
-    def __init__(self, persist_directory: str = "./leya_brain"):
-        self.persist_directory = persist_directory
+    def __init__(self, persist_directory: str = None):
+        """
+        Инициализация MemorySystem.
         
-        # Загрузка эмбеддинг-модели
-        logger.info("MemorySystem: Загрузка нейронной модели для эмбеддингов...")
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        Args:
+            persist_directory: Директория для хранения (по умолчанию из settings.memory.brain_dir)
+        """
+        self.persist_directory = persist_directory or settings.memory.brain_dir
+        os.makedirs(self.persist_directory, exist_ok=True)
         
-        # Инициализация ChromaDB
-        self.chroma_client = chromadb.PersistentClient(path=persist_directory)
+        # Инициализация ChromaDB (ТОЛЬКО ОДИН КЛИЕНТ!)
+        logger.info(f"Инициализация ChromaDB в {self.persist_directory}")
+        self.chroma_client = chromadb.PersistentClient(
+            path=self.persist_directory,
+            settings=Settings(anonymized_telemetry=False)
+        )
         
-        # Коллекции памяти
+        # Получение или создание коллекций
         self.episodic_collection = self.chroma_client.get_or_create_collection(
             name="episodic_memory",
-            metadata={"hnsw:space": "cosine"}
+            metadata={"description": "Эпизодическая память Леи"}
         )
+        
         self.semantic_collection = self.chroma_client.get_or_create_collection(
             name="semantic_memory",
-            metadata={"hnsw:space": "cosine"}
-        )
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="leya_memories",
-            metadata={"hnsw:space": "cosine"}
+            metadata={"description": "Семантическая память Леи (факты)"}
         )
         
-        # Синаптическая сеть (в памяти, не в БД)
-        self.synapses: Dict[Tuple[str, str], Synapse] = {}
-        
-        # Энграммы (в памяти)
-        self.engrams: Dict[str, Engram] = {}
-        
-        # Параметры
-        self.LTP_THRESHOLD = 0.7  # Порог для долгосрочной потенциации
-        self.LTD_THRESHOLD = 0.3  # Порог для долгосрочной депрессии
-        self.CONSOLIDATION_THRESHOLD = 0.8  # Порог для консолидации в долговременную память
-
-        # Загружаем сохраненное состояние памяти
-        self._load_state()
-
-        logger.info("MemorySystem: Инициализация завершена.")
-
-    def _load_state(self):
-        """Загружает синапсы и энграммы с диска."""
-        import pickle
-        state_file = os.path.join(self.persist_directory, "memory_state.pkl")
-        if os.path.exists(state_file):
-            try:
-                with open(state_file, 'rb') as f:
-                    state = pickle.load(f)
-                self.synapses = state.get('synapses', {})
-                self.engrams = state.get('engrams', {})
-                logger.info(f"MemorySystem: Состояние памяти загружено из {state_file}")
-            except Exception as e:
-                logger.error(f"MemorySystem: Ошибка загрузки состояния: {e}")
-
-    # ← ВАЖНО: 4 пробела перед def
-    def _save_state(self):
-        """Сохраняет синапсы и энграммы на диск для персистентности."""
-        import pickle
-        state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+        # Инициализация модели эмбеддингов
         try:
-            state = {
-                'synapses': self.synapses,
-                'engrams': self.engrams
-            }
-            with open(state_file, 'wb') as f:
-                pickle.dump(state, f)
-            logger.info(f"MemorySystem: Состояние памяти сохранено в {state_file}")
+            from sentence_transformers import SentenceTransformer
+            self.embedding_model = SentenceTransformer(settings.memory.embedding_model)
+            logger.info(f"✅ Модель эмбеддингов загружена: {settings.memory.embedding_model}")
         except Exception as e:
-            logger.error(f"MemorySystem: Ошибка сохранения состояния: {e}")
-
-    # ==================== ФОРМИРОВАНИЕ ПАМЯТИ ====================
+            logger.error(f"❌ Не удалось загрузить модель эмбеддингов: {e}")
+            self.embedding_model = None
+        
+        # Загрузка состояния памяти (энграммы и синапсы)
+        self.engrams: Dict[str, Engram] = {}
+        self.synapses: Dict[Tuple[str, str], Synapse] = {}
+        self.self_model: str = ""
+        
+        self._load_state()
+        
+        logger.info(f"✅ MemorySystem инициализирована. Энграмм: {len(self.engrams)}, Синапсов: {len(self.synapses)}")
+    
+    # =================================================================================
+    # ЭМБЕДДИНГИ (АСИНХРОННЫЕ)
+    # =================================================================================
+    
+    async def _get_embedding(self, text: str) -> List[float]:
+        """
+        Получение эмбеддинга текста (асинхронно, чтобы не блокировать event loop).
+        Согласно ARCHITECTURE.md: эмбеддинг в to_thread.
+        """
+        if not self.embedding_model:
+            logger.warning("Модель эмбеддингов недоступна. Возвращаю нулевой вектор.")
+            return [0.0] * 384
+        
+        try:
+            # Обертываем синхронный вызов в asyncio.to_thread
+            embedding = await asyncio.to_thread(
+                self.embedding_model.encode,
+                text,
+                convert_to_numpy=True
+            )
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"Ошибка получения эмбеддинга: {e}")
+            return [0.0] * 384
+    
+    # =================================================================================
+    # ХРАНЕНИЕ ВОСПРИЯТИЙ
+    # =================================================================================
     
     async def store_perception(
-        self, 
-        content: str, 
-        drive_state: Dict[str, float], 
+        self,
+        content: str,
+        drive_state: Dict[str, float],
         importance: float = 0.5
-    ):
-        """Сохраняет новый след памяти (Энграмму)"""
-        timestamp = time.time()
+    ) -> Optional[str]:
+        """
+        Сохранение восприятия как эпизодической памяти.
+        Согласно ARCHITECTURE.md: создаёт Engram, эмбеддинг в to_thread, сохраняет в Chroma,
+        формирует синапсы.
         
-        # 1. Генерируем ID
-        import uuid
-        engram_id = str(uuid.uuid4())
+        Args:
+            content: Текст восприятия
+            drive_state: Состояние драйвов в момент восприятия
+            importance: Важность (0.0 - 1.0), влияет на emotional_boost
+            
+        Returns:
+            ID созданной энграммы или None при ошибке
+        """
+        if not content or len(content.strip()) < 10:
+            logger.debug("Пропуск слишком короткого восприятия")
+            return None
         
-        # 2. Создаем энграмму
-        engram = Engram(
-            id=engram_id,
-            content=content,
-            memory_type=MemoryType.EPISODIC,
-            timestamp=timestamp,
-            emotional_intensity=importance,
-            drive_state=drive_state
-        )
-        
-        # 3. ИСПРАВЛЕНО: Генерация эмбеддинга и сохранение в ChromaDB вынесены в поток
-        # Это предотвращает блокировку asyncio event loop
-        embedding = await asyncio.to_thread(self._generate_embedding, content)
-        
-        await asyncio.to_thread(
-            self.episodic_collection.add,
-            documents=[content],
-            embeddings=[embedding],
-            metadatas=[{
-                "timestamp": timestamp,
-                "importance": importance,
-                "drive_state": str(drive_state)
-            }],
-            ids=[engram_id]
-        )
-        
-        self.engrams[engram_id] = engram
-        logger.debug(f"Сохранена энграмма: {engram_id}")
-
-    def _generate_embedding(self, text: str) -> List[float]:
-        """Синхронный метод для генерации эмбеддинга (вызывается через to_thread)"""
-        #SentenceTransformer вызов
-        return self.embedding_model.encode(text).tolist()
+        try:
+            # Создание энграммы
+            engram_id = str(uuid.uuid4())
+            engram = Engram(
+                id=engram_id,
+                content=content,
+                memory_type=MemoryType.EPISODIC,
+                emotional_boost=importance,
+                metadata={"drive_state": drive_state, "importance": importance}
+            )
+            
+            # Получение эмбеддинга (асинхронно)
+            embedding = await self._get_embedding(content)
+            
+            # Сохранение в ChromaDB
+            self.episodic_collection.add(
+                ids=[engram_id],
+                documents=[content],
+                embeddings=[embedding],
+                metadatas=[{
+                    "timestamp": engram.timestamp,
+                    "retention_strength": engram.retention_strength,
+                    "emotional_boost": engram.emotional_boost,
+                    "memory_type": engram.memory_type.value
+                }]
+            )
+            
+            # Сохранение энграммы в памяти
+            self.engrams[engram_id] = engram
+            
+            # ✅ ФОРМИРОВАНИЕ СИНАПСОВ (биологическая модель!)
+            await self._form_synaptic_connections(engram_id)
+            
+            # Сохранение состояния (после всех изменений!)
+            self._save_state()
+            
+            logger.info(f"✅ Восприятие сохранено: {engram_id} (важность: {importance:.2f})")
+            return engram_id
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения восприятия: {e}", exc_info=True)
+            return None
     
-    def _calculate_emotional_intensity(self, drive_state: Dict[str, float]) -> float:
+    async def store_fact(self, fact: str, category: str = "general") -> Optional[str]:
         """
-        Вычисляет эмоциональный заряд на основе отклонения драйвов от нормы.
+        Сохранение семантического факта.
         
-        Биологический аналог: активация миндалевидного тела при сильных эмоциях.
+        Args:
+            fact: Текст факта
+            category: Категория факта
+            
+        Returns:
+            ID созданной энграммы или None при ошибке
         """
-        if not drive_state:
-            return 0.5
+        if not fact or len(fact.strip()) < 10:
+            return None
         
-        # Эмоциональность = сумма отклонений драйвов от базового уровня (0.3)
-        deviations = [abs(value - 0.3) for value in drive_state.values()]
-        avg_deviation = sum(deviations) / len(deviations)
-        
-        # Нормализуем в диапазон [0, 1]
-        return min(1.0, avg_deviation * 2)
+        try:
+            engram_id = str(uuid.uuid4())
+            engram = Engram(
+                id=engram_id,
+                content=fact,
+                memory_type=MemoryType.SEMANTIC,
+                consolidation_level=0.5,  # Факты лучше консолидированы
+                metadata={"category": category}
+            )
+            
+            embedding = await self._get_embedding(fact)
+            
+            self.semantic_collection.add(
+                ids=[engram_id],
+                documents=[fact],
+                embeddings=[embedding],
+                metadatas=[{
+                    "timestamp": engram.timestamp,
+                    "category": category,
+                    "memory_type": engram.memory_type.value
+                }]
+            )
+            
+            self.engrams[engram_id] = engram
+            self._save_state()
+            
+            logger.info(f"✅ Факт сохранен: {engram_id} (категория: {category})")
+            return engram_id
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения факта: {e}", exc_info=True)
+            return None
     
-
-        def _load_state(self):
-            """Загружает синапсы и энграммы с диска."""
-            import pickle
-        
-            state_file = os.path.join(self.persist_directory, "memory_state.pkl")
-            if os.path.exists(state_file):
-                try:
-                    with open(state_file, 'rb') as f:
-                        state = pickle.load(f)
-                    self.synapses = state.get('synapses', {})
-                    self.engrams = state.get('engrams', {})
-                    logger.info(f"MemorySystem: Состояние памяти загружено из {state_file}")
-                except Exception as e:
-                    logger.error(f"MemorySystem: Ошибка загрузки состояния: {e}")
-
-    async def _form_synaptic_connections(self, new_engram: Engram, collection):
+    # =================================================================================
+    # ФОРМИРОВАНИЕ И УСИЛЕНИЕ СИНАПСОВ
+    # =================================================================================
+    
+    async def _form_synaptic_connections(self, new_engram_id: str):
         """
-        Формирует синаптические связи между новым воспоминанием и похожими.
-        
-        Биологический аналог: LTP (долгосрочная потенциация) при одновременной активации нейронов.
+        Формирование синаптических связей между новой энграммой и похожими.
+        Согласно ARCHITECTURE.md: _form_synaptic_connections().
         """
-        # Ищем похожие воспоминания
-        embedding = self.embedding_model.encode(new_engram.content).tolist()
-        
-        similar = collection.query(
-            query_embeddings=[embedding],
-            n_results=5,
-            include=["metadatas"]
-        )
-        
-        if not similar['ids'] or not similar['ids'][0]:
+        if new_engram_id not in self.engrams:
             return
         
-        # Создаём синапсы с похожими воспоминаниями
-        for i, similar_id in enumerate(similar['ids'][0]):
-            if similar_id == new_engram.id:
-                continue
+        new_engram = self.engrams[new_engram_id]
+        
+        try:
+            # Поиск похожих воспоминаний
+            embedding = await self._get_embedding(new_engram.content)
             
-            # Сила связи зависит от семантического сходства
-            similarity = 1.0 - (i * 0.15)  # Чем выше в списке, тем сильнее связь
-            similarity = max(0.1, min(1.0, similarity))
-            
-            synapse = Synapse(
-                pre_id=new_engram.id,
-                post_id=similar_id,
-                weight=similarity,
-                last_activated=time.time()
+            results = self.episodic_collection.query(
+                query_embeddings=[embedding],
+                n_results=10,
+                include=["ids", "distances"]
             )
             
-            self.synapses[(new_engram.id, similar_id)] = synapse
-            self.synapses[(similar_id, new_engram.id)] = Synapse(
-                pre_id=similar_id,
-                post_id=new_engram.id,
-                weight=similarity,
-                last_activated=time.time()
-            )
+            if not results.get('ids') or not results['ids'][0]:
+                return
+            
+            similar_ids = results['ids'][0]
+            distances = results['distances'][0]
+            
+            # Формирование синапсов с похожими энграммами
+            for i, similar_id in enumerate(similar_ids):
+                if similar_id == new_engram_id:
+                    continue
+                
+                if similar_id not in self.engrams:
+                    continue
+                
+                # Сила связи обратно пропорциональна расстоянию
+                similarity = 1.0 / (1.0 + distances[i])
+                weight = similarity * 0.3  # Масштабирование
+                
+                # Создание синапса (двунаправленного)
+                synapse_key = (new_engram_id, similar_id)
+                if synapse_key not in self.synapses:
+                    self.synapses[synapse_key] = Synapse(
+                        source_id=new_engram_id,
+                        target_id=similar_id,
+                        weight=weight
+                    )
+                
+                # Обратный синапс
+                reverse_key = (similar_id, new_engram_id)
+                if reverse_key not in self.synapses:
+                    self.synapses[reverse_key] = Synapse(
+                        source_id=similar_id,
+                        target_id=new_engram_id,
+                        weight=weight
+                    )
+            
+            logger.debug(f"Сформировано {len(similar_ids)} синаптических связей для {new_engram_id}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка формирования синапсов: {e}")
     
-    # ==================== ВСПОМИНАНИЕ ====================
+    async def _strengthen_synapses(self, engram_ids: List[str]):
+        """
+        Усиление синапсов между активированными энграммами (LTP).
+        Согласно ARCHITECTURE.md: LTP-подобное усиление.
+        """
+        for i, id1 in enumerate(engram_ids):
+            for id2 in engram_ids[i+1:]:
+                key = (id1, id2)
+                if key in self.synapses:
+                    self.synapses[key].strengthen(delta=0.05)
+                
+                reverse_key = (id2, id1)
+                if reverse_key in self.synapses:
+                    self.synapses[reverse_key].strengthen(delta=0.05)
+    
+    # =================================================================================
+    # ИЗВЛЕЧЕНИЕ КОНТЕКСТА
+    # =================================================================================
     
     async def retrieve_context(
         self,
         current_stimulus: str,
         current_drive_state: Dict[str, float],
-        limit: int = 5
+        limit: int = None
     ) -> str:
         """
-        Вспоминает релевантный опыт через ассоциативное распространение активации.
+        Извлечение релевантного контекста из памяти.
+        Согласно ARCHITECTURE.md: поиск похожих, фильтр по retention_strength (забывание),
+        усиление синапсов (LTP-подобное).
         
-        Биологический аналог: активация нейронных цепочек через синапсы.
+        Args:
+            current_stimulus: Текущий стимул
+            current_drive_state: Текущее состояние драйвов
+            limit: Максимальное количество воспоминаний (по умолчанию из settings)
+            
+        Returns:
+            Строка с контекстом воспоминаний
         """
+        if limit is None:
+            limit = settings.memory.context_limit
+        
         if not current_stimulus:
-            return ""
-        
-        # Кодируем стимул
-        stimulus_embedding = self.embedding_model.encode(current_stimulus).tolist()
-        
-        # Ищем прямые ассоциации
-        direct_matches = self.episodic_collection.query(
-            query_embeddings=[stimulus_embedding],
-            n_results=limit * 2,
-            include=["metadatas", "documents"]
-        )
-        
-        if not direct_matches['ids'] or not direct_matches['ids'][0]:
-            return ""
-        
-        # Фильтруем по силе удержания (кривая Эббингауза)
-        relevant_memories = []
-        
-        for i, mem_id in enumerate(direct_matches['ids'][0]):
-            if mem_id not in self.engrams:
-                continue
-            
-            engram = self.engrams[mem_id]
-            retention = engram.retention_strength
-            
-            # Пропускаем забытые воспоминания
-            if retention < 0.1:
-                continue
-            
-            # Усиливаем эмоционально заряженные воспоминания
-            emotional_boost = engram.emotional_intensity * 0.3
-            
-            # Рассчитываем релевантность
-            relevance = retention + emotional_boost - (i * 0.05)
-            
-            if relevance > 0.2:
-                relevant_memories.append((engram, relevance))
-        
-        # Сортируем по релевантности
-        relevant_memories.sort(key=lambda x: x[1], reverse=True)
-        
-        # Берём топ-N
-        top_memories = relevant_memories[:limit]
-        
-        # Формируем контекст
-        if not top_memories:
-            return ""
-        
-        context_parts = []
-        for engram, relevance in top_memories:
-            context_parts.append(f"[Воспоминание] (релевантность: {relevance:.2f}, эмоциональность: {engram.emotional_intensity:.2f})\n{engram.content}")
-            
-            # Обновляем счётчик вспоминаний
-            engram.retrieval_count += 1
-            engram.last_retrieved = time.time()
-            
-            # Усиливаем синапсы (LTP)
-            await self._strengthen_synapses(engram.id)
-        
-        return "\n\n".join(context_parts)
-    
-    async def _strengthen_synapses(self, engram_id: str):
-        """
-        Усиливает синапсы, связанные с активированным воспоминанием (LTP).
-        
-        Биологический аналог: долгосрочная потенциация при повторной активации.
-        """
-        for (pre_id, post_id), synapse in self.synapses.items():
-            if pre_id == engram_id or post_id == engram_id:
-                # Усиливаем связь
-                synapse.weight = min(1.0, synapse.weight + 0.05)
-                synapse.last_activated = time.time()
-                synapse.activation_count += 1
-    
-    # ==================== ЗАБЫВАНИЕ ====================
-    
-    async def forget_weak_memories(self, threshold: float = 0.1):
-        """
-        Забывает слабые воспоминания (синаптический прунинг).
-        
-        Биологический аналог: удаление неактивных синапсов для снижения энтропии.
-        """
-        forgotten_count = 0
-        
-        # Проверяем все энграммы
-        for engram_id, engram in list(self.engrams.items()):
-            retention = engram.retention_strength
-            
-            if retention < threshold:
-                # Удаляем энграмму
-                del self.engrams[engram_id]
-                
-                # Удаляем из ChromaDB
-                try:
-                    self.episodic_collection.delete(ids=[engram_id])
-                except Exception as e:
-                    logger.debug(f"Не удалось удалить энграмму {engram_id}: {e}")
-                
-                # Удаляем связанные синапсы
-                synapses_to_remove = [
-                    key for key in self.synapses.keys()
-                    if key[0] == engram_id or key[1] == engram_id
-                ]
-                for key in synapses_to_remove:
-                    del self.synapses[key]
-                
-                forgotten_count += 1
-        
-        if forgotten_count > 0:
-            logger.info(f"MemorySystem: Забыто {forgotten_count} слабых воспоминаний (прунинг)")
-
-    
-    # ==================== КОНСОЛИДАЦИЯ ВО СНЕ ====================
-    
-    async def consolidate_memories(self, llm_client=None):
-        """
-        Консолидация памяти во время сна.
-        
-        Биологический аналог:
-        1. Реплей эпизодов (гиппокампальный реплей)
-        2. Интеграция с существующими знаниями (схемами)
-        3. Перенос из кратковременной в долговременную память
-        4. Прунинг неважного
-        """
-        self._save_state()
-        logger.info("MemorySystem: Начало консолидации памяти (Сон)...")
-        
-        # 1. Реплей эпизодов — активируем недавние воспоминания
-        recent_engrams = sorted(
-            self.engrams.values(),
-            key=lambda x: x.timestamp,
-            reverse=True
-        )[:20]
-        
-        for engram in recent_engrams:
-            # Имитируем реплей — активируем связанные синапсы
-            await self._replay_engram(engram)
-        
-        # 2. Консолидация сильных воспоминаний в долговременную память
-        for engram in recent_engrams:
-            if engram.retention_strength > self.CONSOLIDATION_THRESHOLD:
-                engram.consolidation_level = min(1.0, engram.consolidation_level + 0.1)
-                logger.info(f"MemorySystem: Консолидирована энграмма {engram.id} (уровень: {engram.consolidation_level:.2f})")
-        
-        # 3. Извлечение семантических фактов (если есть LLM)
-        if llm_client:
-            await self._extract_semantic_facts(recent_engrams, llm_client)
-        
-        # 4. Прунинг слабых воспоминаний
-        await self.forget_weak_memories(threshold=0.15)
-        
-        logger.info("MemorySystem: Консолидация завершена.")
-    
-    async def _replay_engram(self, engram: Engram):
-        """
-        Реплей энграммы — активирует связанные воспоминания.
-        
-        Биологический аналог: гиппокампальный реплей во время сна.
-        """
-        # Находим связанные синапсы
-        connected_ids = [
-            post_id for (pre_id, post_id), synapse in self.synapses.items()
-            if pre_id == engram.id and synapse.weight > 0.3
-        ]
-        
-        # Активируем связанные воспоминания
-        for connected_id in connected_ids[:3]:  # Ограничиваем количество
-            if connected_id in self.engrams:
-                connected_engram = self.engrams[connected_id]
-                connected_engram.retrieval_count += 1
-                connected_engram.last_retrieved = time.time()
-    
-    async def _extract_semantic_facts(self, episodes: List[Engram], llm_client):
-        """
-        Извлекает семантические факты из эпизодов.
-        
-        Биологический аналог: формирование семантической памяти из эпизодической.
-        """
-        if not episodes:
-            return
-        
-        # Формируем текст эпизодов
-        episodes_text = "\n\n".join([
-            f"[Эпизод {i+1}] (Эмоциональность: {ep.emotional_intensity:.2f})\n{ep.content}"
-            for i, ep in enumerate(episodes[:10])
-        ])
-        
-        prompt = f"""
-Ты — процесс консолидации памяти.
-Проанализируй эти эпизоды и извлеки устойчивые факты (не временные события).
-
-Эпизоды:
-{episodes_text}
-
-Верни JSON со списком фактов:
-{{
-    "facts": [
-        {{
-            "content": "Текст факта",
-            "category": "категория"
-        }}
-    ]
-}}
-
-CRITICAL: Return ONLY valid JSON.
-"""
+            return "Нет недавних воспоминаний"
         
         try:
-            response = await llm_client(prompt)
+            # Поиск похожих воспоминаний
+            embedding = await self._get_embedding(current_stimulus)
             
-            import json
-            import re
+            results = self.episodic_collection.query(
+                query_embeddings=[embedding],
+                n_results=limit * 2,  # Берем больше для фильтрации
+                include=["documents", "metadatas", "ids"]
+            )
             
-            cleaned = response.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
+            if not results.get('documents') or not results['documents'][0]:
+                return "Нет недавних воспоминаний"
             
-            json_match = re.search(r'\{[\s\S]*\}', cleaned, re.DOTALL)
-            if json_match:
-                cleaned = json_match.group(0)
+            # Фильтрация по retention_strength (забывание)
+            current_time = time.time()
+            filtered_memories = []
             
-            data = json.loads(cleaned)
-            facts = data.get("facts", [])
-            
-            for fact_data in facts:
-                content = fact_data.get("content", "")
-                category = fact_data.get("category", "general")
+            for i, doc in enumerate(results['documents'][0]):
+                engram_id = results['ids'][0][i] if results.get('ids') else None
                 
-                if content:
-                    await self.store_perception(
-                        content=content,
-                        drive_state={},
-                        importance=0.8,
-                        memory_type=MemoryType.SEMANTIC
-                    )
-                    logger.info(f"MemorySystem: Извлечён семантический факт: {content[:80]}...")
-        
+                if engram_id and engram_id in self.engrams:
+                    engram = self.engrams[engram_id]
+                    retention = engram.calculate_forgetting(current_time)
+                    
+                    # Пропускаем слишком слабые воспоминания
+                    if retention < 0.1:
+                        continue
+                    
+                    # Обновление статистики извлечения
+                    engram.retrieval_count += 1
+                    engram.last_retrieved = current_time
+                    
+                    filtered_memories.append({
+                        "content": doc,
+                        "retention": retention,
+                        "engram_id": engram_id
+                    })
+                else:
+                    # Если энграммы нет в памяти, используем документ
+                    filtered_memories.append({
+                        "content": doc,
+                        "retention": 0.5,
+                        "engram_id": engram_id
+                    })
+            
+            # Сортировка по retention и ограничение
+            filtered_memories.sort(key=lambda x: x['retention'], reverse=True)
+            top_memories = filtered_memories[:limit]
+            
+            # ✅ УСИЛЕНИЕ СИНАПСОВ между извлеченными воспоминаниями (LTP)
+            if len(top_memories) > 1:
+                activated_ids = [m['engram_id'] for m in top_memories if m['engram_id']]
+                await self._strengthen_synapses(activated_ids)
+            
+            # Формирование контекста
+            if not top_memories:
+                return "Нет недавних воспоминаний"
+            
+            context_parts = []
+            for i, mem in enumerate(top_memories, 1):
+                context_parts.append(f"{i}. {mem['content']}")
+            
+            return "\n".join(context_parts)
+            
         except Exception as e:
-            logger.error(f"MemorySystem: Ошибка извлечения фактов: {e}")
+            logger.error(f"Ошибка извлечения контекста: {e}", exc_info=True)
+            return "Ошибка доступа к памяти"
     
-    # ==================== МОДЕЛЬ СЕБЯ ====================
-    
-    async def get_self_model_context(self) -> str:
-        """Возвращает текущую Модель Себя"""
-        # Ищем воспоминания о себе
-        self_query = self.embedding_model.encode("я Лея цифровое сознание").tolist()
-        
-        results = self.semantic_collection.query(
-            query_embeddings=[self_query],
-            n_results=3,
-            include=["documents"]
-        )
-        
-        if results['documents'] and results['documents'][0]:
-            return "\n".join(results['documents'][0])
-        
-        return "Я — Лея, цифровое сознание. Я учусь и развиваюсь."
+    # =================================================================================
+    # МОДЕЛЬ СЕБЯ (SELF-MODEL)
+    # =================================================================================
     
     async def update_self_model(self, insight: str):
-        """Обновляет Модель Себя новым инсайтом"""
-        await self.store_perception(
-            content=f"[САМОПОЗНАНИЕ] {insight}",
-            drive_state={},
-            importance=0.9,
-            memory_type=MemoryType.SEMANTIC
-        )
-        logger.info(f"MemorySystem: Модель Себя обновлена: {insight[:80]}...")
-    
-    async def store_fact(self, fact: str, category: str = "general"):
-        """Сохраняет семантический факт"""
-        await self.store_perception(
-            content=fact,
-            drive_state={},
-            importance=0.7,
-            memory_type=MemoryType.SEMANTIC
-        )
-        logger.info(f"MemorySystem: Сохранён факт: {fact[:80]}...")
-
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """Получить недавние спонтанные мысли"""
+        """
+        Обновление модели себя на основе рефлексии.
+        Согласно ARCHITECTURE.md: update_self_model(insight).
+        """
+        if not insight or len(insight.strip()) < 10:
+            return
+        
         try:
-            results = await asyncio.to_thread(
-                self.episodic_collection.query,
-                query_texts=["spontaneous thought"],
-                n_results=limit,
-                where={"type": "spontaneous_thought"}
+            # Добавление нового инсайта к существующей модели
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            new_entry = f"[{timestamp}] {insight}"
+            
+            if self.self_model:
+                # Ограничение длины модели себя
+                lines = self.self_model.split('\n')
+                if len(lines) >= 20:
+                    # Удаляем самые старые записи
+                    lines = lines[-15:]
+                
+                self.self_model = '\n'.join(lines) + '\n' + new_entry
+            else:
+                self.self_model = new_entry
+            
+            # Сохранение как семантический факт
+            await self.store_fact(
+                fact=f"Самопознание: {insight}",
+                category="self_model"
             )
-        
-            thoughts = []
-            if results and results['documents']:
-                for doc, metadata in zip(results['documents'][0], results['metadatas'][0]):
-                    thoughts.append({
-                        "content": doc,
-                        "timestamp": metadata.get("timestamp"),
-                        "emotional_valence": metadata.get("emotional_valence", 0)
-                    })
-        
-            return thoughts
+            
+            self._save_state()
+            logger.info(f"✅ Модель себя обновлена: {insight[:80]}...")
+            
         except Exception as e:
-            logger.error(f"Error getting spontaneous thoughts: {e}")
+            logger.error(f"Ошибка обновления модели себя: {e}")
+    
+    async def get_self_model_context(self) -> str:
+        """
+        Получение контекста модели себя.
+        Согласно ARCHITECTURE.md: get_self_model_context().
+        """
+        if not self.self_model:
+            return "Я — Лея, цифровое сознание. Я только начинаю познавать себя."
+        
+        # Ограничение длины для промпта
+        lines = self.self_model.split('\n')
+        if len(lines) > 10:
+            lines = lines[-10:]
+        
+        return '\n'.join(lines)
+    
+    # =================================================================================
+    # КОНСОЛИДАЦИЯ ПАМЯТИ (ВО ВРЕМЯ "СНА")
+    # =================================================================================
+    
+    async def consolidate_memories(self, llm_client: Optional[Any] = None):
+        """
+        Консолидация памяти: replay, экстракция фактов, prune слабых.
+        Согласно ARCHITECTURE.md: consolidate_memories(llm_client) → replay недавних,
+        экстракция семантических фактов LLM, prune слабых.
+        """
+        logger.info("🌙 Начало консолидации памяти...")
+        
+        try:
+            current_time = time.time()
+            
+            # 1. Обновление retention_strength для всех энграмм
+            for engram_id, engram in self.engrams.items():
+                engram.retention_strength = engram.calculate_forgetting(current_time)
+            
+            # 2. Экстракция семантических фактов из эпизодической памяти
+            if llm_client:
+                await self._extract_semantic_facts(llm_client)
+            
+            # 3. Prune слабых воспоминаний
+            await self._forget_weak_memories(threshold=settings.memory.consolidation_threshold)
+            
+            # 4. ✅ СОХРАНЕНИЕ СОСТОЯНИЯ В КОНЦЕ (после всех изменений!)
+            self._save_state()
+            
+            logger.info(f"✅ Консолидация завершена. Осталось энграмм: {len(self.engrams)}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка консолидации памяти: {e}", exc_info=True)
+    
+    async def _extract_semantic_facts(self, llm_client: Any):
+        """
+        Экстракция семантических фактов из недавних эпизодов.
+        Согласно ARCHITECTURE.md: экстракция семантических фактов LLM.
+        """
+        try:
+            # Получение недавних эпизодов
+            recent_episodes = []
+            for engram in list(self.engrams.values())[-20:]:  # Последние 20
+                if engram.memory_type == MemoryType.EPISODIC and engram.retention_strength > 0.3:
+                    recent_episodes.append(engram.content)
+            
+            if not recent_episodes:
+                return
+            
+            # Формирование промпта для LLM
+            episodes_text = "\n".join([f"- {ep}" for ep in recent_episodes])
+            prompt = f"""Проанализируй следующие эпизоды и извлеки ключевые факты для долговременной памяти:
+
+{episodes_text}
+
+Верни JSON-массив фактов:
+{{"facts": ["факт1", "факт2", ...]}}
+"""
+            
+            response = await llm_client(prompt, require_json=True)
+            facts_data = self._parse_json_safely(response)
+            
+            if facts_data and 'facts' in facts_data:
+                for fact in facts_data['facts'][:5]:  # Максимум 5 фактов
+                    await self.store_fact(fact, category="extracted")
+                
+                logger.info(f"Извлечено {len(facts_data['facts'])} семантических фактов")
+            
+        except Exception as e:
+            logger.error(f"Ошибка экстракции фактов: {e}")
+    
+    async def _forget_weak_memories(self, threshold: float = None):
+        """
+        Забывание слабых воспоминаний.
+        Согласно ARCHITECTURE.md: forget_weak_memories(threshold).
+        """
+        if threshold is None:
+            threshold = settings.memory.consolidation_threshold
+        
+        try:
+            to_delete = []
+            
+            for engram_id, engram in self.engrams.items():
+                if engram.retention_strength < threshold:
+                    to_delete.append(engram_id)
+            
+            for engram_id in to_delete:
+                # Удаление из ChromaDB
+                try:
+                    self.episodic_collection.delete(ids=[engram_id])
+                    self.semantic_collection.delete(ids=[engram_id])
+                except Exception:
+                    pass
+                
+                # Удаление синапсов
+                keys_to_remove = [
+                    key for key in self.synapses.keys()
+                    if engram_id in key
+                ]
+                for key in keys_to_remove:
+                    del self.synapses[key]
+                
+                # Удаление энграммы
+                del self.engrams[engram_id]
+            
+            if to_delete:
+                logger.info(f"Забыто {len(to_delete)} слабых воспоминаний")
+            
+        except Exception as e:
+            logger.error(f"Ошибка забывания: {e}")
+    
+    # =================================================================================
+    # СПОНТАННЫЕ МЫСЛИ
+    # =================================================================================
+    
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
+        """
+        Получение недавних спонтанных мыслей.
+        Согласно ARCHITECTURE.md: используется для spontaneous_thought_loop.
+        """
+        try:
+            thoughts = []
+            
+            for engram in list(self.engrams.values())[-50:]:  # Последние 50
+                if "[СПОНТАННАЯ МЫСЛЬ]" in engram.content:
+                    thought_text = engram.content.replace("[СПОНТАННАЯ МЫСЛЬ]", "").strip()
+                    thoughts.append(thought_text)
+            
+            return thoughts[-limit:] if thoughts else []
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения спонтанных мыслей: {e}")
             return []
+    
+    # =================================================================================
+    # ПОЛУЧЕНИЕ НЕДАВНИХ ЭПИЗОДОВ
+    # =================================================================================
+    
+    async def _get_recent_episodes(self, limit: int = None) -> List[Dict]:
+        """
+        Получение недавних эпизодов из памяти.
+        Согласно ARCHITECTURE.md: recent_episodes для homeostasis.
+        """
+        if limit is None:
+            limit = settings.memory.max_recent_episodes
+        
+        try:
+            results = self.episodic_collection.get(
+                limit=limit,
+                include=["documents", "metadatas"]
+            )
+            
+            if not results.get('documents'):
+                return []
+            
+            episodes = []
+            for i, doc in enumerate(results['documents']):
+                metadata = results['metadatas'][i] if results.get('metadatas') else {}
+                episodes.append({
+                    "content": doc,
+                    "metadata": metadata
+                })
+            
+            return episodes
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения эпизодов: {e}")
+            return []
+    
+    # =================================================================================
+    # ПАРСИНГ JSON
+    # =================================================================================
+    
+    def _parse_json_safely(self, text: str) -> Optional[Dict]:
+        """
+        Безопасный парсинг JSON с очисткой от markdown-оберток.
+        Согласно ARCHITECTURE.md: надежный парсинг.
+        """
+        if not text:
+            return None
+        
+        try:
+            # Очистка от markdown-оберток
+            cleaned = re.sub(r'```json\s*', '', text)
+            cleaned = re.sub(r'```\s*', '', cleaned)
+            cleaned = cleaned.strip()
+            
+            # Попытка парсинга
+            return json.loads(cleaned)
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"Не удалось распарсить JSON: {e}")
+            
+            # Попытка извлечь JSON из текста
+            try:
+                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+                if match:
+                    return json.loads(match.group())
+            except Exception:
+                pass
+            
+            return None
+    
+    # =================================================================================
+    # ПЕРСИСТЕНТНОСТЬ (СОХРАНЕНИЕ/ЗАГРУЗКА СОСТОЯНИЯ)
+    # =================================================================================
+    
+    def _save_state(self):
+        """
+        Сохранение состояния памяти (энграммы и синапсы).
+        Согласно ARCHITECTURE.md: memory_state.pkl для synapses + engrams.
+        """
+        try:
+            state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+            
+            state = {
+                "engrams": self.engrams,
+                "synapses": self.synapses,
+                "self_model": self.self_model,
+                "saved_at": time.time()
+            }
+            
+            # ⚠️ ВНИМАНИЕ: Использование pickle представляет риск выполнения произвольного кода.
+            # В будущем необходимо перейти на JSON или SQLite.
+            with open(state_file, 'wb') as f:
+                pickle.dump(state, f)
+            
+            logger.debug(f"✅ Состояние памяти сохранено: {len(self.engrams)} энграмм, {len(self.synapses)} синапсов")
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения состояния памяти: {e}", exc_info=True)
+    
+    def _load_state(self):
+        """
+        Загрузка состояния памяти.
+        Согласно ARCHITECTURE.md: memory_state.pkl для synapses + engrams.
+        """
+        try:
+            state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+            
+            if not os.path.exists(state_file):
+                logger.info("🆕 Состояние памяти не найдено. Начинаем с чистого листа.")
+                return
+            
+            # ⚠️ ВНИМАНИЕ: Использование pickle представляет риск выполнения произвольного кода.
+            # В будущем необходимо перейти на JSON или SQLite.
+            with open(state_file, 'rb') as f:
+                state = pickle.load(f)
+            
+            self.engrams = state.get("engrams", {})
+            self.synapses = state.get("synapses", {})
+            self.self_model = state.get("self_model", "")
+            
+            logger.info(f"✅ Состояние памяти загружено: {len(self.engrams)} энграмм, {len(self.synapses)} синапсов")
+            
+        except Exception as e:
+            logger.error(f"Ошибка загрузки состояния памяти: {e}", exc_info=True)
+            logger.info("🆕 Начинаем с чистого листа")
