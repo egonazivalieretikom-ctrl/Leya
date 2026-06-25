@@ -106,11 +106,7 @@ class DriveSystem:
         self._running = True
         
         logger.info("DriveSystem: Инициализация завершена с аллостазом и RPE.")
-    
-    @property
-    def tension(self) -> float:
-        """Синоним current — напряжение драйва"""
-        return self.current
+
 
     async def evaluate_stimulus(self, stimulus: str, context: str = "") -> Dict[DriveType, float]:
         """

@@ -77,21 +77,12 @@ class Engram:
         return retention
     
     def _calculate_stability(self) -> float:
-        """Вычисляет стабильность памяти на основе повторений и эмоциональности"""
-        # Базовая стабильность
-        base_stability = 1.0  # секунды (начальное значение)
-        
-        # Усиление от повторений (логарифмический рост)
+        base_stability = 1.0
         repetition_factor = 1 + math.log(1 + self.retrieval_count)
-        
-        # Усиление от эмоционального заряда
         emotion_factor = 1 + (self.emotional_intensity * 2)
-        
-        # Усиление от консолидации
         consolidation_factor = 1 + (self.consolidation_level * 3)
-        
+        stability = base_stability * repetition_factor * emotion_factor * consolidation_factor
         return max(0.01, stability)
-        return base_stability * repetition_factor * emotion_factor * consolidation_factor
 
 
 class MemorySystem:
@@ -241,22 +232,6 @@ class MemorySystem:
         # Нормализуем в диапазон [0, 1]
         return min(1.0, avg_deviation * 2)
     
-        def _save_state(self):
-            """Сохраняет синапсы и энграммы на диск для персистентности."""
-            import pickle
-            import os
-        
-            state_file = os.path.join(self.persist_directory, "memory_state.pkl")
-            try:
-                state = {
-                    'synapses': self.synapses,
-                    'engrams': self.engrams
-                }
-                with open(state_file, 'wb') as f:
-                    pickle.dump(state, f)
-                logger.info(f"MemorySystem: Состояние памяти сохранено в {state_file}")
-            except Exception as e:
-                logger.error(f"MemorySystem: Ошибка сохранения состояния: {e}")
 
         def _load_state(self):
             """Загружает синапсы и энграммы с диска."""
