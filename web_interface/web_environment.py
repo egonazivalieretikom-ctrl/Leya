@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List
+from leya_core.environment import ToolRegistry
 
 from leya_core.environment import Environment
 
@@ -17,6 +18,8 @@ class WebEnvironment(Environment):
     
     def __init__(self, leya_os):
         super().__init__(leya_os)
+        self.leya_os = leya_os
+        self.tool_registry = ToolRegistry()
         self.active_connections: List = []
         self.input_queue = asyncio.Queue()
         self.state = type('State', (), {
@@ -25,6 +28,8 @@ class WebEnvironment(Environment):
             'self_model': '',
             'connected_clients': 0
         })()
+        self._register_tools()
+        logger.info("WebEnvironment: Инициализация завершена")
     
     async def connect(self, websocket):
         """Подключает нового клиента."""
@@ -56,19 +61,16 @@ class WebEnvironment(Environment):
         self.state.connected_clients = len(self.active_connections)
         logger.info(f"WebEnvironment: Клиент отключен. Всего: {self.state.connected_clients}")
     
-    async def broadcast(self, message: Dict[str, Any]):
-        """Отправка сообщения всем подключенным WebSocket-клиентам."""
-        if not hasattr(self, '_clients'):
-            # Импортируем глобальный список клиентов из server.py
-            from web_interface.server import connected_clients
-            self._clients = connected_clients
+    async def broadcast(self, message: dict):
+        """Отправляет сообщение всем подключенным клиентам."""
+        from web_interface.server import connected_clients
     
         disconnected = set()
-        for client in self._clients:
+        for client in connected_clients:
             try:
                 await client.send_json(message)
             except Exception as e:
-                logger.warning(f"Не удалось отправить сообщение клиенту: {e}")
+                logger.error(f"Ошибка отправки клиенту: {e}")
                 disconnected.add(client)
     
         # Удаляем отключенных клиентов
@@ -139,14 +141,22 @@ class WebEnvironment(Environment):
         })
 
     async def handle_user_message(self, content: str):
-        """Обработка сообщения от пользователя через веб-интерфейс."""
-        try:
-            # Передаем сообщение в LeyaOS
-            await self.leya.perceive({
-                "type": "user_message",
-                "content": content,
-                "source": "web_interface"
-            })
-        except Exception as e:
-            logger.error(f"Ошибка обработки сообщения: {e}")
-            raise
+        """Обрабатывает сообщение от пользователя."""
+        logger.info(f"Получено сообщение от пользователя: {content[:100]}...")
+    
+        # Создаем стимул
+        stimulus = {
+            "type": "user_message",
+            "content": content,
+            "source": "web_interface",
+            "timestamp": datetime.now().timestamp()
+        }
+    
+        # Передаем в основной цикл восприятия
+        if self.leya_os:  # ← Проверяем напрямую, без hasattr
+            await self.leya_os.perceive(stimulus)
+        
+            # Запускаем когнитивный цикл
+            await self.leya_os._cognitive_loop(stimulus)
+        else:
+            logger.error("leya_os не инициализирован в WebEnvironment")

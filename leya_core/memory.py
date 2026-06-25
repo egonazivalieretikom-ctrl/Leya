@@ -12,6 +12,8 @@ leya_core/memory.py — Биологически мотивированная с
 import logging
 import math
 import time
+import os
+import pickle
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +21,7 @@ from enum import Enum
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
+import re
 import chromadb
 from chromadb.config import Settings
 
@@ -120,6 +123,11 @@ class MemorySystem:
             name="semantic_memory",
             metadata={"hnsw:space": "cosine"}
         )
+        self.chroma_client = chromadb.PersistentClient(path=persist_directory)
+        self.collection = self.chroma_client.get_or_create_collection(
+            name="leya_memories",
+            metadata={"hnsw:space": "cosine"}
+        )
         
         # Синаптическая сеть (в памяти, не в БД)
         self.synapses: Dict[Tuple[str, str], Synapse] = {}
@@ -131,9 +139,42 @@ class MemorySystem:
         self.LTP_THRESHOLD = 0.7  # Порог для долгосрочной потенциации
         self.LTD_THRESHOLD = 0.3  # Порог для долгосрочной депрессии
         self.CONSOLIDATION_THRESHOLD = 0.8  # Порог для консолидации в долговременную память
-        
+
+        # Загружаем сохраненное состояние памяти
+        self._load_state()
+
         logger.info("MemorySystem: Инициализация завершена.")
-    
+
+    def _load_state(self):
+        """Загружает синапсы и энграммы с диска."""
+        import pickle
+        state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, 'rb') as f:
+                    state = pickle.load(f)
+                self.synapses = state.get('synapses', {})
+                self.engrams = state.get('engrams', {})
+                logger.info(f"MemorySystem: Состояние памяти загружено из {state_file}")
+            except Exception as e:
+                logger.error(f"MemorySystem: Ошибка загрузки состояния: {e}")
+
+    # ← ВАЖНО: 4 пробела перед def
+    def _save_state(self):
+        """Сохраняет синапсы и энграммы на диск для персистентности."""
+        import pickle
+        state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+        try:
+            state = {
+                'synapses': self.synapses,
+                'engrams': self.engrams
+            }
+            with open(state_file, 'wb') as f:
+                pickle.dump(state, f)
+            logger.info(f"MemorySystem: Состояние памяти сохранено в {state_file}")
+        except Exception as e:
+            logger.error(f"MemorySystem: Ошибка сохранения состояния: {e}")
+
     # ==================== ФОРМИРОВАНИЕ ПАМЯТИ ====================
     
     async def store_perception(
@@ -202,6 +243,38 @@ class MemorySystem:
         # Нормализуем в диапазон [0, 1]
         return min(1.0, avg_deviation * 2)
     
+        def _save_state(self):
+            """Сохраняет синапсы и энграммы на диск для персистентности."""
+            import pickle
+            import os
+        
+            state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+            try:
+                state = {
+                    'synapses': self.synapses,
+                    'engrams': self.engrams
+                }
+                with open(state_file, 'wb') as f:
+                    pickle.dump(state, f)
+                logger.info(f"MemorySystem: Состояние памяти сохранено в {state_file}")
+            except Exception as e:
+                logger.error(f"MemorySystem: Ошибка сохранения состояния: {e}")
+
+        def _load_state(self):
+            """Загружает синапсы и энграммы с диска."""
+            import pickle
+        
+            state_file = os.path.join(self.persist_directory, "memory_state.pkl")
+            if os.path.exists(state_file):
+                try:
+                    with open(state_file, 'rb') as f:
+                        state = pickle.load(f)
+                    self.synapses = state.get('synapses', {})
+                    self.engrams = state.get('engrams', {})
+                    logger.info(f"MemorySystem: Состояние памяти загружено из {state_file}")
+                except Exception as e:
+                    logger.error(f"MemorySystem: Ошибка загрузки состояния: {e}")
+
     async def _form_synaptic_connections(self, new_engram: Engram, collection):
         """
         Формирует синаптические связи между новым воспоминанием и похожими.
@@ -381,6 +454,7 @@ class MemorySystem:
         3. Перенос из кратковременной в долговременную память
         4. Прунинг неважного
         """
+        self._save_state()
         logger.info("MemorySystem: Начало консолидации памяти (Сон)...")
         
         # 1. Реплей эпизодов — активируем недавние воспоминания

@@ -2,3 +2,8 @@ chromadb
 sentence-transformers
 openai
 psutil>=5.9.0
+fastapi
+uvicorn
+websockets
+aiohttp
+jinja2

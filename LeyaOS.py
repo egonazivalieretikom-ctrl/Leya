@@ -4,13 +4,14 @@ LeyaOS.py — Оркестратор цифрового сознания Леи.
 в единый цикл восприятия, мышления и действия.
 """
 
+import re
 import asyncio
 import logging
 import signal
 import sys
 import os
 import json
-import os
+import aiohttp
 # Отключаем telemetry ChromaDB ДО его импорта
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
@@ -38,12 +39,7 @@ from leya_core.reflection import MetaCognition
 from leya_core.environment import CLIEnvironment
 
 # WebEnvironment импортируем условно
-try:
-    from web_interface.web_environment import WebEnvironment
-except ImportError:
-    # Fallback для обратной совместимости
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'web_interface'))
-    from web_interface.web_environment import WebEnvironment
+from web_interface.web_environment import WebEnvironment
 
 # Настройка логирования
 logging.basicConfig(
@@ -84,6 +80,7 @@ class LeyaOS:
         
         # 3. СНАЧАЛА Environment (чтобы получить soul_manager)
         if use_web:
+            logger.info(f"WebEnvironment: Инициализация с leya_os = {self}")
             self.env = WebEnvironment(leya_os=self)
             logger.info("🌐 Используется веб-интерфейс")
         else:
@@ -320,23 +317,6 @@ class LeyaOS:
         finally:
             await self.shutdown(background_tasks)
 
-        # ЗАГРУЗКА СОСТОЯНИЯ
-        logger.info("Загрузка состояния из предыдущей сессии...")
-        saved_state = self.persistence.load_state()
-    
-        if saved_state:
-            # Загружаем состояние в DriveSystem
-            if "drives" in saved_state:
-                self.drives.load_state(saved_state["drives"])
-        
-            # Загружаем состояние в HomeostasisEngine
-            if "homeostasis" in saved_state:
-                self.homeostasis.load_state(saved_state["homeostasis"])
-        
-            logger.info("✅ Состояние загружено из предыдущей сессии")
-        else:
-            logger.info("🆕 Начинаем с чистого листа")
-
     async def _system_metrics_loop(self):
         """Периодически собирает системные метрики и применяет их к драйвам."""
         logger.info("SystemMetrics: Цикл мониторинга запущен.")
@@ -516,10 +496,6 @@ class LeyaOS:
                     "source": "homeostasis",
                     "tool_context": tool_context
                 })
-
-                if "Исследовать пробел:" in goal.name:
-                    topic = goal.name.replace("Исследовать пробел:", "").strip()
-                    self.homeostasis.mark_as_researched(topic)
         
             elif goal.action_type == "rest":
                 logger.info(f"HomeostasisEngine: Отдых. {goal.reasoning}")
@@ -527,30 +503,36 @@ class LeyaOS:
                 for drive_type in goal.target_drives.keys():
                     self.drives.apply_satisfaction(drive_type, 0.05, 0.0)
 
-    def _evaluate_tool_outcome(self, tool_result: str) -> float:
-        """
-        Оценивает фактический результат инструмента (0.0 - 1.0).
-        Используется для вычисления RPE.
-        """
-        if not tool_result:
-            return 0.0
-    
-        # Ошибки
-        if tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower():
-            return 0.1
-    
-        if "не дал ответа" in tool_result.lower() or "не найден" in tool_result.lower():
-            return 0.2
-    
-        # Успех — оцениваем качество
-        length = len(tool_result)
-    
-        if length < 100:
-            return 0.4  # Короткий ответ
-        elif length < 500:
-            return 0.7  # Средний ответ
-        else:
-            return 0.9  # Подробный ответ
+        def _evaluate_tool_outcome(self, tool_result: str) -> float:
+            """Оценивает фактический результат инструмента (0.0 - 1.0)."""
+            if not tool_result:
+                return 0.0
+
+            result_lower = tool_result.lower()
+
+            # Явные ошибки
+            if tool_result.startswith("Ошибка") or "не удалось" in result_lower:
+                return 0.1
+            if "не дал ответа" in result_lower or "не найден" in result_lower or "page not found" in result_lower:
+                return 0.2
+
+            # Оценка осмысленности по количеству слов, а не просто символов
+            clean_text = re.sub(r'\s+', ' ', tool_result).strip()
+            words = clean_text.split(' ')
+        
+            if len(words) < 15:
+                return 0.3 # Слишком коротко, скорее всего ошибка или пустота
+
+            # Наличие маркеров структурированного ответа (заголовки, списки)
+            success_markers = ['==', '##', 'содержание', 'история', 'описание', 'факты', 'определение']
+            has_markers = any(marker in result_lower for marker in success_markers)
+        
+            if has_markers and len(words) > 50:
+                return 0.9 # Подробный и структурированный ответ
+            elif len(words) > 50:
+                return 0.7 # Просто длинный текст
+            else:
+                return 0.5 # Короткий, но осмысленный ответ
 
     async def _get_recent_episodes(self, limit: int = 20) -> List[Dict]:
         """Получает последние эпизоды из памяти."""
@@ -651,116 +633,118 @@ class LeyaOS:
             
             await asyncio.sleep(2)  # Каждые 2 секунды
 
+    async def _llm_call(self, prompt: str, require_json: bool = False) -> str:
+        """Единая точка вызова LLM через Ollama."""
+        import aiohttp
+
+        model_name = "qwen2.5:14b-instruct-q3_K_M"
+        
+        # Формируем payload ДО блока try, чтобы он был гарантированно определён
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке."},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.7, 
+                "top_p": 0.9, 
+                "top_k": 40, 
+                "num_predict": 1024, 
+                "repeat_penalty": 1.1
+            }
+        }
+
+        if require_json:
+            payload["format"] = "json"
+
+        # Создаём переиспользуемую сессию один раз
+        if not hasattr(self, '_aiohttp_session') or self._aiohttp_session.closed:
+            self._aiohttp_session = aiohttp.ClientSession()
+
+        try:
+            async with self._aiohttp_session.post(
+                "http://localhost:11434/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=180)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("message", {}).get("content", "")
+                else:
+                    logger.error(f"Ollama вернул статус {response.status}")
+                    return await self._default_llm_call(prompt)
+                    
+        except asyncio.TimeoutError:
+            logger.error(f"Таймаут вызова LLM для промпта: {prompt[:100]}...")
+            return await self._default_llm_call(prompt)
+        except aiohttp.ClientError as e:
+            logger.error(f"Ошибка HTTP клиента при вызове LLM: {e}")
+            return await self._default_llm_call(prompt)
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка вызова LLM: {e}", exc_info=True)
+            return await self._default_llm_call(prompt)
+
     async def shutdown(self, background_tasks: list):
-        """Graceful shutdown с сохранением состояния."""
+        """Graceful shutdown."""
         logger.info(f"{self.name} засыпает...")
         self.state = "sleeping"
         self.running = False
-    
+
+        # ВАЖНО: Сохраняем состояние памяти перед выключением
+        self.memory._save_state()
+
         for task in background_tasks:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-    
+
+
         logger.info("Финальная консолидация памяти...")
         await self.memory.consolidate_memories(llm_client=self._llm_call)
-    
-        # Проверка целостности soul-файлов
-        if hasattr(self.env, 'soul_manager') and hasattr(self.env.soul_manager, 'check_integrity'):
-            integrity = self.env.soul_manager.check_integrity()
-            for filename, result in integrity.items():
-                if not result.get("valid", True):
-                    logger.warning(f"SoulCrypto: ⚠️ Файл {filename}: {result.get('reason', 'неизвестно')}")
-                else:
-                    logger.info(f"SoulCrypto: ✅ Файл {filename} цел (версия {result.get('version', '?')})")
+        logger.info(f"{self.name} уснула.")
 
-        # СОХРАНЕНИЕ СОСТОЯНИЯ
-        logger.info("Сохранение состояния для следующей сессии...")
-        state = {
-            "drives": self.drives.save_state(),
-            "homeostasis": self.homeostasis.save_state()
-        }
-        self.persistence.save_state(state)
-    
-        logger.info(f"{self.name} уснула. Состояние сохранено.")
 
     async def _llm_call(self, prompt: str, require_json: bool = False) -> str:
-        """
-        Единая точка вызова LLM через Ollama.
-        Использует Qwen 2.5 14B Instruct.
-    
-        Args:
-            prompt: Текст запроса
-            require_json: Если True, включает JSON mode в Ollama
-        """
+        """Единая точка вызова LLM через Ollama."""
         import aiohttp
-    
+
         model_name = "qwen2.5:14b-instruct-q3_K_M"
-    
-        # Формируем payload
         payload = {
             "model": model_name,
             "messages": [
-                {
-                    "role": "system",
-                    "content": "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "system", "content": "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке."},
+                {"role": "user", "content": prompt}
             ],
             "stream": False,
-            "options": {
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "top_k": 40,
-                "num_predict": 1024,
-                "repeat_penalty": 1.1
-            }
+            "options": {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "num_predict": 1024, "repeat_penalty": 1.1}
         }
-    
-        # Включаем JSON mode только когда требуется
+
         if require_json:
             payload["format"] = "json"
-    
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "http://localhost:11434/api/chat",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=180)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        message = data.get("message", {})
-                        return message.get("content", "")
-                    else:
-                        logger.error(f"Ollama вернул статус {response.status}")
-                        return await self._default_llm_call(prompt)
-                    
-        except aiohttp.ClientError as e:
-            logger.error(f"Ошибка подключения к Ollama: {e}")
-            logger.info("Убедись, что Ollama запущен командой: ollama serve")
-            return await self._default_llm_call(prompt)
-        except asyncio.TimeoutError:
-            logger.error("Превышено время ожидания ответа от Ollama")
-            return await self._default_llm_call(prompt)
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка вызова LLM: {e}", exc_info=True)
-            return await self._default_llm_call(prompt)
 
-    async def _default_llm_call(self, prompt: str) -> str:
-        """Заглушка для LLM, если Ollama недоступен."""
-        return json.dumps({
-            "internal_monologue": "Я обрабатываю стимул. Мои драйвы активизируются.",
-            "response": "Привет! Я здесь и думаю о том, как интересно устроен этот диалог.",
-            "action_intent": "none",
-            "tool_call": "",
-            "self_reflection": ""
-        })
+        # Создаем сессию один раз и кешируем её в объекте
+        if not hasattr(self, '_aiohttp_session') or self._aiohttp_session.closed:
+            self._aiohttp_session = aiohttp.ClientSession()
+
+        try:
+            async with self._aiohttp_session.post(
+                "http://localhost:11434/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=180)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("message", {}).get("content", "")
+                else:
+                    logger.error(f"Ollama вернул статус {response.status}")
+                    return await self._default_llm_call(prompt)
+        except Exception as e:
+            logger.error(f"Ошибка вызова LLM: {e}", exc_info=True)
+            return await self._default_llm_call(prompt)
 
 
 async def main():

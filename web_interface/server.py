@@ -1,140 +1,167 @@
 import asyncio
-import json
 import logging
-from typing import Dict, Any, Set
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+import os
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
+from starlette.requests import Request
+import uvicorn
 
 logger = logging.getLogger("WebServer")
 
-app = FastAPI(title="LeyaOS Web Interface")
+# Глобальное множество подключенных WebSocket-клиентов
+connected_clients: set = set()
 
-# Пути к статике и шаблонам
-BASE_DIR = Path(__file__).parent
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
+app = FastAPI(title="Leya Web Interface")
 
-# Глобальная ссылка на WebEnvironment
+# Подключаем статику и шаблоны, если они есть
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+templates = Jinja2Templates(directory=templates_dir) if os.path.exists(templates_dir) else None
+
+# Глобальная ссылка на окружение
 web_env = None
 
-# Отслеживание подключенных клиентов на уровне сервера
-connected_clients: Set[WebSocket] = set()
-
-def init_server(env):
-    """Инициализация сервера с ссылкой на WebEnvironment"""
+def init_app(environment):
+    """Инициализирует веб-приложение с окружением."""
     global web_env
-    web_env = env
+    web_env = environment
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html"
-    )
+async def get_index(request: Request):
+    """Главная страница веб-интерфейса."""
+    if templates:
+        try:
+            return templates.TemplateResponse(name="index.html", request=request)
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить шаблон index.html: {e}")
+    
+    # Fallback на встроенный HTML
+    return HTMLResponse(content="""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Лея - Цифровое сознание</title>
+        <meta charset="utf-8">
+        <style>
+            body { 
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                max-width: 800px; 
+                margin: 50px auto; 
+                padding: 20px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+            }
+            h1 { 
+                font-size: 3em; 
+                margin-bottom: 10px;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            }
+            .status { 
+                padding: 20px; 
+                background: rgba(255,255,255,0.2); 
+                border-radius: 10px; 
+                margin: 20px 0;
+                backdrop-filter: blur(10px);
+            }
+            .status strong {
+                display: inline-block;
+                width: 120px;
+            }
+            p { 
+                line-height: 1.6;
+                background: rgba(255,255,255,0.1);
+                padding: 15px;
+                border-radius: 5px;
+            }
+            code {
+                background: rgba(0,0,0,0.3);
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-family: 'Courier New', monospace;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>🧠 Лея</h1>
+        <div class="status">
+            <strong>Статус:</strong> Веб-интерфейс запущен<br>
+            <strong>WebSocket:</strong> <code>ws://localhost:8000/ws</code>
+        </div>
+        <p>
+            HTML-шаблоны не найдены. Создайте папку <code>web_interface/templates</code> 
+            и добавьте файл <code>index.html</code> для кастомного интерфейса.
+        </p>
+    </body>
+    </html>
+    """)
 
 @app.get("/api/state")
 async def get_state():
+    """REST API для получения состояния Леи."""
     if not web_env:
-        return JSONResponse({"error": "Server not initialized"}, status_code=500)
+        return {"error": "Environment not initialized"}
     
     try:
-        leya = web_env.leya
-        drives = {d.type.value: d.current for d in leya.drives.drives.values()}
-        
-        # Читаем файлы души
-        soul_files = {}
-        for filename in ["personality.txt", "values.txt", "rules.txt"]:
-            try:
-                soul_files[filename.replace(".txt", "")] = web_env.soul_manager.read_file(filename)
-            except Exception as e:
-                logger.warning(f"Не удалось прочитать {filename}: {e}")
-                soul_files[filename.replace(".txt", "")] = ""
-        
-        return {
-            "state": leya.state,
-            "drives": drives,
-            "connected_clients": len(connected_clients),
-            "soul": soul_files
+        # Получаем состояние из web_env
+        state = {
+            "status": "awake",
+            "drives": {},
+            "self_model": ""
         }
+        
+        # Если есть доступ к leya_os, получаем реальное состояние
+        if hasattr(web_env, 'leya_os'):
+            leya = web_env.leya_os
+            state["drives"] = {d.type.value: d.current for d in leya.drives.drives.values()}
+            state["self_model"] = await leya.memory.get_self_model_context()
+        
+        return state
     except Exception as e:
         logger.error(f"Ошибка получения состояния: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-@app.post("/api/soul/{filename}")
-async def save_soul_file(filename: str, request: Request):
-    try:
-        content = await request.body()
-        result = web_env.soul_manager.write_file(filename, content.decode("utf-8"))
-        return {"result": result}
-    except Exception as e:
-        logger.error(f"Ошибка сохранения файла {filename}: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return {"error": str(e)}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # ВАЖНО: Принимаем соединение ПЕРЕД любым использованием
+    """WebSocket endpoint для взаимодействия с Леей."""
+    if not web_env:
+        await websocket.close(code=1011, reason="Environment not initialized")
+        return
+    
+    # Принимаем WebSocket соединение
     await websocket.accept()
+    
+    # СНАЧАЛА добавляем клиента
     connected_clients.add(websocket)
     
-    logger.info(f"WebSocket клиент подключен. Всего: {len(connected_clients)}")
+    # ПОТОМ логируем с правильным счетчиком
+    logger.info(f"WebSocket клиент подключен. Всего клиентов: {len(connected_clients)}")
     
     try:
-        # Отправляем приветственное сообщение
-        await websocket.send_json({
-            "type": "connected",
-            "message": "Подключение установлено"
-        })
-        
         while True:
-            # Получаем данные от клиента
             data = await websocket.receive_json()
-            
             if data.get("type") == "user_message":
                 content = data.get("content", "")
-                logger.info(f"Получено сообщение от пользователя: {content[:100]}")
-                
-                # Обрабатываем сообщение через WebEnvironment
-                if web_env:
-                    try:
-                        await web_env.handle_user_message(content)
-                    except Exception as e:
-                        logger.error(f"Ошибка обработки сообщения: {e}")
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"Ошибка обработки: {str(e)}"
-                        })
-                else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Сервер не инициализирован"
-                    })
-            
-            elif data.get("type") == "ping":
-                await websocket.send_json({"type": "pong"})
-    
+                if content:
+                    await web_env.handle_user_message(content)
     except WebSocketDisconnect:
         logger.info("WebSocket клиент отключен")
     except Exception as e:
-        logger.error(f"WebSocket ошибка: {e}")
+        logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
-        # Удаляем клиента из списка подключенных
         connected_clients.discard(websocket)
-        logger.info(f"Клиент удален. Осталось подключений: {len(connected_clients)}")
-        
-        # Корректно закрываем соединение, если оно еще открыто
-        try:
-            if websocket.client_state.CONNECTED:
-                await websocket.close()
-        except Exception:
-            pass
+        if web_env:
+            await web_env.disconnect(websocket)
+        logger.info(f"Клиент удален. Осталось клиентов: {len(connected_clients)}")
 
-async def run_server(env):
-    """Запускает uvicorn сервер"""
-    import uvicorn
-    init_server(env)
+async def run_server(environment):
+    """Точка входа для запуска веб-сервера из LeyaOS."""
+    init_app(environment)
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
