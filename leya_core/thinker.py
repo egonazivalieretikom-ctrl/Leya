@@ -63,24 +63,38 @@ class CoreThinker:
         prompt = self._build_cognitive_prompt(
             stimulus, memory_context, drive_state, self_model, tool_context, tools_description
         )
-        
+    
         response = await self.llm_client(prompt, require_json=True)
-        
+    
         try:
             plan = json.loads(response)
+            # ✅ ИСПРАВЛЕНО: возвращаем ВСЕ поля из ответа LLM, включая response и internal_monologue
             return {
-                "action": plan.get("action", "think"),
-                "reasoning": plan.get("reasoning", ""),
-                "tool": plan.get("tool"),
-                "tool_input": plan.get("tool_input", {}),
+                "response": plan.get("response", ""),
+                "internal_monologue": plan.get("internal_monologue", ""),
+                "action_intent": plan.get("action_intent", "none"),
+                "action": plan.get("action_intent", plan.get("action", "think")),
+                "reasoning": plan.get("reasoning", plan.get("internal_monologue", "")),
+                "tool": plan.get("tool_call", plan.get("tool")),
+                "tool_input": plan.get("tool_input", plan.get("parameters", {})),
+                "tool_call": plan.get("tool_call", ""),
+                "self_reflection": plan.get("self_reflection", ""),
                 "confidence": plan.get("confidence", 0.5)
             }
         except json.JSONDecodeError:
             logger.error(f"Failed to parse plan: {response}")
+            # Fallback: пытаемся извлечь текст из не-JSON ответа
             return {
+                "response": response.strip() if response else "Мне нужно время, чтобы осмыслить это.",
+                "internal_monologue": "Не удалось сформировать структурированный ответ",
+                "action_intent": "none",
                 "action": "think",
-                "reasoning": "Failed to generate plan",
-                "confidence": 0.0
+                "reasoning": "Failed to parse JSON",
+                "tool": None,
+                "tool_input": {},
+                "tool_call": "",
+                "self_reflection": "",
+                "confidence": 0.3
             }
 
     def _build_cognitive_prompt(

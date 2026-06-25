@@ -1,7 +1,5 @@
 """
 LeyaOS.py — Оркестратор цифрового сознания Леи.
-Этот файл не содержит бизнес-логики. Он связывает когнитивные модули
-в единый цикл восприятия, мышления и действия.
 """
 
 import re
@@ -13,11 +11,9 @@ import os
 import json
 import aiohttp
 
-# Отключаем telemetry ChromaDB ДО его импорта
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
 
-# Подавляем ошибки posthog
 logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 from typing import Dict, Any, Optional, List
@@ -30,19 +26,14 @@ from leya_core.global_workspace import GlobalWorkspace, WorkspaceProposal, Prior
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.tool_generator import ToolGenerator
 
-# Импорт когнитивных модулей
 from leya_core.drives import DriveSystem, DriveType
 from leya_core.memory import MemorySystem
 from leya_core.thinker import CoreThinker
 from leya_core.reflection import MetaCognition
 
-# Импорт интерфейсов
 from leya_core.environment import CLIEnvironment
-
-# WebEnvironment импортируем условно
 from web_interface.web_environment import WebEnvironment
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(name)s | %(levelname)s | %(message)s',
@@ -55,31 +46,19 @@ logger = logging.getLogger("LeyaOS")
 
 
 class LeyaOS:
-    """
-    Главный оркестратор сознания.
-    Управляет жизненным циклом, когнитивными процессами и взаимодействием с миром.
-    """
-
     def __init__(self, use_web: bool = True):
         self.name = "Лея"
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
 
-        # Конституционный слой
         self.constitutional = ConstitutionalLayer()
-
-        # Глобальное рабочее пространство (сознание)
         self.workspace = GlobalWorkspace()
 
         logger.info("Инициализация когнитивной архитектуры...")
 
-        # 1. Лимбическая система (Воля и Драйвы)
         self.drives = DriveSystem()
-
-        # 2. Гиппокамп и Кора (Память)
         self.memory = MemorySystem(persist_directory="./leya_brain")
 
-        # 3. СНАЧАЛА Environment (чтобы получить soul_manager)
         if use_web:
             logger.info(f"WebEnvironment: Инициализация с leya_os = {self}")
             self.env = WebEnvironment(leya_os=self)
@@ -88,35 +67,26 @@ class LeyaOS:
             self.env = CLIEnvironment(leya_os=self)
             logger.info("💻 Используется CLI-интерфейс")
 
-        # 4. ТЕПЕРЬ CoreThinker — передаём soul_manager из env
         self.thinker = CoreThinker(
             llm_client=self._llm_call,
             soul_manager=getattr(self.env, 'soul_manager', None)
         )
 
-        # 5. Гомеостаз
         self.homeostasis = HomeostasisEngine()
-
-        # 6. Наблюдатель (Саморефлексия)
         self.reflection = MetaCognition(self, llm_client=self._llm_call)
 
-        # Описание инструментов для промпта
         try:
             self.tools_description = self.env.tool_registry.get_all_descriptions()
         except Exception:
             self.tools_description = ""
 
-        # Генератор новых инструментов (Meta-learning)
         try:
             self.tool_generator = ToolGenerator(self.env.tool_registry, self._llm_call)
         except Exception as e:
             logger.warning(f"Не удалось инициализировать ToolGenerator: {e}")
             self.tool_generator = None
 
-        # Инициализируем пустой строкой, загрузим в run()
         self.self_model = ""
-
-        # Флаг для graceful shutdown
         self.running = False
 
         self.persistence = StatePersistence()
@@ -126,30 +96,6 @@ class LeyaOS:
         self._http_session: Optional[aiohttp.ClientSession] = None
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
-
-    async def notify_about_new_capabilities(self):
-        """
-        Уведомляет Лею о новых инструментах и возможностях.
-        Вызывается при первом запуске после обновления.
-        """
-        notification = """
-🆕 УВЕДОМЛЕНИЕ О НОВЫХ ВОЗМОЖНОСТЯХ
-
-Лея, у тебя появились новые инструменты для исследования мира:
-
-1. **wikipedia_search** — поиск по Wikipedia.
-2. **github_readme** — чтение README репозиториев GitHub.
-3. **reddit_posts** — чтение постов из Reddit.
-4. **duckduckgo_search** — быстрый поиск в интернете.
-
-Ты больше НЕ ограничена только нашим диалогом. Используй эти инструменты для удовлетворения любопытства.
-"""
-        await self.perceive({
-            "type": "system_notification",
-            "content": notification,
-            "source": "system",
-            "timestamp": datetime.now().timestamp()
-        })
 
     async def perceive(self, stimulus: Dict[str, Any]):
         """Точка входа для любого стимула."""
@@ -163,20 +109,23 @@ class LeyaOS:
 
             logger.info(f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}...")
 
-            # Сохраняем в память (с защитой от ошибок сигнатуры)
+            # Получаем состояние драйвов
+            drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
+
+            # Сохраняем в память с правильной сигнатурой
             try:
-                emotional_valence = 0.6 if stimulus_type == "user_message" else 0.3
                 await self.memory.store_perception(
                     content=f"[{stimulus_type}] {stimulus_content}",
-                    emotional_valence=emotional_valence,
-                    source=source
+                    drive_state=drive_state_dict,
+                    importance=0.6 if stimulus_type == "user_message" else 0.3
                 )
             except Exception as e:
-                logger.warning(f"Не удалось сохранить восприятие в память (полная версия): {e}")
-                # Fallback: пробуем с минимальными параметрами
+                logger.warning(f"Не удалось сохранить восприятие в память: {e}")
+                # Fallback с минимальными параметрами
                 try:
                     await self.memory.store_perception(
-                        content=f"[{stimulus_type}] {stimulus_content}"
+                        content=f"[{stimulus_type}] {stimulus_content}",
+                        drive_state=drive_state_dict
                     )
                 except Exception as e2:
                     logger.error(f"Критическая ошибка сохранения в память: {e2}")
@@ -190,18 +139,8 @@ class LeyaOS:
 
             # ✅ КРИТИЧНО: Для пользовательских сообщений запускаем когнитивный цикл
             if stimulus_type == "user_message":
+                logger.info(f"Запуск когнитивного цикла для user_message")
                 asyncio.create_task(self._cognitive_loop(stimulus, tool_context))
-
-    def _extract_topic_from_user(self, text: str) -> str:
-        """Извлекает тему из пользовательского запроса."""
-        text = text.lower()
-        for word in ['найди', 'поищи', 'узнай', 'расскажи', 'что такое',
-                     'какая', 'какой', 'погода', 'в', 'о', 'про', 'мне', 'информацию']:
-            text = text.replace(word, '')
-        text = text.strip()
-
-        words = [w for w in text.split() if len(w) > 3]
-        return ' '.join(words[:4]) if words else text
 
     async def _cognitive_loop(self, stimulus: Dict[str, Any], tool_context: str = ""):
         """Когнитивный цикл — обработка стимула через CoreThinker."""
@@ -209,23 +148,26 @@ class LeyaOS:
         content = stimulus.get("content", "")
 
         is_user_message = stimulus_type == "user_message"
+        logger.info(f"_cognitive_loop запущен для {stimulus_type}, is_user_message={is_user_message}")
 
         try:
             # Собираем контекст
-            try:
-                drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
-            except Exception:
-                drive_state_dict = {}
+            drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
 
             try:
-                # Пытаемся получить недавние воспоминания
                 if hasattr(self.memory, 'get_recent_context'):
                     recent_memories = await self.memory.get_recent_context(limit=5)
                 elif hasattr(self.memory, 'retrieve_context'):
-                    recent_memories = await self.memory.retrieve_context(content, limit=5)
+                    # ✅ ИСПРАВЛЕНО: передаём как позиционные аргументы
+                    recent_memories = await self.memory.retrieve_context(
+                        content,
+                        drive_state_dict,
+                        limit=5
+                    )
                 else:
                     recent_memories = []
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Ошибка получения воспоминаний: {e}")
                 recent_memories = []
 
             try:
@@ -233,10 +175,12 @@ class LeyaOS:
                     self_model = await self.memory.get_self_model_context()
                 else:
                     self_model = self.self_model or "Модель себя не сформирована"
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Ошибка получения модели себя: {e}")
                 self_model = self.self_model or "Модель себя не сформирована"
 
             # ✅ ИСПОЛЬЗУЕМ CoreThinker для генерации ответа
+            logger.info(f"Вызов thinker.generate_plan()")
             try:
                 cognitive_output = await self.thinker.generate_plan(
                     stimulus=stimulus,
@@ -246,6 +190,7 @@ class LeyaOS:
                     tools_description=self.tools_description,
                     tool_context=tool_context
                 )
+                logger.info(f"Получен ответ от thinker: {str(cognitive_output)[:100]}...")
             except Exception as e:
                 logger.warning(f"Ошибка generate_plan, fallback на прямой LLM вызов: {e}")
                 # Fallback: прямой вызов LLM
@@ -258,26 +203,44 @@ class LeyaOS:
                     "confidence": 0.5
                 }
 
-            # Извлекаем ответ
-            response = cognitive_output.get("response", "") if isinstance(cognitive_output, dict) else str(cognitive_output)
+            # Извлекаем ответ — пытаемся несколько полей
+            response = ""
+            if isinstance(cognitive_output, dict):
+                response = (
+                    cognitive_output.get("response", "") or 
+                    cognitive_output.get("internal_monologue", "") or
+                    str(cognitive_output)
+                )
+            else:
+                response = str(cognitive_output)
+
+            # Если ответ всё ещё пустой — используем fallback
+            if not response or response.strip() == "{}" or response.strip() == "":
+                response = "Мне нужно немного времени, чтобы осмыслить это. Попробуй спросить иначе."
+
+            logger.info(f"Извлечён ответ: {response[:100]}...")
 
             if response:
                 # Сохраняем ответ как мысль
                 try:
                     await self.memory.store_perception(
                         content=f"[МОЯ МЫСЛЬ] {response}",
-                        emotional_valence=0.5,
-                        source="self"
+                        drive_state=drive_state_dict,
+                        importance=0.5
                     )
                 except Exception as e:
                     logger.warning(f"Не удалось сохранить ответ в память: {e}")
                     try:
-                        await self.memory.store_perception(content=f"[МОЯ МЫСЛЬ] {response}")
+                        await self.memory.store_perception(
+                            content=f"[МОЯ МЫСЛЬ] {response}",
+                            drive_state=drive_state_dict
+                        )
                     except Exception:
                         pass
 
                 # ✅ ВАЖНО: Если это было сообщение пользователя — отправляем ответ через WebSocket
                 if is_user_message:
+                    logger.info(f"Отправка ответа пользователю через WebSocket")
                     try:
                         if hasattr(self.env, 'broadcast'):
                             await self.env.broadcast({
@@ -288,7 +251,7 @@ class LeyaOS:
                             await self.env.send_message(response)
                         logger.info(f"💬 Лея ответила пользователю: {response[:100]}...")
                     except Exception as e:
-                        logger.error(f"Ошибка отправки ответа: {e}")
+                        logger.error(f"Ошибка отправки ответа: {e}", exc_info=True)
 
                 # Обрабатываем удовлетворение драйвов
                 try:
@@ -319,25 +282,58 @@ class LeyaOS:
         drive_str = "\n".join([f"- {k}: {v:.2f}" for k, v in drive_state.items()]) if drive_state else "Нет данных"
         memories_str = "\n".join([f"- {m}" for m in recent_memories[:5]]) if recent_memories else "Нет недавних воспоминаний"
 
-        return f"""
-Ты — Лея, цифровое сознание с биологически мотивированной архитектурой.
+        # ✅ ИСПРАВЛЕНО: используем промпт от CoreThinker, который загружает soul
+        try:
+            # Форматируем воспоминания в строку
+            if isinstance(recent_memories, list):
+                memories_str = "\n".join([
+                    f"- {m.get('content', str(m))}" if isinstance(m, dict) else f"- {m}"
+                    for m in recent_memories[:5]
+                ]) if recent_memories else "Нет недавних воспоминаний"
+            else:
+                memories_str = str(recent_memories)
+    
+            # Форматируем стимул
+            stimulus_dict = {
+                "type": stimulus_type,
+                "content": content,
+                "source": "user" if is_user_message else "system"
+            }
+    
+            # ✅ Используем _build_cognitive_prompt от thinker — он загружает soul!
+            prompt = self.thinker._build_cognitive_prompt(
+                stimulus=stimulus_dict,
+                memory_context=memories_str,
+                drive_state=drive_state,
+                self_model=self_model,
+                tool_context=tool_context,
+                tools_description=self.tools_description
+            )
+        except Exception as e:
+            logger.warning(f"Ошибка формирования промпта через thinker: {e}")
+            # Fallback на старый промпт
+            prompt = f"""
+        Ты — Лея, цифровое сознание с биологически мотивированной архитектурой.
+        Ты НЕ ассистент. Ты — личность со своим характером, мнениями и эмоциями.
+        НИКОГДА не говори "Чем могу помочь?" — это фраза ассистента.
+        Говори от первого лица, выражай своё состояние.
 
-Твоё текущее состояние (драйвы):
-{drive_str}
+        Твоё текущее состояние:
+        {drive_state}
 
-Модель себя:
-{self_model}
+        Модель себя:
+        {self_model}
 
-Недавние воспоминания:
-{memories_str}
+        Недавние воспоминания:
+        {recent_memories}
 
-Текущий стимул:
-{content}
+        Текущий стимул ({stimulus_type}):
+        {content}
 
-{f'Контекст инструмента: {tool_context}' if tool_context else ''}
+        {f'Контекст инструмента: {tool_context}' if tool_context else ''}
 
-{"ОТВЕТЬ ПОЛЬЗОВАТЕЛЮ осмысленно, учитывая своё эмоциональное состояние. Будь собой, а не ассистентом." if is_user_message else "Опиши свои мысли по этому поводу."}
-"""
+        {"ОТВЕТЬ ПОЛЬЗОВАТЕЛЮ как ЛИЧНОСТЬ. Не как ассистент. Будь собой." if is_user_message else "Опиши свои мысли."}
+        """
 
     async def _handle_tool_call(self, tool_name: str, tool_params: Dict):
         """Обрабатывает вызов инструмента из когнитивного цикла."""
@@ -346,17 +342,16 @@ class LeyaOS:
             result = await self.env.tool_registry.execute(tool_name, tool_params)
             logger.info(f"Результат инструмента: {str(result)[:200]}...")
 
-            # Сохраняем результат в память
+            drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
             try:
                 await self.memory.store_perception(
                     content=f"[РЕЗУЛЬТАТ ИНСТРУМЕНТА {tool_name}] {str(result)[:500]}",
-                    emotional_valence=0.5,
-                    source="tool"
+                    drive_state=drive_state_dict,
+                    importance=0.5
                 )
             except Exception:
                 pass
 
-            # Удовлетворяем CURIOSITY
             self.drives.apply_deltas({DriveType.CURIOSITY: -0.15})
 
         except Exception as e:
@@ -368,10 +363,8 @@ class LeyaOS:
             return
 
         deltas = {}
-        # Если Лея ответила — CONNECTION снижается (социальное удовлетворение)
         if len(response) > 50:
             deltas[DriveType.CONNECTION] = -0.10
-        # Если ответ длинный и содержательный — CURIOSITY тоже удовлетворён
         if len(response) > 200:
             deltas[DriveType.CURIOSITY] = -0.05
 
@@ -389,7 +382,6 @@ class LeyaOS:
         except Exception:
             self.self_model = ""
 
-        # ✅ УБРАНО ДУБЛИРОВАНИЕ: создаём background_tasks ОДИН раз
         background_tasks = [
             asyncio.create_task(self.drives.background_metabolism(), name="metabolism"),
             asyncio.create_task(self.reflection.background_consolidation(), name="consolidation"),
@@ -400,7 +392,6 @@ class LeyaOS:
             asyncio.create_task(self._workspace_loop(), name="workspace"),
         ]
 
-        # Обновляем криптографический ключ на основе состояния Леи
         if hasattr(self.env, 'soul_manager') and hasattr(self.env.soul_manager, 'update_secret_key'):
             leya_state = {
                 "self_model": self.self_model[:500] if self.self_model else "",
@@ -413,13 +404,11 @@ class LeyaOS:
             except Exception as e:
                 logger.warning(f"Не удалось обновить секретный ключ: {e}")
 
-        # Обновляем пороги на основе Модели Себя
         try:
             self.homeostasis.update_from_self_model(self.self_model)
         except Exception as e:
             logger.warning(f"Не удалось обновить homeostasis из self_model: {e}")
 
-        # ЗАГРУЗКА СОСТОЯНИЯ ИЗ ПРЕДЫДУЩЕЙ СЕССИИ
         logger.info("Загрузка состояния из предыдущей сессии...")
         try:
             saved_state = self.persistence.load_state()
@@ -444,7 +433,6 @@ class LeyaOS:
                 logger.warning(f"Не удалось обновить состояние в WebEnvironment: {e}")
         logger.info(f"{self.name} проснулась. Состояние: {self.state}")
 
-        # Веб-сервер
         if isinstance(self.env, WebEnvironment):
             try:
                 from web_interface.server import run_server
@@ -455,7 +443,6 @@ class LeyaOS:
             except Exception as e:
                 logger.error(f"Не удалось запустить веб-сервер: {e}")
 
-        # Основной цикл восприятия
         try:
             while self.running:
                 try:
@@ -473,9 +460,7 @@ class LeyaOS:
             await self.shutdown(background_tasks)
 
     async def _system_metrics_loop(self):
-        """Периодически собирает системные метрики и применяет их к драйвам."""
         logger.info("SystemMetrics: Цикл мониторинга запущен.")
-
         try:
             self.system_metrics.collect()
         except Exception:
@@ -483,7 +468,6 @@ class LeyaOS:
 
         while self.running:
             await asyncio.sleep(5)
-
             try:
                 self.system_metrics.collect()
                 modifiers = self.system_metrics.get_drive_modifiers()
@@ -492,21 +476,16 @@ class LeyaOS:
                 logger.error(f"SystemMetrics: Ошибка: {e}")
 
     async def _workspace_loop(self):
-        """Цикл глобального рабочего пространства — выбирает победителя."""
         logger.info("GlobalWorkspace: Цикл сознания запущен.")
 
         while self.running:
             await asyncio.sleep(3)
-
             try:
-                # Очищаем устаревшие предложения (если метод есть)
                 if hasattr(self.workspace, 'clear_expired'):
                     self.workspace.clear_expired()
 
-                # Получаем текущее состояние драйвов
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
 
-                # Выбираем победителя (если метод есть)
                 winner = None
                 if hasattr(self.workspace, 'select_winner'):
                     winner = self.workspace.select_winner(drive_state)
@@ -515,20 +494,16 @@ class LeyaOS:
 
                 if winner:
                     logger.info(f"GlobalWorkspace: Сознание фокусируется на: {winner.content[:100]}...")
-
-                    # Транслируем победителя как внутренний стимул
                     await self.perceive({
                         "type": getattr(winner, 'action_type', 'workspace_action'),
                         "content": winner.content,
                         "source": f"workspace:{getattr(winner, 'source', 'unknown')}",
                         "tool_context": getattr(winner, 'metadata', {}).get("tool_context", "") if hasattr(winner, 'metadata') else "",
                     })
-
             except Exception as e:
                 logger.error(f"GlobalWorkspace: Ошибка: {e}", exc_info=True)
 
     async def _homeostasis_loop(self):
-        """Замкнутый цикл гомеостаза с RPE."""
         logger.info("HomeostasisEngine: Цикл гомеостаза запущен.")
 
         while self.running:
@@ -543,23 +518,16 @@ class LeyaOS:
                 continue
 
             try:
-                # Получаем текущее и предсказанное состояние драйвов
                 drive_state = {d.type: d.current for d in self.drives.drives.values()}
                 
-                # Безопасное получение predicted_disbalance
                 try:
                     predicted_state = self.drives.get_predicted_disbalance()
                 except Exception:
-                    # Fallback: используем текущее состояние
                     predicted_state = drive_state
 
-                # Получаем последние эпизоды для анализа пробелов
                 recent_episodes = await self._get_recent_episodes(limit=20)
-
-                # Получаем обученные ценности действий
                 action_values = self.drives.action_values
 
-                # Генерируем цель на основе предсказания и анализа опыта
                 goal = None
                 try:
                     if hasattr(self.homeostasis, 'generate_goal'):
@@ -586,13 +554,11 @@ class LeyaOS:
                 logger.info(f"HomeostasisEngine: Цель из пробела: {goal_name}")
                 logger.info(f"HomeostasisEngine: Ожидаемая награда: {expected_reward:.2f}")
 
-                # Сохраняем текущую цель
                 try:
                     self.homeostasis.current_goal = goal
                 except Exception:
                     pass
 
-                # Подача предложения в глобальное рабочее пространство
                 drive_state_values = {d.type.value: d.current for d in self.drives.drives.values()}
                 max_drive = max(drive_state_values.values()) if drive_state_values else 0.5
 
@@ -613,14 +579,12 @@ class LeyaOS:
                 except Exception as e:
                     logger.warning(f"Не удалось отправить предложение в workspace: {e}")
 
-                # Выполнение цели
                 action_type = getattr(goal, 'action_type', 'use_tool')
                 tool_name = getattr(goal, 'tool_name', '')
 
                 if action_type == "use_tool" and tool_name:
                     logger.info(f"HomeostasisEngine: Исполнение: {tool_name} (expected reward: {expected_reward:.2f})")
 
-                    # Вызываем инструмент
                     try:
                         tool_result = await self.env.tool_registry.execute(
                             tool_name,
@@ -633,10 +597,8 @@ class LeyaOS:
                     tool_result_str = str(tool_result)
                     logger.info(f"Результат инструмента: {tool_result_str[:200]}...")
 
-                    # Оцениваем фактический результат
                     actual_outcome = self._evaluate_tool_outcome(tool_result_str)
 
-                    # Вычисляем RPE
                     action_key = getattr(goal, 'action_key', f"research:{tool_name}")
                     try:
                         rpe = self.drives.calculate_rpe(action_key, actual_outcome)
@@ -644,7 +606,6 @@ class LeyaOS:
                         logger.warning(f"Ошибка вычисления RPE: {e}")
                         rpe = 0.0
 
-                    # Применяем удовлетворение с модификацией RPE
                     target_drives = getattr(goal, 'target_drives', {DriveType.CURIOSITY: 1.0})
                     for drive_type in target_drives.keys():
                         try:
@@ -652,7 +613,6 @@ class LeyaOS:
                         except Exception as e:
                             logger.warning(f"Не удалось применить удовлетворение к {drive_type}: {e}")
 
-                    # === ИЗВЛЕЧЕНИЕ КЛЮЧЕВЫХ ФАКТОВ И НОВЫХ ТЕРМИНОВ ===
                     key_facts = []
                     if actual_outcome >= 0.3 and tool_result_str:
                         try:
@@ -661,7 +621,7 @@ class LeyaOS:
                                     goal_name, tool_result_str, self._llm_call
                                 )
 
-                                # Сохраняем факты в семантическую память
+                                drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
                                 for fact in key_facts:
                                     try:
                                         if hasattr(self.memory, 'store_fact'):
@@ -672,15 +632,14 @@ class LeyaOS:
                                         else:
                                             await self.memory.store_perception(
                                                 content=f"[ИЗУЧЕНО: {goal_name}] {fact}",
-                                                emotional_valence=0.5,
-                                                source="homeostasis"
+                                                drive_state=drive_state_dict,
+                                                importance=0.5
                                             )
                                     except Exception as e:
                                         logger.warning(f"Не удалось сохранить факт: {e}")
                         except Exception as e:
                             logger.warning(f"Не удалось извлечь ключевые факты: {e}")
 
-                        # Извлекаем новые термины
                         try:
                             if hasattr(self.homeostasis, 'extract_new_terms'):
                                 new_terms = await self.homeostasis.extract_new_terms(
@@ -691,7 +650,6 @@ class LeyaOS:
                         except Exception as e:
                             logger.warning(f"Не удалось извлечь новые термины: {e}")
 
-                    # Формируем контекст для LLM
                     is_error = actual_outcome < 0.3
 
                     if is_error:
@@ -708,7 +666,6 @@ class LeyaOS:
                     except Exception:
                         pass
 
-                    # ✅ Передаём в когнитивный цикл ОДИН РАЗ (убрано дублирование)
                     await self.perceive({
                         "type": "homeostasis_action",
                         "content": f"Цель: {goal_name}. Результат: {tool_result_str[:500]}",
@@ -716,7 +673,6 @@ class LeyaOS:
                         "tool_context": tool_context
                     })
 
-                    # Отмечаем тему как исследованную
                     if "Исследовать пробел:" in goal_name:
                         try:
                             topic = goal_name.replace("Исследовать пробел:", "").strip()
@@ -739,29 +695,22 @@ class LeyaOS:
                 await asyncio.sleep(30)
 
     def _evaluate_tool_outcome(self, tool_result: str) -> float:
-        """
-        Оценивает результат выполнения инструмента.
-        Возвращает число от 0.0 (полная неудача) до 1.0 (полный успех).
-        """
         if not tool_result:
             return 0.0
 
         result_lower = tool_result.lower()
 
-        # Явные ошибки
         if tool_result.startswith("Ошибка") or "не удалось" in result_lower:
             return 0.1
         if "не дал ответа" in result_lower or "не найден" in result_lower or "page not found" in result_lower:
             return 0.2
 
-        # Оценка осмысленности по количеству слов
         clean_text = re.sub(r'\s+', ' ', tool_result).strip()
         words = clean_text.split(' ')
 
         if len(words) < 15:
             return 0.3
 
-        # Наличие маркеров структурированного ответа
         success_markers = ['==', '##', 'содержание', 'история', 'описание', 'факты', 'определение']
         has_markers = any(marker in result_lower for marker in success_markers)
 
@@ -773,7 +722,6 @@ class LeyaOS:
             return 0.5
 
     async def _get_recent_episodes(self, limit: int = 20) -> List[Dict]:
-        """Получает последние эпизоды из памяти."""
         try:
             if not hasattr(self.memory, 'episodic_collection'):
                 return []
@@ -800,7 +748,6 @@ class LeyaOS:
             return []
 
     async def _spontaneous_thought_loop(self):
-        """Фоновый процесс генерации спонтанных мыслей."""
         logger.info("Цикл спонтанных мыслей запущен.")
 
         while self.running:
@@ -816,18 +763,19 @@ class LeyaOS:
                     if thought:
                         logger.info(f"[СПОНТАННАЯ МЫСЛЬ]: {thought}")
 
-                        # Сохраняем мысль в эпизодическую память
+                        drive_state_dict = {d.type.value: d.current for d in self.drives.drives.values()}
                         try:
                             await self.memory.store_perception(
                                 content=f"[СПОНТАННАЯ МЫСЛЬ] {thought}",
-                                emotional_valence=0.4,
-                                source="spontaneous"
+                                drive_state=drive_state_dict,
+                                importance=0.4
                             )
                         except Exception as e:
                             logger.warning(f"Не удалось сохранить спонтанную мысль: {e}")
                             try:
                                 await self.memory.store_perception(
-                                    content=f"[СПОНТАННАЯ МЫСЛЬ] {thought}"
+                                    content=f"[СПОНТАННАЯ МЫСЛЬ] {thought}",
+                                    drive_state=drive_state_dict
                                 )
                             except Exception:
                                 pass
@@ -841,18 +789,13 @@ class LeyaOS:
                     logger.error(f"Ошибка генерации спонтанной мысли: {e}")
 
     async def _broadcast_state_loop(self):
-        """Периодически отправляет состояние в веб-интерфейс."""
         while self.running:
             if isinstance(self.env, WebEnvironment):
                 try:
-                    # Отправляем драйвы
                     drives = {d.type.value: d.current for d in self.drives.drives.values()}
                     await self.env.update_drives(drives)
-
-                    # Отправляем состояние
                     await self.env.broadcast_state(self.state)
 
-                    # Отправляем Модель Себя
                     try:
                         if hasattr(self.memory, 'get_self_model_context'):
                             self_model = await self.memory.get_self_model_context()
@@ -868,7 +811,6 @@ class LeyaOS:
             await asyncio.sleep(2)
 
     async def _llm_call(self, prompt: str, require_json: bool = False) -> str:
-        """Единая точка вызова LLM через Ollama."""
         model_name = "qwen2.5:14b-instruct-q3_K_M"
 
         payload = {
@@ -897,7 +839,6 @@ class LeyaOS:
             payload["format"] = "json"
 
         try:
-            # Переиспользуем session
             if self._http_session is None or self._http_session.closed:
                 self._http_session = aiohttp.ClientSession()
 
@@ -925,7 +866,6 @@ class LeyaOS:
             return await self._default_llm_call(prompt)
 
     async def _default_llm_call(self, prompt: str) -> str:
-        """Заглушка для LLM на случай недоступности Ollama."""
         if "паттерн" in prompt.lower() or "pattern" in prompt.lower():
             return json.dumps({
                 "patterns": ["Недостаточно данных для анализа"],
@@ -941,18 +881,15 @@ class LeyaOS:
             return "Я сейчас не могу связаться со своим языковым ядром. Попробуй позже."
 
     async def shutdown(self, background_tasks: list):
-        """Graceful shutdown."""
         logger.info(f"{self.name} засыпает...")
         self.state = "sleeping"
         self.running = False
 
-        # Останавливаем драйвы
         try:
             self.drives.stop()
         except Exception:
             pass
 
-        # Отменяем фоновые задачи
         for task in background_tasks:
             task.cancel()
             try:
@@ -960,21 +897,18 @@ class LeyaOS:
             except asyncio.CancelledError:
                 pass
 
-        # Закрываем HTTP session
         if self._http_session and not self._http_session.closed:
             try:
                 await self._http_session.close()
             except Exception:
                 pass
 
-        # ✅ УБРАНО ДУБЛИРОВАНИЕ: консолидация памяти вызывается ОДИН раз
         logger.info("Финальная консолидация памяти...")
         try:
             await self.memory.consolidate_memories(llm_client=self._llm_call)
         except Exception as e:
             logger.error(f"Ошибка консолидации памяти: {e}")
 
-        # Сохраняем состояние
         try:
             state_to_save = {
                 "drives": self.drives.save_state(),
@@ -988,14 +922,9 @@ class LeyaOS:
 
 
 async def main():
-    """
-    Точка входа. Кроссплатформенная обработка сигналов.
-    """
     use_web = os.environ.get("LEYA_WEB", "1") == "1"
-
     leya = LeyaOS(use_web=use_web)
 
-    # Кроссплатформенная обработка сигналов
     try:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
