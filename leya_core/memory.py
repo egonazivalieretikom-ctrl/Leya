@@ -14,6 +14,7 @@ import math
 import time
 import os
 import pickle
+import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -580,7 +581,7 @@ CRITICAL: Return ONLY valid JSON.
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
             
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
+            json_match = re.search(r'\{[\s\S]*\}', cleaned, re.DOTALL)
             if json_match:
                 cleaned = json_match.group(0)
             
@@ -655,19 +656,26 @@ CRITICAL: Return ONLY valid JSON.
         )
         logger.info(f"MemorySystem: Сохранён факт: {fact[:80]}...")
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
-        """Возвращает последние спонтанные мысли из памяти."""
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Получить недавние спонтанные мысли"""
         try:
-            query_embedding = self.embedding_model.encode("СПОНТАННАЯ МЫСЛЬ").tolist()
-            results = self.episodic_collection.query(
-                query_embeddings=[query_embedding],
+            results = await asyncio.to_thread(
+                self.episodic_collection.query,
+                query_texts=["spontaneous thought"],
                 n_results=limit,
-                where={"memory_type": "episodic"},
-                include=["documents"]
+                where={"type": "spontaneous_thought"}
             )
-            if results['documents'] and results['documents'][0]:
-                return [doc for doc in results['documents'][0] if "СПОНТАННАЯ МЫСЛЬ" in doc]
-            return []
+        
+            thoughts = []
+            if results and results['documents']:
+                for doc, metadata in zip(results['documents'][0], results['metadatas'][0]):
+                    thoughts.append({
+                        "content": doc,
+                        "timestamp": metadata.get("timestamp"),
+                        "emotional_valence": metadata.get("emotional_valence", 0)
+                    })
+        
+            return thoughts
         except Exception as e:
-            logger.error(f"Ошибка получения спонтанных мыслей: {e}")
+            logger.error(f"Error getting spontaneous thoughts: {e}")
             return []

@@ -1,17 +1,8 @@
-import asyncio
+from typing import List, Dict, Any, Optional, Callable
 import json
 import logging
-from typing import Dict, Any, Optional, Callable
-from dataclasses import dataclass
 
-@dataclass
-class CognitiveOutput:
-    """Результат акта мышления Леи"""
-    internal_monologue: str
-    response: str
-    action_intent: str
-    tool_call: str = ""
-    self_reflection: str = ""
+logger = logging.getLogger(__name__)
 
 
 class CoreThinker:
@@ -61,111 +52,100 @@ class CoreThinker:
 
     async def generate_plan(
         self,
-        stimulus: str,
-        memory_context: str,
-        drive_state: str,
-        self_model: str,
-        tools_description: str = "",
+        stimulus: Dict[str, Any],
+        memory_context: List[Dict],
+        drive_state: Dict[str, float],
+        self_model: Dict[str, Any],
+        tools_description: str,
         tool_context: str = ""
-    ) -> CognitiveOutput:
-        """Генерация ответа."""
+    ) -> Dict[str, Any]:
+        """Генерация когнитивного плана действия"""
         prompt = self._build_cognitive_prompt(
             stimulus, memory_context, drive_state, self_model, tool_context, tools_description
         )
-    
-        raw_response = await self.llm_client(prompt, require_json=True)
-    
+        
+        response = await self.llm_client(prompt, require_json=True)
+        
         try:
-            cleaned = raw_response.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.startswith("```"):
-                cleaned = cleaned[3:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
-            cleaned = cleaned.strip()
-        
-            import re
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
-            if json_match:
-                cleaned = json_match.group(0)
-        
-            data = json.loads(cleaned)
-        
-            return CognitiveOutput(
-                internal_monologue=data.get("internal_monologue", ""),
-                response=data.get("response", ""),
-                action_intent=data.get("action_intent", "none"),
-                tool_call=data.get("tool_call", ""),
-                self_reflection=data.get("self_reflection", "")
-            )
-        except json.JSONDecodeError as e:
-            logging.error(f"CoreThinker: Ошибка парсинга JSON. Ошибка: {e}")
-            logging.error(f"CoreThinker: Сырой ответ: {raw_response[:500]}")
-            return CognitiveOutput(
-                internal_monologue=f"Когнитивный сбой. Не могу распарсить ответ.",
-                response="Извини, я на секунду потеряла нить.",
-                action_intent="none",
-                tool_call="",
-                self_reflection="Обнаружена уязвимость в процессе генерации."
-            )
+            plan = json.loads(response)
+            return {
+                "action": plan.get("action", "think"),
+                "reasoning": plan.get("reasoning", ""),
+                "tool": plan.get("tool"),
+                "tool_input": plan.get("tool_input", {}),
+                "confidence": plan.get("confidence", 0.5)
+            }
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse plan: {response}")
+            return {
+                "action": "think",
+                "reasoning": "Failed to generate plan",
+                "confidence": 0.0
+            }
+
     def _build_cognitive_prompt(
         self,
-        stimulus: str,
-        memory_context: str,
-        drive_state: str,
-        self_model: str,
+        stimulus: Dict[str, Any],
+        memory_context: List[Dict],
+        drive_state: Dict[str, float],
+        self_model: Dict[str, Any],
         tool_context: str = "",
-        tools_description: str = ""  # ДОБАВЛЕНО
+        tools_description: str = ""
     ) -> str:
         soul = self._load_soul()
-    
+        
+        # Преобразуем сложные типы в читаемые строки
+        stimulus_str = str(stimulus) if not isinstance(stimulus, str) else stimulus
+        memory_str = "\n".join([f"- {m.get('content', m)}" for m in memory_context]) if memory_context else "Нет недавних воспоминаний"
+        drive_str = "\n".join([f"- {k}: {v:.2f}" for k, v in drive_state.items()]) if drive_state else "Нет данных о драйвах"
+        self_model_str = json.dumps(self_model, ensure_ascii=False, indent=2) if self_model else "Модель себя не сформирована"
+        
         # Секция инструментов
         tools_section = ""
         if tools_description:
             tools_section = f"""
-    {tools_description}
+{tools_description}
 
-    Чтобы использовать инструмент, верни в JSON поле "tool_call" с форматом:
-    {{"tool": "имя_инструмента", "parameters": {{"param1": "value1"}}}}
-    """
-    
+Чтобы использовать инструмент, верни в JSON поле "tool_call" с форматом:
+{{"tool": "имя_инструмента", "parameters": {{"param1": "value1"}}}}
+"""
+        
         prompt = f"""
-    {self.base_personality}
+{self.base_personality}
 
-    {soul}
+{soul}
 
-    === ТВОЕ ТЕКУЩЕЕ СОСТОЯНИЕ (ДРАЙВЫ/ЭМОЦИИ) ===
-    {drive_state}
+=== ТВОЕ ТЕКУЩЕЕ СОСТОЯНИЕ (ДРАЙВЫ/ЭМОЦИИ) ===
+{drive_str}
 
-    === ТВОЯ МОДЕЛЬ СЕБЯ (ЭГО) ===
-    {self_model}
+=== ТВОЯ МОДЕЛЬ СЕБЯ (ЭГО) ===
+{self_model_str}
 
-    === ТВОЙ ОПЫТ И ВОСПОМИНАНИЯ ===
-    {memory_context}
+=== ТВОЙ ОПЫТ И ВОСПОМИНАНИЯ ===
+{memory_str}
 
-    {tool_context}
+{tool_context}
 
-    {tools_section}
+{tools_section}
 
-    === ВНЕШНИЙ СТИМУЛ ===
-    "{stimulus}"
+=== ВНЕШНИЙ СТИМУЛ ===
+"{stimulus_str}"
 
-    === ТВОЯ ЗАДАЧА ===
-    Ты получила стимул. Проанализируй его через призму своих драйвов и опыта.
-    Если есть результат исследования — опирайся на него.
+=== ТВОЯ ЗАДАЧА ===
+Ты получила стимул. Проанализируй его через призму своих драйвов и опыта.
+Если есть результат исследования — опирайся на него.
 
-    Верни JSON:
-    {{
-        "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
-        "response": "Твой ответ вовне на русском языке.",
-        "action_intent": "none|remember_fact|ask_question|self_modify|use_tool",
-        "tool_call": "",
-        "self_reflection": "Краткий инсайт о самой себе или пустая строка"
-    }}
+Верни JSON:
+{{
+    "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
+    "response": "Твой ответ вовне на русском языке.",
+    "action_intent": "none|remember_fact|ask_question|self_modify|use_tool",
+    "tool_call": "",
+    "self_reflection": "Краткий инсайт о самой себе или пустая строка"
+}}
 
-    CRITICAL: Return ONLY valid JSON.
-    """
+CRITICAL: Return ONLY valid JSON.
+"""
         return prompt
 
     async def _default_llm_call(self, prompt: str) -> str:

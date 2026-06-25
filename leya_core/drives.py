@@ -1,72 +1,37 @@
-"""
-leya_core/drives.py — Биологически мотивированная система драйвов Леи.
-
-Моделирует:
-1. Аллостаз — предсказательная регуляция (действуем до того, как станет плохо)
-2. Reward Prediction Error (RPE) — дофаминовое обучение на ошибках предсказания
-3. Перекрестное влияние — драйвы модулируют рост друг друга
-"""
-
-import logging
 import time
 import asyncio
+import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger("DriveSystem")
 
-
+# ✅ ИСПРАВЛЕНО: Добавлен INTEGRITY в enum
 class DriveType(Enum):
-    """Типы драйвов (базовые потребности)"""
     CURIOSITY = "curiosity"
     CONNECTION = "connection"
-    INTEGRITY = "integrity"
     AUTONOMY = "autonomy"
+    COMPETENCE = "competence"
+    SECURITY = "security"
+    REST = "rest"
+    INTEGRITY = "integrity"  # ← ДОБАВЛЕНО
 
-    def save_state(self) -> Dict[str, Any]:
-        """Сохраняет состояние DriveSystem для персистентности."""
-        return {
-            "action_values": self.action_values,
-            "satisfaction_history": self.satisfaction_history[-100:]  # Последние 100 записей
-        }
-
-    def load_state(self, state: Dict[str, Any]):
-        """Загружает состояние DriveSystem из персистентного хранилища."""
-        if "action_values" in state:
-            self.action_values = state["action_values"]
-            logger.info(f"DriveSystem: Загружено {len(self.action_values)} обученных значений действий")
+@dataclass
+class Drive:
+    type: DriveType
+    current: float = 0.5
+    baseline: float = 0.5
+    predicted: float = 0.5
+    prediction_horizon: int = 10
+    base_growth_rate: float = 0.01
+    satisfaction_decay: float = 0.02
+    predicted_deviation: float = 0.0
     
-        if "satisfaction_history" in state:
-            self.satisfaction_history = state["satisfaction_history"]
-            logger.info(f"DriveSystem: Загружено {len(self.satisfaction_history)} записей истории удовлетворения")
-
     @property
     def tension(self) -> float:
         """Синоним current — напряжение драйва"""
         return self.current
-
-
-@dataclass
-class Drive:
-    """Один драйв с аллостатическим предсказанием"""
-    type: DriveType
-    current: float = 0.3  # Текущее напряжение (0.0 - 1.0)
-    predicted: float = 0.3  # Предсказанное будущее состояние (аллостаз)
-    baseline: float = 0.3  # Зона комфорта (целевое значение)
-    base_growth_rate: float = 0.02  # Базовая скорость роста за тик
-    satisfaction_decay: float = 0.02  # Скорость удовлетворения после действия
-    
-    @property
-    def deviation(self) -> float:
-        """Отклонение от зоны комфорта"""
-        return abs(self.current - self.baseline)
-    
-    @property
-    def predicted_deviation(self) -> float:
-        """Предсказанное отклонение от зоны комфорта"""
-        return abs(self.predicted - self.baseline)
-
 
 class DriveSystem:
     """
@@ -93,7 +58,7 @@ class DriveSystem:
     
     def __init__(self):
         self.tension_history: List[Dict[str, float]] = []
-        self._running = True
+        
         # 4 основных драйва
         self.drives = {
             DriveType.CURIOSITY: Drive(
@@ -122,14 +87,7 @@ class DriveSystem:
             )
         }
         
-
-        # История значений драйвов (для MetaCognition)
-        self.tension_history: Dict[DriveType, List[float]] = {
-            DriveType.CURIOSITY: [],
-            DriveType.CONNECTION: [],
-            DriveType.INTEGRITY: [],
-            DriveType.AUTONOMY: []
-        }
+        
         self.max_history_length = 100
         
         # Action values — ожидаемая награда для каждого действия (обучается через RPE)
@@ -144,8 +102,7 @@ class DriveSystem:
         
         # Параметры RPE
         self.learning_rate = 0.1  # Скорость обучения на RPE
-
-        self.tension_history: List[Dict[str, float]] = []
+        
         self._running = True
         
         logger.info("DriveSystem: Инициализация завершена с аллостазом и RPE.")
@@ -235,7 +192,7 @@ class DriveSystem:
 
     def stop_metabolism(self):
         """Остановка фонового метаболизма."""
-        self._metabolism_running = False
+        self._running = False
     
     def _calculate_cross_influence(self, target_type: DriveType) -> float:
         """

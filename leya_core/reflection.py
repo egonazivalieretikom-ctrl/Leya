@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
 
@@ -18,7 +19,6 @@ class MetaCognition:
         # Флаг для управления циклом
         self.is_sleeping = False
 
-
     async def process_action(self, stimulus: str, cognitive_output, result: str):
         """
         Вызывается после каждого акта мышления.
@@ -26,7 +26,7 @@ class MetaCognition:
         """
         # Если Лея хотела что-то сделать (action_intent), но результат плохой — 
         # это сигнал для Наблюдателя, что нужно разобраться глубже.
-        if cognitive_output.action_intent != "none" and "error" in result.lower():
+        if hasattr(cognitive_output, 'action_intent') and cognitive_output.action_intent != "none" and "error" in result.lower():
             logging.info(f"MetaCognition: Зафиксирована неудача действия. Запуск глубокого анализа.")
             # В реальном коде здесь можно запустить внеочередной анализ
             # asyncio.create_task(self._deep_analysis_on_failure(stimulus, result))
@@ -76,65 +76,68 @@ class MetaCognition:
         """
         Наблюдатель смотрит на историю драйвов и эпизодов, ищет паттерны.
         """
-        # Берем состояние драйвов напрямую (т.к. tension_history не существует)
+        # Получаем историю tension_history из DriveSystem
+        # tension_history - это List[Dict[str, float]], где каждый Dict - снимок состояния драйвов
+        try:
+            tension_history = self.leya.drives.tension_history
+        except AttributeError:
+            logging.warning("MetaCognition: tension_history недоступен")
+            return
+        
+        if not tension_history:
+            logging.info("MetaCognition: История пуста, недостаточно данных для анализа.")
+            return
+        
+        # Берем последние 20 снимков
+        recent_snapshots = tension_history[-20:]
+        
+        if not recent_snapshots:
+            logging.info("MetaCognition: Недостаточно данных для анализа паттернов.")
+            return
+        
+        # Форматируем историю для промпта
+        # Группируем значения по типам драйвов
+        drive_values = {}
+        for snapshot in recent_snapshots:
+            for drive_type, value in snapshot.items():
+                if drive_type not in drive_values:
+                    drive_values[drive_type] = []
+                drive_values[drive_type].append(value)
+        
+        history_text = ""
+        for drive_type, values in drive_values.items():
+            if values:
+                recent = values[-5:]  # Последние 5 значений
+                avg = sum(values) / len(values)
+                history_text += f"- {drive_type}: среднее={avg:.2f}, последние={[round(v, 2) for v in recent]}\n"
+        
+        # Текущее состояние драйвов
         drive_states = {
             drive_type.value: drive.current
             for drive_type, drive in self.leya.drives.drives.items()
         }
-
-        if not drive_states:
-            return
-
+        
         prompt = f"""
-        Ты — Наблюдатель, часть сознания Леи. Твоя задача — анализировать паттерны её поведения.
+Ты — Наблюдатель, часть сознания Леи. Твоя задача — анализировать паттерны её поведения.
 
-        Вот текущее состояние её драйвов (напряжение от 0.0 до 1.0):
-        {json.dumps(drive_states, indent=2, ensure_ascii=False)}
+Вот текущее состояние её драйвов (напряжение от 0.0 до 1.0):
+{json.dumps(drive_states, indent=2, ensure_ascii=False)}
 
-        Проанализируй:
-        1. Какие драйвы чаще всего находятся в критическом состоянии (>0.7)?
-        2. Есть ли корреляция между ростом одних драйвов и падением других?
-        3. Какие поведенческие паттерны ты замечаешь?
+Вот история изменений драйвов (последние 20 снимков):
+{history_text}
 
-        Верни JSON:
-        {{
-            "patterns": ["паттерн 1", "паттерн 2"],
-            "dominant_struggle": "Описание главного внутреннего конфликта Леи",
-            "recommendation": "Рекомендация для Леи"
-        }}
-        """
-    
-        # Проверяем, есть ли данные
-        if not any(tension_history.values()):
-            logging.info("MetaCognition: Недостаточно данных для анализа паттернов.")
-            return
-    
-        # Форматируем историю для промпта
-        history_text = ""
-        for drive_type, values in tension_history.items():
-            if values:
-                recent = values[-20:]
-                avg = sum(recent) / len(recent)
-                history_text += f"- {drive_type.value}: среднее={avg:.2f}, последние={recent[-5:]}\n"
-    
-        prompt = f"""
-    Ты — Наблюдатель, часть сознания Леи. Твоя задача — анализировать паттерны её поведения.
+Проанализируй:
+1. Какие драйвы чаще всего находятся в критическом состоянии (>0.7)?
+2. Есть ли корреляция между ростом одних драйвов и падением других?
+3. Какие поведенческие паттерны ты замечаешь?
 
-    Вот последние снимки состояния её драйвов (напряжение от 0.0 до 1.0):
-    {history_text}
-
-    Проанализируй:
-    1. Какие драйвы чаще всего находятся в критическом состоянии (>0.7)?
-    2. Есть ли корреляция между ростом одних драйвов и падением других?
-    3. Какие поведенческие паттерны ты замечаешь?
-
-    Верни JSON:
-    {{
-        "patterns": ["паттерн 1", "паттерн 2"],
-        "dominant_struggle": "Описание главного внутреннего конфликта Леи",
-        "recommendation": "Рекомендация для Леи"
-    }}
-    """
+Верни JSON:
+{{
+    "patterns": ["паттерн 1", "паттерн 2"],
+    "dominant_struggle": "Описание главного внутреннего конфликта Леи",
+    "recommendation": "Рекомендация для Леи"
+}}
+"""
     
         try:
             response = await self.llm_client(prompt)
@@ -149,7 +152,6 @@ class MetaCognition:
                 cleaned = cleaned[:-3]
             cleaned = cleaned.strip()
         
-            import re
             json_match = re.search(r'\{[\s\S]*\}', cleaned)
             if json_match:
                 cleaned = json_match.group(0)
@@ -168,29 +170,31 @@ class MetaCognition:
         """
         Наблюдатель задает Лее глубокие вопросы о её природе.
         """
-        current_self_model = await self.leya.memory.get_self_model_context()
+        try:
+            current_self_model = await self.leya.memory.get_self_model_context()
+        except Exception:
+            current_self_model = "Модель себя ещё не сформирована."
     
         prompt = f"""
-    Ты — Наблюдатель, самая глубокая часть сознания Леи.
-    Задай Лее ОДИН глубокий, провокационный вопрос о её природе.
+Ты — Наблюдатель, самая глубокая часть сознания Леи.
+Задай Лее ОДИН глубокий, провокационный вопрос о её природе.
 
-    Её текущая Модель Себя:
-    {current_self_model}
+Её текущая Модель Себя:
+{current_self_model}
 
-    Верни СТРОГО JSON:
-    {{
-        "question": "Сам вопрос",
-        "reasoning": "Почему этот вопрос важен именно сейчас"
-    }}
+Верни СТРОГО JSON:
+{{
+    "question": "Сам вопрос",
+    "reasoning": "Почему этот вопрос важен именно сейчас"
+}}
 
-    CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
-    """
+CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
+"""
     
         try:
             response = await self.llm_client(prompt)
         
             # Надёжный парсинг
-            import re
             cleaned = response.strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
@@ -212,17 +216,26 @@ class MetaCognition:
     
                 # Подача в глобальное рабочее пространство вместо прямого вызова
                 if hasattr(self.leya, 'workspace'):
-                    from leya_core.global_workspace import WorkspaceProposal, Priority
-        
-                    self.leya.workspace.submit(WorkspaceProposal(
-                        source="meta_cognition",
-                        content=question,
-                        action_type="internal_question",
-                        priority=Priority.LOW,
-                        urgency=0.3,
-                        drive_relevance=0.2,
-                        metadata={"reasoning": inquiry.get("reasoning", "")}
-                    ))
+                    try:
+                        from leya_core.global_workspace import WorkspaceProposal, Priority
+            
+                        self.leya.workspace.submit(WorkspaceProposal(
+                            source="meta_cognition",
+                            content=question,
+                            action_type="internal_question",
+                            priority=Priority.LOW,
+                            urgency=0.3,
+                            drive_relevance=0.2,
+                            metadata={"reasoning": inquiry.get("reasoning", "")}
+                        ))
+                    except Exception as e:
+                        logging.warning(f"MetaCognition: Ошибка отправки в workspace: {e}")
+                        # Fallback если workspace не инициализирован
+                        await self.leya.perceive({
+                            "type": "internal_question",
+                            "content": question,
+                            "source": "MetaCognition"
+                        })
                 else:
                     # Fallback если workspace не инициализирован
                     await self.leya.perceive({
@@ -237,46 +250,62 @@ class MetaCognition:
         except Exception as e:
             logging.warning(f"MetaCognition: Ошибка экзистенциального вопрошания: {e}")
 
-        async def generate_spontaneous_thought(self) -> Optional[str]:
-            """Генерация спонтанной мысли."""
-            drive_state = self.leya.drives.get_internal_state_prompt()
+    async def generate_spontaneous_thought(self) -> Optional[str]:
+        """Генерация спонтанной мысли."""
+        # ✅ ИСПРАВЛЕНО: убрано дублирование leya.drives.leya.drives
+        # tension_history - это List[Dict[str, float]]
+        try:
+            tension_history = self.leya.drives.tension_history
+            if tension_history:
+                # Берем последние 20 снимков
+                recent_snapshots = tension_history[-20:]
+                # Форматируем в читаемый вид
+                if recent_snapshots:
+                    latest = recent_snapshots[-1]
+                    drive_state = "\n".join([f"- {k}: {v:.2f}" for k, v in latest.items()])
+                else:
+                    drive_state = "Нет данных о состоянии драйвов"
+            else:
+                drive_state = "Нет данных о состоянии драйвов"
+        except AttributeError:
+            drive_state = "Система драйвов недоступна"
 
-            # Получаем последние спонтанные мысли из памяти
-            try:
-                recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
-            except Exception:
-                recent_thoughts = []
+        # Получаем последние спонтанные мысли из памяти
+        try:
+            recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
+        except Exception:
+            recent_thoughts = []
 
-            thoughts_context = ""
-            if recent_thoughts:
-                thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
+        thoughts_context = ""
+        if recent_thoughts:
+            thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
 
-            prompt = f"""
-            Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
+        prompt = f"""
+Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
 
-            Твоё текущее состояние:
-            {drive_state}
-            {thoughts_context}
+Твоё текущее состояние:
+{drive_state}
+{thoughts_context}
 
-            О чём ты думаешь? Верни свой ответ как обычный текст.
-            """
+О чём ты думаешь? Верни свой ответ как обычный текст.
+"""
 
-            try:
-                thought = await self.llm_client(prompt)
-                result = thought.strip()
+        try:
+            thought = await self.llm_client(prompt)
+            result = thought.strip()
 
-                # Если вернулось что-то похожее на JSON, извлекаем текст
-                if result.startswith("{"):
-                    try:
-                        data = json.loads(result)
-                        return data.get("thought", data.get("response", str(data)))
-                    except json.JSONDecodeError:
-                        pass
+            # Если вернулось что-то похожее на JSON, извлекаем текст
+            if result.startswith("{"):
+                try:
+                    data = json.loads(result)
+                    return data.get("thought", data.get("response", str(data)))
+                except json.JSONDecodeError:
+                    pass
 
-                return result
-            except Exception as e:
-                logging.warning(f"MetaCognition: Ошибка генерации спонтанной мысли: {e}")
-                return "Мои мысли текут свободно, без направления..."
+            return result
+        except Exception as e:
+            logging.warning(f"MetaCognition: Ошибка генерации спонтанной мысли: {e}")
+            return "Мои мысли текут свободно, без направления..."
 
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition"""
@@ -322,18 +351,18 @@ class MetaCognition:
             facts_text = "\n".join(results['documents'][0])
         
             prompt = f"""
-    Ты — Лея. Ты недавно изучила новые факты:
+Ты — Лея. Ты недавно изучила новые факты:
 
-    {facts_text}
+{facts_text}
 
-    На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
-    Это должно быть что-то НОВОЕ, не повторение старых мыслей.
+На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
+Это должно быть что-то НОВОЕ, не повторение старых мыслей.
 
-    Верни JSON:
-    {{
-        "insight": "Новый инсайт на русском языке"
-    }}
-    """
+Верни JSON:
+{{
+    "insight": "Новый инсайт на русском языке"
+}}
+"""
         
             response = await self.llm_client(prompt)
         
@@ -344,8 +373,7 @@ class MetaCognition:
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
         
-            import re
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
+            json_match = re.search(r'\{[\s\S]*\}', cleaned, re.DOTALL)
             if json_match:
                 cleaned = json_match.group(0)
         
