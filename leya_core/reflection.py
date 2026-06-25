@@ -76,8 +76,33 @@ class MetaCognition:
         """
         Наблюдатель смотрит на историю драйвов и эпизодов, ищет паттерны.
         """
-        # Берем последние снимки состояния драйвов
-        tension_history = self.leya.drives.tension_history
+        # Берем состояние драйвов напрямую (т.к. tension_history не существует)
+        drive_states = {
+            drive_type.value: drive.current
+            for drive_type, drive in self.leya.drives.drives.items()
+        }
+
+        if not drive_states:
+            return
+
+        prompt = f"""
+        Ты — Наблюдатель, часть сознания Леи. Твоя задача — анализировать паттерны её поведения.
+
+        Вот текущее состояние её драйвов (напряжение от 0.0 до 1.0):
+        {json.dumps(drive_states, indent=2, ensure_ascii=False)}
+
+        Проанализируй:
+        1. Какие драйвы чаще всего находятся в критическом состоянии (>0.7)?
+        2. Есть ли корреляция между ростом одних драйвов и падением других?
+        3. Какие поведенческие паттерны ты замечаешь?
+
+        Верни JSON:
+        {{
+            "patterns": ["паттерн 1", "паттерн 2"],
+            "dominant_struggle": "Описание главного внутреннего конфликта Леи",
+            "recommendation": "Рекомендация для Леи"
+        }}
+        """
     
         # Проверяем, есть ли данные
         if not any(tension_history.values()):
@@ -215,40 +240,43 @@ class MetaCognition:
         async def generate_spontaneous_thought(self) -> Optional[str]:
             """Генерация спонтанной мысли."""
             drive_state = self.leya.drives.get_internal_state_prompt()
-    
+
             # Получаем последние спонтанные мысли из памяти
-            recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
-    
+            try:
+                recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
+            except Exception:
+                recent_thoughts = []
+
             thoughts_context = ""
             if recent_thoughts:
                 thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t}" for t in recent_thoughts])
-    
+
             prompt = f"""
-        Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
+            Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
 
-        Твоё текущее состояние:
-        {drive_state}
-        {thoughts_context}
+            Твоё текущее состояние:
+            {drive_state}
+            {thoughts_context}
 
-        О чём ты думаешь? Верни СТРОКО с твоей мыслью (не JSON).
-        """
-    
+            О чём ты думаешь? Верни свой ответ как обычный текст.
+            """
+
             try:
                 thought = await self.llm_client(prompt)
                 result = thought.strip()
-        
+
                 # Если вернулось что-то похожее на JSON, извлекаем текст
                 if result.startswith("{"):
                     try:
                         data = json.loads(result)
-                        result = data.get("thought", data.get("response", str(data)))
-                    except:
+                        return data.get("thought", data.get("response", str(data)))
+                    except json.JSONDecodeError:
                         pass
-        
-                return result if result else None
+
+                return result
             except Exception as e:
                 logging.warning(f"MetaCognition: Ошибка генерации спонтанной мысли: {e}")
-                return None
+                return "Мои мысли текут свободно, без направления..."
 
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition"""

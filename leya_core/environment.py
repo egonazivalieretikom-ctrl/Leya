@@ -528,38 +528,90 @@ class Environment(ABC):
         # ==================== КОД (sandbox) ====================
         
         async def execute_python(code: str) -> str:
-            """Безопасное выполнение ТОЛЬКО математических выражений."""
-            import ast
-    
+            """Безопасное выполнение Python-кода"""
+            dangerous_patterns = [
+                r'import\s+os',
+                r'import\s+subprocess',
+                r'import\s+sys',
+                r'import\s+shutil',
+                r'open\s*\(',
+                r'__import__\s*\(',
+                r'exec\s*\(',
+                r'eval\s*\(',
+                r'compile\s*\(',
+                r'globals\s*\(',
+                r'locals\s*\(',
+                r'getattr\s*\(',
+                r'setattr\s*\(',
+                r'__builtins__',
+                r'import\s+socket',
+                r'import\s+requests',
+                r'import\s+aiohttp',
+            ]
+
+            for pattern in dangerous_patterns:
+                if re.search(pattern, code):
+                    return f"⚠️ Безопасность: обнаружен запрещённый паттерн '{pattern}'. Код не выполнен."
+
             try:
-                # Парсим AST и проверяем, что нет опасных конструкций
-                tree = ast.parse(code)
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.Import, ast.ImportFrom)):
-                        return "Ошибка безопасности: импорты запрещены"
-                    if isinstance(node, ast.Call):
-                        if isinstance(node.func, ast.Name) and node.func.id in ('eval', 'exec', 'open', '__import__'):
-                            return f"Ошибка безопасности: {node.func.id} запрещён"
-                    if isinstance(node, ast.Attribute):
-                        if node.attr in ('__subclasses__', '__globals__', '__builtins__', '__import__'):
-                            return "Ошибка безопасности: доступ к внутренним атрибутам запрещён"
-        
-                # Выполняем в ограниченном окружении
-                allowed_builtins = {
-                    'print': print, 'len': len, 'range': range, 'int': int,
-                    'float': float, 'str': str, 'list': list, 'dict': dict,
-                    'sum': sum, 'max': max, 'min': min, 'abs': abs, 'round': round,
-                    'True': True, 'False': False, 'None': None
+                import io
+                from contextlib import redirect_stdout, redirect_stderr
+
+                stdout_capture = io.StringIO()
+                stderr_capture = io.StringIO()
+
+                # Создаём ограниченный sandbox
+                safe_builtins = {
+                    "print": print,
+                    "len": len,
+                    "range": range,
+                    "str": str,
+                    "int": int,
+                    "float": float,
+                    "list": list,
+                    "dict": dict,
+                    "set": set,
+                    "tuple": tuple,
+                    "bool": bool,
+                    "abs": abs,
+                    "min": min,
+                    "max": max,
+                    "sum": sum,
+                    "sorted": sorted,
+                    "enumerate": enumerate,
+                    "zip": zip,
+                    "map": map,
+                    "filter": filter,
+                    "isinstance": isinstance,
+                    "type": type,
+                    "round": round,
+                    "pow": pow,
+                    "True": True,
+                    "False": False,
+                    "None": None,
                 }
-                local_vars = {}
-                exec(code, {"__builtins__": allowed_builtins}, local_vars)
-        
-                # Возвращаем только безопасные результаты
-                safe_output = {k: str(v)[:200] for k, v in local_vars.items() 
-                               if not k.startswith('_')}
-                return f"Код выполнен. Переменные: {safe_output}"
+
+                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    exec(code, {"__builtins__": safe_builtins}, {})
+
+                output = stdout_capture.getvalue()
+                errors = stderr_capture.getvalue()
+
+                result = ""
+                if output:
+                    result += f"📤 Вывод:\n{output}"
+                if errors:
+                    result += f"\n⚠️ Предупреждения:\n{errors}"
+                if not result:
+                    result = "✅ Код выполнен успешно (нет вывода)"
+
+                if len(result) > 2000:
+                    result = result[:2000] + "\n...(обрезано)"
+
+                return result
+
             except Exception as e:
-                return f"Ошибка: {str(e)}"
+                return f"❌ Ошибка выполнения: {str(e)}"
     
     @abstractmethod
     async def listen(self) -> Optional[Dict[str, Any]]:

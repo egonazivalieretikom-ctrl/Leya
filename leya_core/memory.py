@@ -630,6 +630,20 @@ CRITICAL: Return ONLY valid JSON.
             memory_type=MemoryType.SEMANTIC
         )
         logger.info(f"MemorySystem: Модель Себя обновлена: {insight[:80]}...")
+
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
+        """Возвращает недавние спонтанные мысли из семантической памяти."""
+        query_embedding = self.embedding_model.encode("спонтанная мысль размышление").tolist()
+
+        results = self.semantic_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=limit,
+            include=["documents"]
+        )
+
+        if results['documents'] and results['documents'][0]:
+            return results['documents'][0]
+        return []
     
     async def store_fact(self, fact: str, category: str = "general"):
         """Сохраняет семантический факт"""
