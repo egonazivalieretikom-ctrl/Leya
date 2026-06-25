@@ -1,172 +1,81 @@
-"""
-web_interface/server.py — FastAPI веб-сервер для Леи.
-"""
-
-import os
+# web_interface/server.py
+import asyncio
+import json
 import logging
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse
+from typing import Dict, Any
+from fastapi import FastAPI, WebSocket, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
 
 logger = logging.getLogger("WebServer")
 
-app = FastAPI(title="Leya OS")
+app = FastAPI(title="LeyaOS Web Interface")
 
-# Пути к файлам
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+# Пути к статике и шаблонам
+BASE_DIR = Path(__file__).parent
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
-# Монтируем статические файлы
-if os.path.exists(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# Глобальная ссылка на WebEnvironment
+web_env = None
 
-
-# Храним ссылку на web_environment
-_web_env = None
-
+def init_server(env):
+    """Инициализация сервера с ссылкой на WebEnvironment"""
+    global web_env
+    web_env = env
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    """Главная страница — чат с Леей."""
-    template_path = os.path.join(TEMPLATES_DIR, "index.html")
-    
-    if os.path.exists(template_path):
-        with open(template_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
-    
-    return HTMLResponse("<h1>Leya OS</h1><p>Template not found</p>")
-
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/api/state")
 async def get_state():
-    """Возвращает текущее состояние Леи."""
-    if not _web_env:
-        return {
-            "state": "initializing",
-            "drives": {"curiosity": 0.3, "connection": 0.3, "integrity": 0.2, "autonomy": 0.3},
-            "self_model": "",
-            "connected_clients": 0,
-            "soul": {
-                "personality": "",
-                "values": "",
-                "rules": ""
-            }
-        }
+    if not web_env:
+        return JSONResponse({"error": "Server not initialized"}, status_code=500)
     
-    drives = {d.type.value: d.current for d in _web_env.leya.drives.drives.values()}
-    self_model = await _web_env.leya.memory.get_self_model_context()
+    leya = web_env.leya
+    drives = {d.type.value: d.current for d in leya.drives.drives.values()}
     
     # Читаем файлы души
-    soul = {
-        "personality": _web_env.soul_manager.read_file("personality.txt"),
-        "values": _web_env.soul_manager.read_file("values.txt"),
-        "rules": _web_env.soul_manager.read_file("rules.txt")
-    }
+    soul_files = {}
+    for filename in ["personality.txt", "values.txt", "rules.txt"]:
+        soul_files[filename.replace(".txt", "")] = web_env.soul_manager.read_file(filename)
     
     return {
-        "state": _web_env.state.state,
+        "state": leya.state,
         "drives": drives,
-        "self_model": self_model,
-        "connected_clients": _web_env.state.connected_clients,
-        "soul": soul
+        "self_model": await leya.memory.get_self_model_context(),
+        "connected_clients": len(web_env.connected_clients),
+        "soul": soul_files
     }
-
 
 @app.post("/api/soul/{filename}")
 async def save_soul_file(filename: str, request: Request):
-    """Сохраняет файл души."""
-    if not _web_env:
-        return {"error": "Not initialized"}
-    
-    try:
-        content = await request.text()
-        result = _web_env.soul_manager.write_file(filename, content)
-        
-        # Транслируем обновление всем клиентам
-        await _web_env.broadcast({
-            "type": "soul_update",
-            "data": {filename: content}
-        })
-        
-        return {"result": result}
-    except Exception as e:
-        logger.error(f"Ошибка сохранения файла: {e}")
-        return {"error": str(e)}
-
+    content = await request.body()
+    result = web_env.soul_manager.write_file(filename, content.decode("utf-8"))
+    return {"result": result}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint для коммуникации с Леей."""
-    await websocket.accept()
-    
-    if not _web_env:
-        await websocket.send_json({"type": "error", "data": "WebEnvironment not initialized"})
-        await websocket.close()
-        return
-    
-    # Подключаем клиента
-    await _web_env.connect(websocket)
-    
+    await web_env.connect(websocket)
     try:
         while True:
             data = await websocket.receive_json()
-            message_type = data.get("type", "user_message")
-            content = data.get("content", "")
-            
-            if message_type == "user_message" and content:
-                # Транслируем сообщение пользователя всем клиентам
-                await _web_env.broadcast({
-                    "type": "user_message",
-                    "content": content
-                })
-                # Отправляем в когнитивный цикл
-                await _web_env.receive_user_message(content)
-            
-            elif message_type == "ping":
-                # Пинг-понг для поддержания соединения
-                pass
-            
-            elif message_type == "read_soul_file":
-                filename = data.get("filename", "")
-                if filename:
-                    content = _web_env.soul_manager.read_file(filename)
-                    await websocket.send_json({
-                        "type": "soul_file_content",
-                        "data": {"filename": filename, "content": content}
-                    })
-            
-            elif message_type == "list_soul_files":
-                files = _web_env.soul_manager.list_files()
-                await websocket.send_json({
-                    "type": "soul_files_list",
-                    "data": {"files": files}
-                })
-    
-    except WebSocketDisconnect:
-        await _web_env.disconnect(websocket)
+            if data.get("type") == "user_message":
+                await web_env.handle_user_message(data.get("content", ""))
+            elif data.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
     except Exception as e:
-        logger.error(f"WebSocket ошибка: {e}", exc_info=True)
-        await _web_env.disconnect(websocket)
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        web_env.disconnect(websocket)
 
-
-async def run_server(web_environment):
-    """
-    Запускает веб-сервер.
-    Вызывается из LeyaOS.
-    """
-    global _web_env
-    _web_env = web_environment
-    
+async def run_server(env):
+    """Запускает uvicorn сервер"""
     import uvicorn
-    
-    config = uvicorn.Config(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    init_server(env)
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
-    logger.info("WebServer: Запуск")
     await server.serve()

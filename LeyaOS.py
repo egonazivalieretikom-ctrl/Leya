@@ -168,8 +168,6 @@ class LeyaOS:
             importance=0.6 if stimulus_type == "user_message" else 0.3
         )
     
-        # Запускаем когнитивный цикл
-        await self._cognitive_loop(stimulus, tool_context)
 
     def _extract_topic_from_user(self, text: str) -> str:
         """Извлекает тему из пользовательского запроса."""

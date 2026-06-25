@@ -86,7 +86,7 @@ class CoreThinker:
             cleaned = cleaned.strip()
         
             import re
-            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
             if json_match:
                 cleaned = json_match.group(0)
         

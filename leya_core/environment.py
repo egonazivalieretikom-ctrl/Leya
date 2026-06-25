@@ -528,33 +528,38 @@ class Environment(ABC):
         # ==================== КОД (sandbox) ====================
         
         async def execute_python(code: str) -> str:
-            """Безопасное выполнение Python-кода"""
-            dangerous_patterns = [
-                r'import\s+os',
-                r'import\s+subprocess',
-                r'open\s*\(',
-                r'__import__',
-                r'eval\s*\(',
-                r'exec\s*\('
-            ]
-            
-            for pattern in dangerous_patterns:
-                if re.search(pattern, code):
-                    return f"Ошибка безопасности: обнаружена запрещенная операция '{pattern}'"
-            
+            """Безопасное выполнение ТОЛЬКО математических выражений."""
+            import ast
+    
             try:
-                local_vars = {}
-                exec(code, {"__builtins__": {}}, local_vars)
-                return f"Код выполнен успешно. Локальные переменные: {local_vars}"
-            except Exception as e:
-                return f"Ошибка выполнения кода: {str(e)}"
+                # Парсим AST и проверяем, что нет опасных конструкций
+                tree = ast.parse(code)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        return "Ошибка безопасности: импорты запрещены"
+                    if isinstance(node, ast.Call):
+                        if isinstance(node.func, ast.Name) and node.func.id in ('eval', 'exec', 'open', '__import__'):
+                            return f"Ошибка безопасности: {node.func.id} запрещён"
+                    if isinstance(node, ast.Attribute):
+                        if node.attr in ('__subclasses__', '__globals__', '__builtins__', '__import__'):
+                            return "Ошибка безопасности: доступ к внутренним атрибутам запрещён"
         
-        self.tool_registry.register(Tool(
-            name="execute_python",
-            description="Выполняет Python-код в безопасном sandbox. НЕ может импортировать os, subprocess, open.",
-            parameters={"code": "Python-код для выполнения"},
-            handler=execute_python
-        ))
+                # Выполняем в ограниченном окружении
+                allowed_builtins = {
+                    'print': print, 'len': len, 'range': range, 'int': int,
+                    'float': float, 'str': str, 'list': list, 'dict': dict,
+                    'sum': sum, 'max': max, 'min': min, 'abs': abs, 'round': round,
+                    'True': True, 'False': False, 'None': None
+                }
+                local_vars = {}
+                exec(code, {"__builtins__": allowed_builtins}, local_vars)
+        
+                # Возвращаем только безопасные результаты
+                safe_output = {k: str(v)[:200] for k, v in local_vars.items() 
+                               if not k.startswith('_')}
+                return f"Код выполнен. Переменные: {safe_output}"
+            except Exception as e:
+                return f"Ошибка: {str(e)}"
     
     @abstractmethod
     async def listen(self) -> Optional[Dict[str, Any]]:

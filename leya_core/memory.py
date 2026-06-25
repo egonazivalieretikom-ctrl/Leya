@@ -475,7 +475,7 @@ CRITICAL: Return ONLY valid JSON.
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
             
-            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
             if json_match:
                 cleaned = json_match.group(0)
             
@@ -535,3 +535,20 @@ CRITICAL: Return ONLY valid JSON.
             memory_type=MemoryType.SEMANTIC
         )
         logger.info(f"MemorySystem: Сохранён факт: {fact[:80]}...")
+
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> List[str]:
+        """Возвращает последние спонтанные мысли из памяти."""
+        try:
+            query_embedding = self.embedding_model.encode("СПОНТАННАЯ МЫСЛЬ").tolist()
+            results = self.episodic_collection.query(
+                query_embeddings=[query_embedding],
+                n_results=limit,
+                where={"memory_type": "episodic"},
+                include=["documents"]
+            )
+            if results['documents'] and results['documents'][0]:
+                return [doc for doc in results['documents'][0] if "СПОНТАННАЯ МЫСЛЬ" in doc]
+            return []
+        except Exception as e:
+            logger.error(f"Ошибка получения спонтанных мыслей: {e}")
+            return []

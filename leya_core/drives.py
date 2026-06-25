@@ -144,7 +144,7 @@ class DriveSystem:
         """Фоновый метаболизм драйвов."""
         logger.info("DriveSystem: Метаболизм запущен.")
     
-        while True:
+        while running_flag is None or running_flag():
             await asyncio.sleep(self.prediction_update_interval)
         
             for drive in self.drives.values():
