@@ -24,6 +24,23 @@ class DriveType(Enum):
     INTEGRITY = "integrity"
     AUTONOMY = "autonomy"
 
+    def save_state(self) -> Dict[str, Any]:
+        """Сохраняет состояние DriveSystem для персистентности."""
+        return {
+            "action_values": self.action_values,
+            "satisfaction_history": self.satisfaction_history[-100:]  # Последние 100 записей
+        }
+
+    def load_state(self, state: Dict[str, Any]):
+        """Загружает состояние DriveSystem из персистентного хранилища."""
+        if "action_values" in state:
+            self.action_values = state["action_values"]
+            logger.info(f"DriveSystem: Загружено {len(self.action_values)} обученных значений действий")
+    
+        if "satisfaction_history" in state:
+            self.satisfaction_history = state["satisfaction_history"]
+            logger.info(f"DriveSystem: Загружено {len(self.satisfaction_history)} записей истории удовлетворения")
+
 
 @dataclass
 class Drive:

@@ -76,7 +76,12 @@ class HomeostasisEngine:
         # Динамические ключевые слова (добавляются автоматически)
         self.dynamic_keywords: List[str] = []
         self.max_dynamic_keywords = 50
-        
+
+        # Персистентное состояние
+        self.recently_researched: Dict[str, float] = {}  # topic -> timestamp
+        self.dynamic_keywords: List[str] = []
+        self.research_cooldown = 1800  # 30 минут
+    
         logger.info("HomeostasisEngine: Инициализация завершена.")
     
     def generate_goal(
@@ -461,3 +466,30 @@ class HomeostasisEngine:
         # Ограничиваем размер
         if len(self.dynamic_keywords) > self.max_dynamic_keywords:
             self.dynamic_keywords = self.dynamic_keywords[-self.max_dynamic_keywords:]
+
+    def save_state(self) -> Dict[str, Any]:
+        """Сохраняет состояние HomeostasisEngine для персистентности."""
+        return {
+            "recently_researched": self.recently_researched,
+            "dynamic_keywords": self.dynamic_keywords,
+            "thresholds": {drive_type.value: threshold for drive_type, threshold in self.thresholds.items()}
+        }
+
+    def load_state(self, state: Dict[str, Any]):
+        """Загружает состояние HomeostasisEngine из персистентного хранилища."""
+        if "recently_researched" in state:
+            self.recently_researched = state["recently_researched"]
+            logger.info(f"HomeostasisEngine: Загружено {len(self.recently_researched)} исследованных тем")
+    
+        if "dynamic_keywords" in state:
+            self.dynamic_keywords = state["dynamic_keywords"]
+            logger.info(f"HomeostasisEngine: Загружено {len(self.dynamic_keywords)} динамических ключевых слов")
+    
+        if "thresholds" in state:
+            # Восстанавливаем пороги
+            for drive_type_str, threshold in state["thresholds"].items():
+                for drive_type in DriveType:
+                    if drive_type.value == drive_type_str:
+                        self.thresholds[drive_type] = threshold
+                        break
+            logger.info(f"HomeostasisEngine: Загружены адаптированные пороги")

@@ -13,6 +13,7 @@ import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from leya_core.homeostasis_engine import HomeostasisEngine
+from leya_core.state_persistence import StatePersistence
 
 
 # Импорт когнитивных модулей
@@ -90,6 +91,8 @@ class LeyaOS:
         
         # Флаг для graceful shutdown
         self.running = False
+
+        self.persistence = StatePersistence()
         
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
@@ -354,6 +357,23 @@ class LeyaOS:
         finally:
             await self.shutdown(background_tasks)
 
+        # ЗАГРУЗКА СОСТОЯНИЯ
+        logger.info("Загрузка состояния из предыдущей сессии...")
+        saved_state = self.persistence.load_state()
+    
+        if saved_state:
+            # Загружаем состояние в DriveSystem
+            if "drives" in saved_state:
+                self.drives.load_state(saved_state["drives"])
+        
+            # Загружаем состояние в HomeostasisEngine
+            if "homeostasis" in saved_state:
+                self.homeostasis.load_state(saved_state["homeostasis"])
+        
+            logger.info("✅ Состояние загружено из предыдущей сессии")
+        else:
+            logger.info("🆕 Начинаем с чистого листа")
+
     async def _homeostasis_loop(self):
         """Замкнутый цикл гомеостаза с RPE."""
         logger.info("HomeostasisEngine: Цикл гомеостаза запущен.")
@@ -612,6 +632,16 @@ class LeyaOS:
                 await task
             except asyncio.CancelledError:
                 pass
+
+            logger.info("Завершение работы Леи...")
+    
+        # СОХРАНЕНИЕ СОСТОЯНИЯ
+        logger.info("Сохранение состояния для следующей сессии...")
+        state = {
+            "drives": self.drives.save_state(),
+            "homeostasis": self.homeostasis.save_state(),
+            "shutdown_time": datetime.now().isoformat()
+        }
         
         # Финальная консолидация памяти
         logger.info("Финальная консолидация памяти...")
