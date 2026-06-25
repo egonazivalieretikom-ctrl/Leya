@@ -141,51 +141,26 @@ class DriveSystem:
         logger.info("DriveSystem: Инициализация завершена с аллостазом и RPE.")
     
     async def background_metabolism(self):
-        """Фоновый метаболизм: обновление предсказаний и гомеостаза."""
+        """
+        Фоновый метаболизм драйвов.
+
+        Биологический аналог: постоянная регуляция гомеостаза гипоталамусом.
+        """
         logger.info("DriveSystem: Метаболизм запущен.")
     
-        # Инициализируем флаг, если его нет
-        if not hasattr(self, '_metabolism_running'):
-            self._metabolism_running = True
-    
-        while self._metabolism_running:
-            try:
-                await asyncio.sleep(self.prediction_update_interval)
+        while True:
+            await asyncio.sleep(self.prediction_update_interval)
+        
+            # 1. Применяем перекрестное влияние
+            for drive in self.drives.values():
+                cross_effect = self._calculate_cross_influence(drive.type)
+                effective_growth = drive.base_growth_rate + cross_effect
             
-                if not self._metabolism_running:
-                    break
-            
-                # Обновляем предсказания для каждого драйва
-                for drive in self.drives.values():
-                    predicted = self._predict_next_state(drive)
-                    drive.update_prediction(predicted)
-                
-                    # Вычисляем RPE (Reward Prediction Error)
-                    rpe = self._calculate_rpe(drive)
-                    drive.update_rpe(rpe)
-                
-                    # Обновляем аллостаз
-                    allostasis = self._update_allostasis(drive)
-                    drive.update_allostasis(allostasis)
-            
-                # Логируем состояние каждые 10 циклов
-                if hasattr(self, '_metabolism_cycle_count'):
-                    self._metabolism_cycle_count += 1
-                else:
-                    self._metabolism_cycle_count = 1
-            
-                if self._metabolism_cycle_count % 10 == 0:
-                    drive_states = {d.type.value: round(d.current, 3) for d in self.drives.values()}
-                    logger.debug(f"DriveSystem: Метаболизм цикл {self._metabolism_cycle_count}. Состояние: {drive_states}")
-                
-            except asyncio.CancelledError:
-                logger.info("DriveSystem: Метаболизм отменён.")
-                break
-            except Exception as e:
-                logger.error(f"DriveSystem: Ошибка в фоновом метаболизме: {e}")
-                await asyncio.sleep(5)  # Пауза перед повтором
-    
-        logger.info("DriveSystem: Метаболизм остановлен.")
+                # Рост с учетом перекрестного влияния
+                drive.current = min(1.0, max(0.0, drive.current + effective_growth))
+        
+            # 2. Обновляем предсказания (аллостаз)
+            self._update_predictions()
 
     def stop_metabolism(self):
         """Остановка фонового метаболизма."""

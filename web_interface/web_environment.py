@@ -56,19 +56,24 @@ class WebEnvironment(Environment):
         self.state.connected_clients = len(self.active_connections)
         logger.info(f"WebEnvironment: Клиент отключен. Всего: {self.state.connected_clients}")
     
-    async def broadcast(self, event: Dict[str, Any]):
-        """Отправляет событие всем подключённым клиентам."""
-
-        disconnected = []
-        for ws in self.active_connections:
+    async def broadcast(self, message: Dict[str, Any]):
+        """Отправка сообщения всем подключенным WebSocket-клиентам."""
+        if not hasattr(self, '_clients'):
+            # Импортируем глобальный список клиентов из server.py
+            from web_interface.server import connected_clients
+            self._clients = connected_clients
+    
+        disconnected = set()
+        for client in self._clients:
             try:
-                await ws.send_json(event)
-            except Exception:
-                disconnected.append(ws)
-        
-        for ws in disconnected:
-            if ws in self.active_connections:
-                self.active_connections.remove(ws)
+                await client.send_json(message)
+            except Exception as e:
+                logger.warning(f"Не удалось отправить сообщение клиенту: {e}")
+                disconnected.add(client)
+    
+        # Удаляем отключенных клиентов
+        for client in disconnected:
+            self._clients.discard(client)
     
     async def listen(self) -> Optional[Dict[str, Any]]:
         """Получает следующий стимул из очереди."""
@@ -132,3 +137,16 @@ class WebEnvironment(Environment):
             "type": "state_update",
             "data": state
         })
+
+    async def handle_user_message(self, content: str):
+        """Обработка сообщения от пользователя через веб-интерфейс."""
+        try:
+            # Передаем сообщение в LeyaOS
+            await self.leya.perceive({
+                "type": "user_message",
+                "content": content,
+                "source": "web_interface"
+            })
+        except Exception as e:
+            logger.error(f"Ошибка обработки сообщения: {e}")
+            raise

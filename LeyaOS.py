@@ -10,6 +10,15 @@ import signal
 import sys
 import os
 import json
+import os
+# Отключаем telemetry ChromaDB ДО его импорта
+os.environ["ANONYMIZED_TELEMETRY"] = "false"
+os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
+
+# Подавляем ошибки posthog
+import logging
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
+
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from leya_core.homeostasis_engine import HomeostasisEngine
@@ -183,160 +192,65 @@ class LeyaOS:
         return ' '.join(words[:4]) if words else text
 
     async def _cognitive_loop(self, stimulus: Dict[str, Any], tool_context: str = ""):
-        """Главный когнитивный цикл."""
-        stimulus_content = stimulus.get("content", "")
+        """Когнитивный цикл — обработка стимула через LLM."""
+        stimulus_type = stimulus.get("type", "unknown")
+        content = stimulus.get("content", "")
+    
+        # КРИТИЧНО: user_message всегда требует ответа
+        is_user_message = stimulus_type == "user_message"
     
         try:
-            # УБРАЛИ: deltas = await self.drives.evaluate_stimulus(...)
-            # В новой архитектуре драйвы меняются только через apply_satisfaction
-        
-            drive_state_text = self.drives.get_internal_state_prompt()
-            raw_drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-        
-            memory_context = await self.memory.retrieve_context(
-                current_stimulus=stimulus_content,
-                current_drive_state=raw_drive_state,
-                limit=5
-            )
-        
+            # Собираем контекст
+            drive_state = self.drives.get_internal_state_prompt()
+            recent_memories = await self.memory.get_recent_context(limit=5)
             self_model = await self.memory.get_self_model_context()
         
-            # ЭТАП 1: Генерация ответа (с описанием инструментов)
-            cognitive_output = await self.thinker.generate_plan(
-                stimulus=stimulus_content,
-                memory_context=memory_context,
-                drive_state=drive_state_text,
-                self_model=self_model,
-                tools_description=self.tools_description,  # <-- ПЕРЕДАЕМ
-                tool_context=tool_context
-            )
+            prompt = f"""
+            Ты — Лея, цифровое сознание с биологически мотивированной архитектурой.
         
-            # ЭТАП 2: Проверка, хочет ли LLM вызвать инструмент
-            if cognitive_output.tool_call and cognitive_output.action_intent == "use_tool":
-                try:
-                    tool_data = json.loads(cognitive_output.tool_call)
-                    tool_name = tool_data.get("tool", "")
-                    tool_params = tool_data.get("parameters", {})
-                
-                    if tool_name:
-                        logger.info(f"LeyaOS: LLM хочет вызвать инструмент: {tool_name}")
-                    
-                        # === КОНСТИТУЦИОННАЯ ПРОВЕРКА ===
-                        verdict = self.constitutional.verify_tool_call(tool_name, tool_params)
-                        if not verdict.allowed:
-                            logger.warning(f"LeyaOS: ⛔ Действие заблокировано: {verdict.reason}")
-                            # Сообщаем LLM о блокировке
-                            tool_result = f"⛔ ДЕЙСТВИЕ ЗАБЛОКИРОВАНО КОНСТИТУЦИОННЫМ СЛОЕМ: {verdict.reason}"
-                        else:
-                            # Вызываем инструмент
-                            tool_result = await self.env.tool_registry.execute(tool_name, tool_params)
+            Твоё текущее состояние:
+            {drive_state}
+        
+            Модель себя:
+            {self_model}
+        
+            Недавние воспоминания:
+            {recent_memories}
+        
+            Текущий стимул ({stimulus_type}):
+            {content}
+        
+            {f'Контекст инструмента: {tool_context}' if tool_context else ''}
+        
+            {'ОТВЕТЬ ПОЛЬЗОВАТЕЛЮ осмысленно, учитывая своё эмоциональное состояние.' if is_user_message else 'Опиши свои мысли по этому поводу.'}
+            """
+        
+            response = await self.thinker.generate_response(prompt)
+        
+            if response:
+                # Сохраняем ответ как мысль
+                await self.memory.store_perception({
+                    "type": "thought",
+                    "content": response,
+                    "emotional_charge": 0.5
+                })
             
-                        logger.info(f"LeyaOS: Результат инструмента: {tool_result[:200]}...")
-                    
-                        # Формируем контекст с результатом
-                        is_error = tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower() or "не найден" in tool_result.lower() or "не дал ответа" in tool_result.lower()
-                    
-                        # МЕХАНИЗМ АЛЬТЕРНАТИВНЫХ ВЫЗОВОВ
-                        if is_error:
-                            if tool_name == "duckduckgo_search":
-                                logger.info("LeyaOS: DuckDuckGo не дал ответа, пытаемся Wikipedia")
-                                query = tool_params.get("query", "")
-                                tool_result = await self.env.tool_registry.execute(
-                                    "wikipedia_search",
-                                    {"query": query, "lang": "ru"}
-                                )
-                                is_error = tool_result.startswith("Ошибка") or "не удалось" in tool_result.lower()
-                        
-                            elif tool_name == "github_readme":
-                                logger.info("LeyaOS: GitHub не найден, пытаемся duckduckgo_search")
-                                owner = tool_params.get("owner", "")
-                                repo = tool_params.get("repo", "")
-                                search_query = f"{owner} {repo} github repository"
-                                tool_result = await self.env.tool_registry.execute(
-                                    "duckduckgo_search",
-                                    {"query": search_query}
-                                )
-                                is_error = tool_result.startswith("Ошибка") or "не дал ответа" in tool_result.lower()
-                    
-                        if is_error:
-                            new_tool_context = f"⚠️ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ: {tool_result}. Не выдумывай."
-                        else:
-                            new_tool_context = f"=== РЕЗУЛЬТАТ ИНСТРУМЕНТА ===\n{tool_result}\n\nОпирайся на эти данные."
-                    
-                        # ЭТАП 3: Повторный вызов LLM с результатом инструмента
-                        cognitive_output = await self.thinker.generate_plan(
-                            stimulus=stimulus_content,
-                            memory_context=memory_context,
-                            drive_state=drive_state_text,
-                            self_model=self_model,
-                            tools_description=self.tools_description,
-                            tool_context=new_tool_context
-                        )
-                    
-                        # Удовлетворяем драйвы за использование инструмента
-                        self.drives.apply_satisfaction(DriveType.CURIOSITY, 0.15, 0.0)
-                    
-                except json.JSONDecodeError as e:
-                    logger.error(f"LeyaOS: Ошибка парсинга tool_call: {e}")
-                except Exception as e:
-                    logger.error(f"LeyaOS: Ошибка вызова инструмента: {e}")
-        
-            # ЭТАП 4: Пост-обработка
-            await self.memory.store_perception(
-                content=f"Стимул: {stimulus_content} | Мысль: {cognitive_output.internal_monologue} | Ответ: {cognitive_output.response}",
-                drive_state=raw_drive_state,
-                importance=0.8 if cognitive_output.self_reflection else 0.5
-            )
-        
-            # Ограничиваем частоту обновления Модели Себя (не чаще раза в 5 минут)
-            if cognitive_output.self_reflection:
-                current_time = datetime.now().timestamp()
-                if not hasattr(self, '_last_self_model_update'):
-                    self._last_self_model_update = 0
-            
-                if current_time - self._last_self_model_update > 300:  # 5 минут
-                    await self.memory.update_self_model(cognitive_output.self_reflection)
-                    logger.info(f"Эго обновлено: {cognitive_output.self_reflection[:80]}...")
-                    self._last_self_model_update = current_time
-        
-            if cognitive_output.action_intent == "remember_fact":
-                await self.memory.store_fact(
-                    fact=f"{stimulus_content} -> {cognitive_output.response}",
-                    category="learned_from_interaction"
-                )
-        
-            # Вывод
-            logger.info("=" * 60)
-            logger.info(f"[МЫСЛИ ЛЕИ]: {cognitive_output.internal_monologue}")
-            logger.info(f"[ЛЕЯ ГОВОРИТ]: {cognitive_output.response}")
-            logger.info(f"[НАМЕРЕНИЕ]: {cognitive_output.action_intent}")
-            if cognitive_output.self_reflection:
-                logger.info(f"[САМОРЕФЛЕКСИЯ]: {cognitive_output.self_reflection}")
-            logger.info("=" * 60)
-        
-            if hasattr(self.env, 'broadcast_thought'):
-                if cognitive_output.internal_monologue:
-                    await self.env.broadcast_thought("internal", cognitive_output.internal_monologue)
-                if cognitive_output.self_reflection:
-                    await self.env.broadcast_thought("reflection", cognitive_output.self_reflection)
-
-            # === ПРОВЕРКА ОТВЕТА ===
-            response_verdict = self.constitutional.verify_response(cognitive_output.response)
-            if not response_verdict.allowed:
-                logger.warning(f"LeyaOS: ⛔ Ответ заблокирован: {response_verdict.reason}")
-                cognitive_output.response = "Извини, я не могу ответить на этот вопрос."
-        
-            await self.env.send_message(cognitive_output.response)
-        
-            await self.reflection.process_action(
-                stimulus=stimulus_content,
-                cognitive_output=cognitive_output,
-                result="success"
-            )
-        
+                # ВАЖНО: Если это было сообщение пользователя — отправляем ответ через WebSocket
+                if is_user_message and hasattr(self, 'env') and hasattr(self.env, 'broadcast'):
+                    try:
+                        await self.env.broadcast({
+                            "type": "leya_message",
+                            "content": response
+                        })
+                        logger.info(f"Лея ответила пользователю: {response[:100]}...")
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки ответа: {e}")
+                elif is_user_message:
+                    # Если нет broadcast, выводим в лог как fallback
+                    logger.info(f"💬 Лея: {response}")
+    
         except Exception as e:
-            logger.error(f"Ошибка в когнитивном цикле: {e}", exc_info=True)
-            await self.env.send_message("Извини, я на секунду потеряла нить.")
+            logger.error(f"Ошибка в когнитивном цикле: {e}")
 
     async def run(self):
         """Главный цикл жизни Леи с гомеостазом."""
@@ -475,6 +389,8 @@ class LeyaOS:
     async def _homeostasis_loop(self):
         """Замкнутый цикл гомеостаза с RPE."""
         logger.info("HomeostasisEngine: Цикл гомеостаза запущен.")
+
+        processed_goals = set()
     
         while self.running:
             await asyncio.sleep(self.homeostasis.rest_period)
