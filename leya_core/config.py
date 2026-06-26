@@ -41,6 +41,8 @@ class OllamaConfig:
         self.repeat_penalty = max(1.0, min(2.0, self.repeat_penalty))
 
 
+# Расположение: leya_core/config.py, заменить @dataclass class MemoryConfig полностью
+
 @dataclass
 class MemoryConfig:
     """Конфигурация системы памяти."""
@@ -50,15 +52,25 @@ class MemoryConfig:
     max_recent_episodes: int = 20
     context_limit: int = 5
     
+    # Поля для кривой забывания Эббингауза (ИСПРАВЛЕНИЕ БАГА)
+    forgetting_threshold: float = 0.1  # Порог забывания (retention_strength < threshold → удаление)
+    forgetting_base_stability: float = 3600.0  # Базовая стабильность в секундах (1 час)
+    metabolism_interval_seconds: int = 60  # Интервал обновления метаболизма
+    
+    # Параметры синапсов
+    synapse_learning_rate: float = 0.05  # Скорость обучения LTP
+    synapse_max_weight: float = 1.0  # Максимальный вес синапса
+    
+    # Параметры само-модели
+    max_self_model_length: int = 5000  # Максимальная длина self_model
+
     def __post_init__(self) -> None:
         """Валидация и подготовка brain_dir."""
-        from .exceptions import LeyaConfigError  # локальный импорт во избежание циклов
+        from .exceptions import LeyaConfigError
 
-        # Нормализация пути
         path = Path(self.brain_dir).expanduser().resolve()
         self.brain_dir = str(path)
 
-        # Автоматическое создание директории мозга
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -67,21 +79,18 @@ class MemoryConfig:
                 context={"path": str(path), "error": str(exc)},
             ) from exc
 
-        # Проверка прав на запись
         if not os.access(path, os.W_OK):
             raise LeyaConfigError(
                 f"brain_dir недоступен для записи: {path}",
                 context={"path": str(path)},
             )
 
-        # Валидация порогов забывания (Эббингауз)
         if not (0.0 < self.forgetting_threshold < 1.0):
             raise LeyaConfigError(
                 "forgetting_threshold должен быть в (0.0, 1.0)",
                 context={"value": self.forgetting_threshold},
             )
 
-        # Валидация интервалов метаболизма
         if self.metabolism_interval_seconds <= 0:
             raise LeyaConfigError(
                 "metabolism_interval_seconds должен быть > 0",
