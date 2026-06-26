@@ -156,3 +156,72 @@
     .tooltip:hover::after {
         opacity: 1;
     }
+
+/* Дополнительные стили для Этапа 5 */
+
+/* Табы */
+.tab-button {
+    transition: all 0.3s ease;
+}
+
+    .tab-button.active {
+        border-bottom: 2px solid #00d4ff;
+    }
+
+/* Граф памяти */
+#memory-graph-container {
+    background: radial-gradient(circle at center, #0a1929 0%, #050d18 100%);
+}
+
+/* Модальное окно */
+#force-submit-modal {
+    backdrop-filter: blur(4px);
+}
+
+/* Уведомления */
+.notification {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Workspace карточки */
+.workspace-card {
+    transition: all 0.3s ease;
+}
+
+    .workspace-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 212, 255, 0.2);
+    }
+
+/* Self-model textarea */
+#soul-files-editor textarea {
+    font-family: 'Courier New', monospace;
+    line-height: 1.5;
+}
+
+/* Анимация пульсации для фокуса workspace */
+.focus-pulse {
+    animation: focusPulse 2s ease-in-out infinite;
+}
+
+@keyframes focusPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(0, 212, 255, 0.4);
+    }
+
+    50% {
+        box-shadow: 0 0 0 10px rgba(0, 212, 255, 0);
+    }
+}

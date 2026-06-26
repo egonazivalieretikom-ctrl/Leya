@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Лея — Цифровое Сознание</title>
 
-    <!-- Tailwind CSS 4 (CDN для прототипа) -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- Chart.js для графиков драйвов -->
+    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <!-- vis-network для графа памяти -->
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 
     <!-- Кастомные стили -->
     <link rel="stylesheet" href="/static/css/leya.css">
@@ -49,9 +52,27 @@
         </div>
     </header>
 
-    <!-- Main Layout -->
-    <div class="flex h-[calc(100vh-80px)]">
-        <!-- Left Sidebar: Drives Dashboard -->
+    <!-- Tabs Navigation -->
+    <div class="bg-leya-navy border-b border-leya-cyan/20 px-6">
+        <div class="flex gap-4">
+            <button onclick="switchTab('chat')" class="tab-button active px-4 py-2 text-sm font-semibold text-leya-cyan border-b-2 border-leya-cyan">
+                💬 Чат
+            </button>
+            <button onclick="switchTab('memory')" class="tab-button px-4 py-2 text-sm font-semibold text-gray-400 hover:text-leya-cyan">
+                🧠 Память
+            </button>
+            <button onclick="switchTab('workspace')" class="tab-button px-4 py-2 text-sm font-semibold text-gray-400 hover:text-leya-cyan">
+                ⚡ Workspace
+            </button>
+            <button onclick="switchTab('self')" class="tab-button px-4 py-2 text-sm font-semibold text-gray-400 hover:text-leya-cyan">
+                🪞 Само-модель
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex h-[calc(100vh-140px)]">
+        <!-- Left Sidebar: Drives Dashboard (всегда виден) -->
         <aside class="w-80 bg-leya-navy border-r border-leya-cyan/20 p-4 overflow-y-auto">
             <h2 class="text-lg font-semibold text-leya-cyan mb-4">Драйвы</h2>
             <div id="drives-chart-container" class="mb-6">
@@ -62,31 +83,82 @@
             </div>
         </aside>
 
-        <!-- Center: Main Consciousness Panel -->
-        <main class="flex-1 flex flex-col">
-            <!-- Chat Area -->
-            <div class="flex-1 overflow-y-auto p-6 space-y-4" id="chat-container">
-                <div class="text-center text-gray-500 text-sm">
-                    Начните диалог с Леей...
+        <!-- Center: Tab Content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <!-- Chat Tab -->
+            <div id="tab-chat" class="tab-content flex-1 flex flex-col">
+                <div class="flex-1 overflow-y-auto p-6 space-y-4" id="chat-container">
+                    <div class="text-center text-gray-500 text-sm">
+                        Начните диалог с Леей...
+                    </div>
+                </div>
+                <div class="border-t border-leya-cyan/20 p-4 bg-leya-navy">
+                    <form id="message-form" class="flex gap-2">
+                        <input type="text"
+                               id="message-input"
+                               placeholder="Введите сообщение..."
+                               class="flex-1 bg-leya-dark border border-leya-cyan/30 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-leya-cyan">
+                        <button type="submit"
+                                class="bg-leya-cyan hover:bg-leya-cyan/80 text-leya-dark font-semibold px-6 py-2 rounded-lg transition-colors">
+                            Отправить
+                        </button>
+                    </form>
                 </div>
             </div>
 
-            <!-- Input Area -->
-            <div class="border-t border-leya-cyan/20 p-4 bg-leya-navy">
-                <form id="message-form" class="flex gap-2">
-                    <input type="text"
-                           id="message-input"
-                           placeholder="Введите сообщение..."
-                           class="flex-1 bg-leya-dark border border-leya-cyan/30 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-leya-cyan">
-                    <button type="submit"
-                            class="bg-leya-cyan hover:bg-leya-cyan/80 text-leya-dark font-semibold px-6 py-2 rounded-lg transition-colors">
-                        Отправить
+            <!-- Memory Tab -->
+            <div id="tab-memory" class="tab-content flex-1 hidden">
+                <div class="flex flex-col h-full">
+                    <div class="p-4 bg-leya-navy border-b border-leya-cyan/20 flex items-center justify-between">
+                        <h2 class="text-lg font-semibold text-leya-cyan">Граф памяти</h2>
+                        <div class="flex gap-2">
+                            <button onclick="window.memoryGraph.consolidate()" class="px-3 py-1 bg-leya-cyan text-leya-dark text-xs rounded hover:bg-leya-cyan/80">
+                                Консолидировать
+                            </button>
+                            <button onclick="window.memoryGraph.forgetWeak(0.2)" class="px-3 py-1 bg-amber-600 text-white text-xs rounded hover:bg-amber-700">
+                                Забыть слабые
+                            </button>
+                            <button onclick="window.memoryGraph.exportGraph()" class="px-3 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700">
+                                Экспорт
+                            </button>
+                        </div>
+                    </div>
+                    <div id="memory-graph-container" class="flex-1 bg-leya-dark"></div>
+                    <div id="memory-stats" class="p-2 bg-leya-navy text-xs text-gray-400 text-center">
+                        Загрузка...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Workspace Tab -->
+            <div id="tab-workspace" class="tab-content flex-1 hidden overflow-y-auto p-6">
+                <div class="mb-4">
+                    <h2 class="text-lg font-semibold text-leya-cyan mb-2">Global Workspace</h2>
+                    <button onclick="showForceSubmitModal()" class="px-3 py-1 bg-leya-cyan text-leya-dark text-xs rounded hover:bg-leya-cyan/80">
+                        + Подать предложение
                     </button>
-                </form>
+                </div>
+                <div id="workspace-container"></div>
+            </div>
+
+            <!-- Self-Model Tab -->
+            <div id="tab-self" class="tab-content flex-1 hidden overflow-y-auto p-6">
+                <div class="space-y-6">
+                    <div>
+                        <h2 class="text-lg font-semibold text-leya-cyan mb-2">Само-модель</h2>
+                        <div id="self-model-content" class="bg-leya-navy border border-leya-cyan/20 rounded-lg p-4 text-sm text-gray-200 min-h-[100px]">
+                            Загрузка...
+                        </div>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-leya-cyan mb-2">Файлы души</h2>
+                        <div id="soul-files-editor"></div>
+                    </div>
+                </div>
             </div>
         </main>
 
-        <!-- Right Sidebar: Thoughts Feed -->
+        <!-- Right Sidebar: Thoughts Feed (всегда виден) -->
         <aside class="w-80 bg-leya-navy border-l border-leya-cyan/20 p-4 overflow-y-auto">
             <h2 class="text-lg font-semibold text-leya-cyan mb-4">Мысли Леи</h2>
             <div id="thoughts-feed" class="space-y-3">
@@ -95,9 +167,52 @@
         </aside>
     </div>
 
+    <!-- Force Submit Modal -->
+    <div id="force-submit-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div class="bg-leya-navy border border-leya-cyan/20 rounded-lg p-6 w-96">
+            <h3 class="text-lg font-semibold text-leya-cyan mb-4">Подать предложение в Workspace</h3>
+            <form id="force-submit-form" class="space-y-3">
+                <div>
+                    <label class="text-xs text-gray-400">Источник</label>
+                    <input type="text" id="fs-source" value="manual" class="w-full bg-leya-dark border border-leya-cyan/30 rounded px-2 py-1 text-sm">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400">Содержание</label>
+                    <textarea id="fs-content" rows="3" class="w-full bg-leya-dark border border-leya-cyan/30 rounded px-2 py-1 text-sm"></textarea>
+                </div>
+                <div class="flex gap-2">
+                    <div class="flex-1">
+                        <label class="text-xs text-gray-400">Приоритет</label>
+                        <select id="fs-priority" class="w-full bg-leya-dark border border-leya-cyan/30 rounded px-2 py-1 text-sm">
+                            <option value="LOW">LOW</option>
+                            <option value="MEDIUM" selected>MEDIUM</option>
+                            <option value="HIGH">HIGH</option>
+                            <option value="CRITICAL">CRITICAL</option>
+                        </select>
+                    </div>
+                    <div class="flex-1">
+                        <label class="text-xs text-gray-400">Urgency</label>
+                        <input type="number" id="fs-urgency" value="0.5" min="0" max="1" step="0.1" class="w-full bg-leya-dark border border-leya-cyan/30 rounded px-2 py-1 text-sm">
+                    </div>
+                </div>
+                <div class="flex gap-2 justify-end">
+                    <button type="button" onclick="hideForceSubmitModal()" class="px-4 py-2 bg-gray-600 text-white text-sm rounded hover:bg-gray-700">
+                        Отмена
+                    </button>
+                    <button type="submit" class="px-4 py-2 bg-leya-cyan text-leya-dark text-sm font-semibold rounded hover:bg-leya-cyan/80">
+                        Подать
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="/static/js/drives-chart.js"></script>
     <script src="/static/js/thoughts-feed.js"></script>
+    <script src="/static/js/memory-graph.js"></script>
+    <script src="/static/js/workspace-visualizer.js"></script>
+    <script src="/static/js/self-model-panel.js"></script>
     <script src="/static/js/leya-ui.js"></script>
 </body>
 </html>

@@ -1,6 +1,5 @@
 /**
- * LeyaUI — Главный класс UI Леи
- * Подписывается на WebSocket и рендерит все broadcast типы
+ * LeyaUI — Главный класс UI Леи (обновлённая версия с новыми панелями)
  */
 class LeyaUI {
     constructor() {
@@ -12,6 +11,10 @@ class LeyaUI {
         // Компоненты
         this.drivesChart = new DrivesChart('drives-radar-chart');
         this.thoughtsFeed = new ThoughtsFeed('thoughts-feed');
+        this.memoryGraph = null;
+        this.workspaceVisualizer = null;
+        this.selfModelPanel = null;
+
         this.chatContainer = document.getElementById('chat-container');
         this.messageForm = document.getElementById('message-form');
         this.messageInput = document.getElementById('message-input');
@@ -24,6 +27,54 @@ class LeyaUI {
         this.connectWebSocket();
         this.setupEventListeners();
         this.loadInitialState();
+        this.setupTabs();
+    }
+
+    setupTabs() {
+        // Инициализация компонентов при первом переключении на вкладку
+        const tabButtons = document.querySelectorAll('.tab-button');
+        tabButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tabName = btn.textContent.trim().split(' ')[1].toLowerCase();
+                this.activateTab(tabName);
+            });
+        });
+    }
+
+    activateTab(tabName) {
+        // Скрытие всех вкладок
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            btn.classList.remove('active', 'text-leya-cyan', 'border-b-2', 'border-leya-cyan');
+            btn.classList.add('text-gray-400');
+        });
+
+        // Показ выбранной вкладки
+        const tabEl = document.getElementById(`tab-${tabName}`);
+        if (tabEl) {
+            tabEl.classList.remove('hidden');
+        }
+
+        // Активация кнопки
+        const buttons = document.querySelectorAll('.tab-button');
+        buttons.forEach(btn => {
+            if (btn.textContent.toLowerCase().includes(tabName)) {
+                btn.classList.add('active', 'text-leya-cyan', 'border-b-2', 'border-leya-cyan');
+                btn.classList.remove('text-gray-400');
+            }
+        });
+
+        // Инициализация компонентов при первом открытии
+        if (tabName === 'memory' && !this.memoryGraph) {
+            this.memoryGraph = new MemoryGraph('memory-graph-container');
+            this.memoryGraph.loadGraph();
+        } else if (tabName === 'workspace' && !this.workspaceVisualizer) {
+            this.workspaceVisualizer = new WorkspaceVisualizer('workspace-container');
+            this.workspaceVisualizer.startAutoRefresh(2000);
+        } else if (tabName === 'self' && !this.selfModelPanel) {
+            this.selfModelPanel = new SelfModelPanel();
+            this.selfModelPanel.startAutoRefresh(5000);
+        }
     }
 
     connectWebSocket() {
@@ -96,7 +147,9 @@ class LeyaUI {
                 break;
 
             case 'self_model_update':
-                console.log('Self-model обновлен:', payload);
+                if (this.selfModelPanel) {
+                    this.selfModelPanel.loadSelfModel();
+                }
                 break;
 
             case 'state_update':
@@ -104,11 +157,15 @@ class LeyaUI {
                 break;
 
             case 'memory_update':
-                console.log('Memory обновлена:', payload);
+                if (this.memoryGraph) {
+                    this.memoryGraph.loadGraph();
+                }
                 break;
 
             case 'soul_update':
-                console.log('Soul обновлена:', payload);
+                if (this.selfModelPanel) {
+                    this.selfModelPanel.loadSoulFiles();
+                }
                 break;
 
             default:
@@ -177,12 +234,9 @@ class LeyaUI {
         const content = this.messageInput.value.trim();
         if (!content) return;
 
-        // Отправка через REST API
         fetch('/api/message', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content }),
         })
             .then(response => response.json())
@@ -197,7 +251,6 @@ class LeyaUI {
 
     async loadInitialState() {
         try {
-            // Загрузка начального состояния
             const [stateRes, drivesRes] = await Promise.all([
                 fetch('/api/state'),
                 fetch('/api/drives'),
@@ -220,6 +273,44 @@ class LeyaUI {
         return div.innerHTML;
     }
 }
+
+// Глобальные функции для модальных окон
+function showForceSubmitModal() {
+    document.getElementById('force-submit-modal').classList.remove('hidden');
+}
+
+function hideForceSubmitModal() {
+    document.getElementById('force-submit-modal').classList.add('hidden');
+}
+
+function switchTab(tabName) {
+    if (window.leyaUI) {
+        window.leyaUI.activateTab(tabName);
+    }
+}
+
+// Обработчик формы force submit
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('force-submit-form');
+    if (form) {
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const source = document.getElementById('fs-source').value;
+            const content = document.getElementById('fs-content').value;
+            const priority = document.getElementById('fs-priority').value;
+            const urgency = parseFloat(document.getElementById('fs-urgency').value);
+
+            if (window.leyaUI && window.leyaUI.workspaceVisualizer) {
+                await window.leyaUI.workspaceVisualizer.forceSubmit(
+                    source, content, priority, urgency, 0.5
+                );
+            }
+
+            hideForceSubmitModal();
+        });
+    }
+});
 
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', () => {

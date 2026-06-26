@@ -177,6 +177,254 @@ def create_app(web_environment) -> FastAPI:
 
     return app
 
+    # Расположение: web_interface/server.py, добавить после существующих эндпоинтов
+
+    @app.get("/api/memory/graph")
+    async def get_memory_graph(
+        min_retention: float = 0.1,
+        max_nodes: int = 100,
+        include_synapses: bool = True,
+    ):
+        """
+        Получение данных для графа памяти.
+    
+        Возвращает узлы (engrams) и рёбра (synapses) для vis-network.
+        """
+        if not web_environment.leya:
+            return {"nodes": [], "edges": []}
+    
+        try:
+            memory = web_environment.leya.memory
+        
+            # Получаем энграммы с достаточным retention
+            engrams = [
+                e for e in memory.engrams.values()
+                if e.retention_strength >= min_retention
+            ]
+        
+            # Ограничение количества узлов
+            engrams.sort(key=lambda e: e.retention_strength, reverse=True)
+            engrams = engrams[:max_nodes]
+        
+            # Формирование узлов
+            nodes = []
+            for engram in engrams:
+                # Цвет по типу памяти
+                color = "#00d4ff" if engram.memory_type.value == "episodic" else "#ffb347"
+            
+                # Размер по retrieval_count
+                size = 10 + min(30, engram.retrieval_count * 2)
+            
+                # Интенсивность по emotional_boost
+                opacity = 0.5 + engram.emotional_boost * 0.5
+            
+                nodes.append({
+                    "id": engram.id,
+                    "label": engram.content[:50] + "..." if len(engram.content) > 50 else engram.content,
+                    "title": f"<b>{engram.memory_type.value}</b><br>{engram.content}<br><br>Retention: {engram.retention_strength:.2f}<br>Retrievals: {engram.retrieval_count}<br>Emotional: {engram.emotional_boost:.2f}",
+                    "color": {
+                        "background": color,
+                        "border": color,
+                        "highlight": {"background": "#ffffff", "border": color},
+                    },
+                    "size": size,
+                    "opacity": opacity,
+                    "memory_type": engram.memory_type.value,
+                    "retention_strength": engram.retention_strength,
+                    "retrieval_count": engram.retrieval_count,
+                    "emotional_boost": engram.emotional_boost,
+                })
+        
+            # Формирование рёбер (если включены)
+            edges = []
+            if include_synapses:
+                node_ids = {n["id"] for n in nodes}
+                for synapse in memory.synapses.values():
+                    # Только если оба узла есть в графе
+                    if synapse.source_id in node_ids and synapse.target_id in node_ids:
+                        edges.append({
+                            "from": synapse.source_id,
+                            "to": synapse.target_id,
+                            "width": 1 + synapse.weight * 5,  # Толщина по weight
+                            "color": {
+                                "color": f"rgba(0, 212, 255, {synapse.weight})",
+                                "highlight": "#ffffff",
+                            },
+                            "title": f"Weight: {synapse.weight:.2f}<br>Activations: {synapse.activation_count}",
+                            "weight": synapse.weight,
+                        })
+        
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "total_engrams": len(memory.engrams),
+                "total_synapses": len(memory.synapses),
+            }
+    
+        except Exception as e:
+            logger.error(f"Ошибка получения графа памяти: {e}")
+            return {"nodes": [], "edges": [], "error": str(e)}
+
+
+    @app.get("/api/workspace/proposals")
+    async def get_workspace_proposals():
+        """Получение текущих proposals из workspace."""
+        if not web_environment.leya:
+            return {"proposals": [], "focus": None}
+    
+        try:
+            workspace = web_environment.leya.workspace
+        
+            proposals = [
+                {
+                    "id": i,
+                    "source": p.source,
+                    "content": p.content,
+                    "action_type": p.action_type,
+                    "priority": p.priority.name,
+                    "urgency": p.urgency,
+                    "drive_relevance": p.drive_relevance,
+                    "timestamp": p.timestamp,
+                    "age_seconds": time.time() - p.timestamp,
+                }
+                for i, p in enumerate(workspace.proposals)
+            ]
+        
+            focus = workspace.get_focus()
+            focus_data = None
+            if focus:
+                focus_data = {
+                    "source": focus.source,
+                    "content": focus.content,
+                    "action_type": focus.action_type,
+                    "priority": focus.priority.name,
+                }
+        
+            return {
+                "proposals": proposals,
+                "focus": focus_data,
+                "total": len(proposals),
+            }
+    
+        except Exception as e:
+            logger.error(f"Ошибка получения proposals: {e}")
+            return {"proposals": [], "focus": None, "error": str(e)}
+
+
+    @app.post("/api/workspace/submit")
+    async def force_submit_proposal(request: dict):
+        """Принудительная подача proposal в workspace."""
+        if not web_environment.leya:
+            return JSONResponse({"error": "Лея не инициализирована"}, status_code=500)
+    
+        try:
+            from leya_core.global_workspace import Priority
+        
+            workspace = web_environment.leya.workspace
+        
+            proposal = workspace.force_submit(
+                source=request.get("source", "manual"),
+                content=request.get("content", ""),
+                action_type=request.get("action_type", "none"),
+                priority=Priority[request.get("priority", "MEDIUM").upper()],
+                urgency=float(request.get("urgency", 0.5)),
+                drive_relevance=float(request.get("drive_relevance", 0.5)),
+            )
+        
+            return {"status": "ok", "proposal_id": id(proposal)}
+    
+        except Exception as e:
+            logger.error(f"Ошибка подачи proposal: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+
+    @app.post("/api/memory/consolidate")
+    async def consolidate_memories():
+        """Запуск консолидации памяти."""
+        if not web_environment.leya:
+            return JSONResponse({"error": "Лея не инициализирована"}, status_code=500)
+    
+        try:
+            stats = await web_environment.leya.memory.consolidate_memories()
+            return {"status": "ok", "stats": stats}
+        except Exception as e:
+            logger.error(f"Ошибка консолидации: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+
+    @app.post("/api/memory/forget")
+    async def forget_weak_memories(request: dict):
+        """Забыть слабые воспоминания."""
+        if not web_environment.leya:
+            return JSONResponse({"error": "Лея не инициализирована"}, status_code=500)
+    
+        try:
+            threshold = float(request.get("threshold", 0.1))
+            forgotten = await web_environment.leya.memory.forget_weak_memories(threshold)
+            return {"status": "ok", "forgotten": forgotten}
+        except Exception as e:
+            logger.error(f"Ошибка забывания: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+
+    @app.get("/api/self-model")
+    async def get_self_model():
+        """Получение текущей само-модели."""
+        if not web_environment.leya:
+            return {"self_model": ""}
+    
+        try:
+            self_model = await web_environment.leya.memory.get_self_model_context()
+            return {"self_model": self_model}
+        except Exception as e:
+            logger.error(f"Ошибка получения self_model: {e}")
+            return {"self_model": "", "error": str(e)}
+
+
+    @app.get("/api/soul")
+    async def get_soul_files():
+        """Получение содержимого файлов души."""
+        if not web_environment.leya:
+            return {}
+    
+        try:
+            if hasattr(web_environment, "soul_manager"):
+                return web_environment.soul_manager.get_all_contents()
+            return {}
+        except Exception as e:
+            logger.error(f"Ошибка получения soul files: {e}")
+            return {}
+
+
+    @app.post("/api/soul/update")
+    async def update_soul_file(request: dict):
+        """Обновление файла души."""
+        if not web_environment.leya:
+            return JSONResponse({"error": "Лея не инициализирована"}, status_code=500)
+    
+        try:
+            filename = request.get("filename")
+            content = request.get("content", "")
+        
+            if not filename:
+                return JSONResponse({"error": "filename не указан"}, status_code=400)
+        
+            if hasattr(web_environment, "soul_manager"):
+                result = web_environment.soul_manager.write_file(filename, content)
+            
+                # Broadcast обновления
+                await web_environment.broadcast_soul_update(
+                    web_environment.soul_manager.get_all_contents()
+                )
+            
+                return {"status": "ok", "result": result}
+        
+            return JSONResponse({"error": "SoulManager не доступен"}, status_code=500)
+    
+        except Exception as e:
+            logger.error(f"Ошибка обновления soul file: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
 
 async def run_server(web_environment):
     """
