@@ -13,9 +13,60 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from leya_core.environment import Environment
 from leya_core.exceptions import LeyaBroadcastError, LeyaEnvironmentError
+from pydantic import BaseModel, ValidationError
+from typing import Literal
 
 logger = logging.getLogger("WebEnvironment")
 
+# =========================================================================
+# Pydantic модели для валидации broadcast сообщений (Шаг 4)
+# =========================================================================
+
+class BaseBroadcastMessage(BaseModel):
+    """Базовая модель broadcast сообщения."""
+    type: str
+    timestamp: Optional[float] = None
+
+class ThoughtMessage(BaseBroadcastMessage):
+    """Модель сообщения мысли."""
+    type: Literal["thought"]
+    thought_type: str  # "internal", "spontaneous", "reflection", "workspace"
+    content: str
+
+class DrivesUpdateMessage(BaseBroadcastMessage):
+    """Модель обновления драйвов."""
+    type: Literal["drives_update"]
+    data: Dict[str, float]
+
+class SelfModelUpdateMessage(BaseBroadcastMessage):
+    """Модель обновления само-модели."""
+    type: Literal["self_model_update"]
+    data: str
+
+class MemoryUpdateMessage(BaseBroadcastMessage):
+    """Модель обновления памяти."""
+    type: Literal["memory_update"]
+    data: Dict[str, Any]
+
+class StateUpdateMessage(BaseBroadcastMessage):
+    """Модель обновления состояния."""
+    type: Literal["state_update"]
+    data: str
+
+class SoulUpdateMessage(BaseBroadcastMessage):
+    """Модель обновления души."""
+    type: Literal["soul_update"]
+    data: Dict[str, str]
+
+class LeyaResponseMessage(BaseBroadcastMessage):
+    """Модель ответа Леи."""
+    type: Literal["leya_response"]
+    content: str
+
+class UserMessageBroadcast(BaseBroadcastMessage):
+    """Модель сообщения пользователя (broadcast)."""
+    type: Literal["user_message"]
+    content: str
 
 class WebEnvironment(Environment):
     """
@@ -78,8 +129,43 @@ class WebEnvironment(Environment):
     async def broadcast(self, message: Dict[str, Any]):
         """
         Отправка сообщения всем подключенным клиентам.
+    
+        ИСПРАВЛЕНИЕ ШАГ 4: Валидирует структуру сообщения через Pydantic модели.
         Явно обрабатывает LeyaBroadcastError и очищает отключившихся.
         """
+        # Валидация структуры сообщения
+        msg_type = message.get("type")
+        if not msg_type:
+            logger.error(f"WebEnvironment: Сообщение без type: {message}")
+            raise LeyaBroadcastError("Сообщение broadcast должно содержать 'type'")
+    
+        # Попытка валидации через Pydantic модель
+        try:
+            model_map = {
+                "thought": ThoughtMessage,
+                "drives_update": DrivesUpdateMessage,
+                "self_model_update": SelfModelUpdateMessage,
+                "memory_update": MemoryUpdateMessage,
+                "state_update": StateUpdateMessage,
+                "soul_update": SoulUpdateMessage,
+                "leya_response": LeyaResponseMessage,
+                "user_message": UserMessageBroadcast,
+            }
+        
+            if msg_type in model_map:
+                # Валидируем через Pydantic
+                validated = model_map[msg_type](**message)
+                # Конвертируем обратно в dict для JSON serialization
+                message = validated.model_dump(exclude_none=True)
+            else:
+                logger.warning(f"WebEnvironment: Неизвестный тип сообщения: {msg_type}")
+        except ValidationError as exc:
+            logger.error(f"WebEnvironment: Ошибка валидации сообщения типа {msg_type}: {exc}")
+            raise LeyaBroadcastError(
+                f"Невалидная структура сообщения типа {msg_type}",
+                context={"validation_error": str(exc)}
+            ) from exc
+    
         # Сохраняем в историю
         message["timestamp"] = datetime.now().timestamp()
         self.message_history.append(message)
@@ -88,18 +174,16 @@ class WebEnvironment(Environment):
 
         # Отправляем всем клиентам
         disconnected: Set[WebSocket] = set()
-        for client in list(self.connected_clients):  # list() чтобы избежать изменения set во время итерации
+        for client in list(self.connected_clients):
             try:
                 await client.send_json(message)
             except WebSocketDisconnect:
                 logger.debug(f"WebEnvironment: Клиент отключился во время broadcast")
                 disconnected.add(client)
             except RuntimeError as e:
-                # WebSocket уже закрыт
                 logger.debug(f"WebEnvironment: WebSocket закрыт: {e}")
                 disconnected.add(client)
             except Exception as e:
-                # Неожиданная ошибка — оборачиваем в LeyaBroadcastError
                 logger.warning(f"WebEnvironment: Ошибка отправки клиенту: {e}")
                 disconnected.add(client)
 

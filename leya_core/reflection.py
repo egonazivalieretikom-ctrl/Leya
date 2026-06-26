@@ -38,6 +38,7 @@ from .exceptions import (
     LeyaToolError,
     LeyaWorkspaceError,
 )
+from .thinker import repair_json
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +400,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             thoughts_context = ""
             if recent_thoughts:
                 thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join(
-                    [f"- {t.content if hasattr(t, 'content') else t}" for t in recent_thoughts]
+                    [f"- {t.content if hasattr(t, 'content') else ''}" for t in recent_thoughts]
                 )
         except LeyaMemoryError as exc:
             logger.warning(f"MetaCognition: Не удалось загрузить недавние мысли: {exc}")
@@ -411,29 +412,35 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             thoughts_context = ""
 
         prompt = f"""
-Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
+    Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
 
-Твоё текущее состояние:
-{drive_state}
-{thoughts_context}
+    Твоё текущее состояние:
 
-О чём ты думаешь? Верни свой ответ как обычный текст.
-"""
+    {drive_state}
+
+    {thoughts_context}
+
+    О чём ты думаешь? Верни свой ответ как обычный текст.
+    """
 
         try:
             thought = await self.llm_client(prompt)
             result = thought.strip()
 
-            # Если вернулось что-то похожее на JSON, извлекаем текст
+            # ИСПРАВЛЕНИЕ ШАГ 4: Используем repair_json для извлечения текста из JSON
             if result.startswith("{"):
                 try:
-                    data = json.loads(result)
-                    return data.get("thought", data.get("response", str(data)))
-                except json.JSONDecodeError:
+                    # Пытаемся извлечь текст из JSON
+                    cleaned = repair_json(result)
+                    if cleaned != "{}":
+                        data = json.loads(cleaned)
+                        return data.get("thought", data.get("response", str(data)))
+                except (json.JSONDecodeError, Exception) as parse_exc:
+                    logger.debug(f"Не удалось распарсить спонтанную мысль как JSON: {parse_exc}")
+                    # Fallback: возвращаем как есть
                     pass
-
+        
             return result
-
         except LeyaLLMError as exc:
             logger.warning(f"MetaCognition: Ошибка LLM при генерации спонтанной мысли: {exc}")
             return "Мои мысли текут свободно, без направления..."

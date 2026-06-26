@@ -431,6 +431,8 @@ CRITICAL: Return ONLY valid JSON.
     def _safe_parse_json(self, response: str) -> dict[str, Any]:
         """
         Безопасный парсинг JSON с учётом markdown-блоков LLM.
+    
+        Использует repair_json() для очистки от QWEN-артефактов.
 
         Raises:
             LeyaJSONParseError: если не удалось распарсить
@@ -438,31 +440,26 @@ CRITICAL: Return ONLY valid JSON.
         if not response:
             return {}
 
-        # Очистка от markdown
-        cleaned = response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        # Поиск JSON-блока
-        json_match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
-        if json_match:
+        # ИСПРАВЛЕНИЕ ШАГ 4: Используем repair_json() вместо ручной очистки
+        cleaned = repair_json(response)
+    
+        if cleaned == "{}":
+            # repair_json не смог восстановить — пробуем прямой парсинг как последний шанс
             try:
-                return json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                pass
+                return json.loads(response.strip())
+            except json.JSONDecodeError as exc:
+                raise LeyaJSONParseError(
+                    "Не удалось распарсить JSON от LLM даже после repair_json",
+                    context={"response_preview": response[:200], "error": str(exc)},
+                ) from exc
 
-        # Попытка парсинга как есть
+        # Попытка парсинга очищенного JSON
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as exc:
             raise LeyaJSONParseError(
-                "Не удалось распарсить JSON от LLM",
-                context={"response_preview": response[:200], "error": str(exc)},
+                "repair_json вернул невалидный JSON",
+                context={"cleaned_preview": cleaned[:200], "error": str(exc)},
             ) from exc
 
     def _generate_fallback_response(self, stimulus: dict[str, Any]) -> dict[str, Any]:

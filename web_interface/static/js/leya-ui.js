@@ -117,59 +117,159 @@ class LeyaUI {
     attemptReconnect() {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`Попытка переподключения ${this.reconnectAttempts}/${this.maxReconnectAttempts}...`);
-            setTimeout(() => this.connectWebSocket(), this.reconnectDelay);
+
+            // ИСПРАВЛЕНИЕ ШАГ 4: Exponential backoff
+            const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+            const maxDelay = 30000; // Максимум 30 секунд
+            const actualDelay = Math.min(delay, maxDelay);
+
+            console.log(`Попытка переподключения ${this.reconnectAttempts}/${this.maxReconnectAttempts} через ${actualDelay / 1000}с...`);
+
+            // Показываем статус переподключения
+            this.updateStatus('reconnecting');
+
+            setTimeout(() => this.connectWebSocket(), actualDelay);
         } else {
             console.error('Превышено максимальное количество попыток переподключения');
             this.updateStatus('error');
+
+            // Показываем ошибку пользователю
+            this.addChatMessage('system', '❌ Не удалось подключиться к Лее. Проверьте соединение и перезагрузите страницу.');
         }
     }
 
     handleMessage(data) {
         const { type, content, thought_type, data: payload } = data;
 
-        switch (type) {
-            case 'leya_response':
-                this.addChatMessage('leya', content);
-                break;
+        try {
+            switch (type) {
+                case 'leya_response':
+                    this.addChatMessage('leya', content);
+                    break;
 
-            case 'user_message':
-                this.addChatMessage('user', content);
-                break;
+                case 'user_message':
+                    this.addChatMessage('user', content);
+                    break;
 
-            case 'thought':
-                this.thoughtsFeed.addThought(thought_type, content);
-                break;
+                case 'thought':
+                    // ИСПРАВЛЕНИЕ ШАГ 4: Try/catch вокруг вызова компонента
+                    try {
+                        if (this.thoughtsFeed) {
+                            this.thoughtsFeed.addThought(thought_type, content);
+                        }
+                    } catch (thoughtError) {
+                        console.error('Ошибка добавления мысли в feed:', thoughtError);
+                    }
+                    break;
 
-            case 'drives_update':
-                this.drivesChart.update(payload);
-                this.updateDrivesList(payload);
-                break;
+                case 'drives_update':
+                    // ИСПРАВЛЕНИЕ ШАГ 4: Try/catch вокруг вызова компонента
+                    try {
+                        if (this.drivesChart && payload) {
+                            this.drivesChart.update(payload);
+                            this.updateDrivesList(payload);
+                        }
+                    } catch (drivesError) {
+                        console.error('Ошибка обновления драйвов:', drivesError);
+                    }
+                    break;
 
-            case 'self_model_update':
-                if (this.selfModelPanel) {
-                    this.selfModelPanel.loadSelfModel();
-                }
-                break;
+                case 'self_model_update':
+                    try {
+                        if (this.selfModelPanel) {
+                            this.selfModelPanel.loadSelfModel();
+                        }
+                    } catch (selfModelError) {
+                        console.error('Ошибка обновления self_model:', selfModelError);
+                    }
+                    break;
 
-            case 'state_update':
-                this.updateStatus(payload);
-                break;
+                case 'state_update':
+                    this.updateStatus(payload);
+                    break;
 
-            case 'memory_update':
-                if (this.memoryGraph) {
-                    this.memoryGraph.loadGraph();
-                }
-                break;
+                case 'memory_update':
+                    try {
+                        if (this.memoryGraph) {
+                            this.memoryGraph.loadGraph();
+                        }
+                    } catch (memoryError) {
+                        console.error('Ошибка обновления памяти:', memoryError);
+                    }
+                    break;
 
-            case 'soul_update':
-                if (this.selfModelPanel) {
-                    this.selfModelPanel.loadSoulFiles();
-                }
-                break;
+                case 'soul_update':
+                    try {
+                        if (this.selfModelPanel) {
+                            this.selfModelPanel.loadSoulFiles();
+                        }
+                    } catch (soulError) {
+                        console.error('Ошибка обновления души:', soulError);
+                    }
+                    break;
 
-            default:
-                console.warn('Неизвестный тип сообщения:', type);
+                // ИСПРАВЛЕНИЕ ШАГ 4: Обработка action_intent и tool_call
+                case 'action_intent':
+                    this.handleActionIntent(payload);
+                    break;
+
+                case 'tool_call':
+                    this.handleToolCall(payload);
+                    break;
+
+                // ИСПРАВЛЕНИЕ ШАГ 4: Fallback mode indicator
+                case 'fallback_mode':
+                    this.showFallbackMode(payload);
+                    break;
+
+                default:
+                    console.warn('Неизвестный тип сообщения:', type);
+            }
+        } catch (error) {
+            console.error('Критическая ошибка обработки сообщения:', error, data);
+        }
+    }
+
+    handleActionIntent(payload) {
+        if (!payload || !payload.intent) return;
+
+        const intentMessages = {
+            'think': '🤔 Лея размышляет...',
+            'respond': '💬 Лея готовит ответ...',
+            'search': '🔍 Лея ищет информацию...',
+            'rest': '😴 Лея отдыхает...',
+            'explore': '🧭 Лея исследует...',
+        };
+
+        const message = intentMessages[payload.intent] || `⚡ Действие: ${payload.intent}`;
+        this.addChatMessage('system', message);
+    }
+
+    handleToolCall(payload) {
+        if (!payload || !payload.tool_name) return;
+
+        const message = `🛠️ Лея использует инструмент: ${payload.tool_name}`;
+        this.addChatMessage('system', message);
+    }
+
+    showFallbackMode(payload) {
+        const isFallback = payload && payload.active;
+        const indicator = document.getElementById('fallback-indicator');
+
+        if (!indicator) {
+            // Создаём индикатор, если его нет
+            const newIndicator = document.createElement('div');
+            newIndicator.id = 'fallback-indicator';
+            newIndicator.className = 'fixed top-4 right-4 bg-amber-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 hidden';
+            newIndicator.innerHTML = '⚠️ Fallback Mode: LLM недоступен';
+            document.body.appendChild(newIndicator);
+        }
+
+        const fallbackIndicator = document.getElementById('fallback-indicator');
+        if (isFallback) {
+            fallbackIndicator.classList.remove('hidden');
+        } else {
+            fallbackIndicator.classList.add('hidden');
         }
     }
 
@@ -207,20 +307,24 @@ class LeyaUI {
         }).join('');
     }
 
-    updateStatus(state) {
+    updateStatus(status) {
+        const indicator = document.getElementById('status-indicator');
+        if (!indicator) return;
+
         const statusMap = {
-            'awake': { color: 'bg-green-500', text: 'Awake' },
-            'sleeping': { color: 'bg-blue-500', text: 'Sleeping' },
-            'initializing': { color: 'bg-yellow-500', text: 'Initializing' },
-            'disconnected': { color: 'bg-red-500', text: 'Disconnected' },
-            'error': { color: 'bg-red-500', text: 'Error' },
+            'awake': { text: 'Awake', color: 'bg-green-500' },
+            'sleeping': { text: 'Sleeping', color: 'bg-blue-500' },
+            'disconnected': { text: 'Disconnected', color: 'bg-red-500' },
+            'reconnecting': { text: 'Reconnecting...', color: 'bg-yellow-500 animate-pulse' },
+            'error': { text: 'Error', color: 'bg-red-600' },
         };
 
-        const status = statusMap[state] || statusMap['disconnected'];
-        this.statusIndicator.innerHTML = `
-            <span class="w-2 h-2 rounded-full ${status.color} animate-pulse"></span>
-            <span class="text-sm text-gray-300">${status.text}</span>
-        `;
+        const statusInfo = statusMap[status] || { text: status, color: 'bg-gray-500' };
+
+        indicator.innerHTML = `
+        <span class="w-2 h-2 rounded-full ${statusInfo.color}"></span>
+        <span class="text-sm text-gray-300">${statusInfo.text}</span>
+    `;
     }
 
     setupEventListeners() {
