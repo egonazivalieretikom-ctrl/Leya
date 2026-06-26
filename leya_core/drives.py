@@ -386,6 +386,33 @@ class DriveSystem:
 
         return "\n".join(lines)
 
+    def get_drives_state(self) -> dict[str, dict[str, float]]:
+        """
+        Возвращает полное состояние всех драйвов в структурированном виде.
+        Публичный API для UI и внешних потребителей.
+
+        Returns:
+            dict вида:
+            {
+                "CURIOSITY": {
+                    "current": 0.5,
+                    "tension": 0.3,
+                    "target": 0.8,
+                    "satisfaction": 0.0
+                },
+                ...
+            }
+        """
+        result = {}
+        for drive_type, drive in self.drives.items():
+            result[drive_type.value] = {
+                "current": drive.current,
+                "tension": drive.tension,
+                "target": drive.target,
+                "satisfaction": drive.current - drive.tension if drive.current > drive.tension else 0.0,
+            }
+        return result
+
     def _describe_drive_state(self, drive: Drive) -> str:
         """Генерирует текстовое описание состояния драйва."""
         if drive.current < 0.2:

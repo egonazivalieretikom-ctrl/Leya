@@ -425,6 +425,111 @@ class MemorySystem:
         candidates.sort(key=lambda e: e.timestamp, reverse=True)
         return candidates[:limit]
 
+    async def get_memory_graph_data(
+        self,
+        min_retention: float = 0.1,
+        max_nodes: int = 100,
+        include_synapses: bool = True,
+    ) -> dict:
+        """
+        Возвращает данные для визуализации графа памяти (nodes + edges).
+        Вся логика фильтрации, сортировки и форматирования инкапсулирована здесь.
+
+        Args:
+            min_retention: минимальный retention_strength для включения
+            max_nodes: максимальное количество узлов
+            include_synapses: включать ли рёбра (synapses)
+
+        Returns:
+            {
+                "nodes": [...],
+                "edges": [...],
+                "total_engrams": int,
+                "total_synapses": int,
+            }
+        """
+        # 1. Фильтрация и сортировка engrams
+        engrams = [
+            e for e in self.engrams.values()
+            if e.retention_strength >= min_retention
+        ]
+        engrams.sort(key=lambda e: e.retention_strength, reverse=True)
+        engrams = engrams[:max_nodes]
+
+        total_engrams = len(self.engrams)
+        total_synapses = len(self.synapses)
+
+        # 2. Построение узлов
+        nodes = []
+        for engram in engrams:
+            # Цвет по типу памяти
+            if engram.memory_type.value == "episodic":
+                color = "#00d4ff"  # cyan
+            elif engram.memory_type.value == "semantic":
+                color = "#ffb347"  # amber
+            else:
+                color = "#888888"
+
+            # Размер по количеству извлечений
+            size = 10 + min(30, engram.retrieval_count * 2)
+
+            # Label: усечённый контент
+            label = engram.content[:50] + "..." if len(engram.content) > 50 else engram.content
+
+            # Title: полная информация для tooltip
+            title = (
+                f"**{engram.memory_type.value}**\n\n"
+                f"{engram.content}\n\n"
+                f"Retention: {engram.retention_strength:.2f}\n"
+                f"Retrievals: {engram.retrieval_count}\n"
+                f"Emotional: {engram.emotional_boost:.2f}\n"
+                f"Consolidation: {engram.consolidation_level}"
+            )
+
+            nodes.append({
+                "id": engram.id,
+                "label": label,
+                "title": title,
+                "color": {
+                    "background": color,
+                    "border": color,
+                    "highlight": {"background": "#ffffff", "border": color},
+                },
+                "size": size,
+                "memory_type": engram.memory_type.value,
+                "retention_strength": engram.retention_strength,
+                "retrieval_count": engram.retrieval_count,
+                "emotional_boost": engram.emotional_boost,
+                "consolidation_level": engram.consolidation_level,
+            })
+
+        # 3. Построение рёбер
+        edges = []
+        if include_synapses:
+            node_ids = {n["id"] for n in nodes}
+            for synapse in self.synapses.values():
+                if synapse.source_id in node_ids and synapse.target_id in node_ids:
+                    edges.append({
+                        "from": synapse.source_id,
+                        "to": synapse.target_id,
+                        "width": 1 + synapse.weight * 5,
+                        "color": {
+                            "color": f"rgba(0, 212, 255, {min(1.0, synapse.weight)})",
+                            "highlight": "#ffffff",
+                        },
+                        "title": (
+                            f"Weight: {synapse.weight:.2f}\n"
+                            f"Activations: {synapse.activation_count}"
+                        ),
+                    })
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "total_engrams": total_engrams,
+            "total_synapses": total_synapses,
+        }
+
     async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
         """Получить недавние спонтанные мысли (помеченные в metadata)."""
         thoughts = [

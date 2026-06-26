@@ -22,7 +22,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Optional, Any
 
 from .config import ThinkerConfig
 from .exceptions import LeyaJSONParseError, LeyaLLMError
@@ -30,6 +30,118 @@ from .interfaces import ICoreThinker
 
 logger = logging.getLogger(__name__)
 
+def repair_json(raw: str) -> str:
+    """
+    Очищает сырой ответ LLM от markdown-обёрток, пояснительного текста
+    и других артефактов, оставляя только валидный JSON.
+
+    Обрабатывает типичные проблемы Qwen/QWEN:
+    - ```json ... ``` обёртки
+    - Текст ДО и ПОСЛЕ JSON
+    - Незакрытые скобки
+    - Трейлинг-запятые
+
+    Args:
+        raw: Сырой текст ответа LLM
+
+    Returns:
+        Очищенная JSON-строка (может быть невалидной — проверка на вызывающей стороне)
+    """
+    if not raw:
+        return "{}"
+
+    text = raw.strip()
+
+    # 1. Убираем markdown code blocks: ```json ... ``` или ``` ... ```
+    md_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
+    if md_match:
+        text = md_match.group(1).strip()
+
+    # 2. Если текст не начинается с { или [, ищем первый JSON-объект/массив
+    if not text.startswith(('{', '[')):
+        # Ищем первое вхождение { или [
+        first_brace = text.find('{')
+        first_bracket = text.find('[')
+
+        if first_brace == -1 and first_bracket == -1:
+            # Нет JSON вообще — возвращаем пустой объект
+            logger.warning(f"repair_json: Не найден JSON в ответе: {text[:200]}")
+            return "{}"
+
+        # Берём самую раннюю скобку
+        if first_brace == -1:
+            start = first_bracket
+        elif first_bracket == -1:
+            start = first_brace
+        else:
+            start = min(first_brace, first_bracket)
+
+        text = text[start:]
+
+    # 3. Находим последнюю закрывающую скобку (балансировка)
+    # Считаем баланс скобок
+    depth_brace = 0
+    depth_bracket = 0
+    end_pos = len(text)
+    in_string = False
+    escape_next = False
+
+    for i, ch in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\':
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+
+        if ch == '{':
+            depth_brace += 1
+        elif ch == '}':
+            depth_brace -= 1
+            if depth_brace == 0 and depth_bracket == 0:
+                end_pos = i + 1
+                break
+        elif ch == '[':
+            depth_bracket += 1
+        elif ch == ']':
+            depth_bracket -= 1
+            if depth_brace == 0 and depth_bracket == 0:
+                end_pos = i + 1
+                break
+
+    text = text[:end_pos]
+
+    # 4. Убираем трейлинг-запятые перед } или ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+
+    # 5. Попытка валидации — если невалидно, пробуем восстановить
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # 6. Если скобки не сбалансированы — добавляем недостающие
+    open_braces = text.count('{') - text.count('}')
+    open_brackets = text.count('[') - text.count(']')
+
+    if open_braces > 0:
+        text += '}' * open_braces
+    if open_brackets > 0:
+        text += ']' * open_brackets
+
+    # Финальная попытка
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        logger.warning(f"repair_json: Не удалось восстановить JSON: {text[:200]}")
+        return "{}"
 
 class CoreThinker(ICoreThinker):
     """

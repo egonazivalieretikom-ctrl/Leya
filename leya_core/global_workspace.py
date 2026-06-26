@@ -206,6 +206,52 @@ class GlobalWorkspace:
         """Получить текущий фокус внимания."""
         return self.current_focus
 
+    def get_workspace_status(self) -> dict:
+        """
+        Возвращает полное состояние workspace: все proposals + текущий focus.
+        Публичный API для UI.
+
+        Returns:
+            {
+                "proposals": list[dict],
+                "focus": dict | None,
+                "total": int,
+            }
+        """
+        import time
+
+        proposals_data = []
+        for i, p in enumerate(self.proposals):
+            proposals_data.append({
+                "id": i,
+                "source": p.source,
+                "content": p.content,
+                "action_type": p.action_type,
+                "priority": p.priority.name if hasattr(p.priority, 'name') else str(p.priority),
+                "urgency": p.urgency,
+                "drive_relevance": p.drive_relevance,
+                "timestamp": p.timestamp,
+                "age_seconds": time.time() - p.timestamp,
+            })
+
+        focus = self.get_focus()
+        focus_data = None
+        if focus:
+            focus_data = {
+                "source": focus.source,
+                "content": focus.content,
+                "action_type": focus.action_type,
+                "priority": focus.priority.name if hasattr(focus.priority, 'name') else str(focus.priority),
+                "urgency": focus.urgency,
+                "drive_relevance": focus.drive_relevance,
+            }
+
+        return {
+            "proposals": proposals_data,
+            "focus": focus_data,
+            "total": len(proposals_data),
+        }
+
     def get_status(self) -> dict[str, Any]:
         """Получить статус workspace для диагностики."""
         return {
