@@ -50,14 +50,43 @@ class MemoryConfig:
     max_recent_episodes: int = 20
     context_limit: int = 5
     
-    def __post_init__(self):
-        """Валидация значений."""
-        # Создание директории если не существует
-        Path(self.brain_dir).mkdir(parents=True, exist_ok=True)
-        
-        self.consolidation_threshold = max(0.0, min(1.0, self.consolidation_threshold))
-        self.max_recent_episodes = max(5, min(100, self.max_recent_episodes))
-        self.context_limit = max(1, min(20, self.context_limit))
+    def __post_init__(self) -> None:
+        """Валидация и подготовка brain_dir."""
+        from .exceptions import LeyaConfigError  # локальный импорт во избежание циклов
+
+        # Нормализация пути
+        path = Path(self.brain_dir).expanduser().resolve()
+        self.brain_dir = str(path)
+
+        # Автоматическое создание директории мозга
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise LeyaConfigError(
+                f"Не удалось создать brain_dir: {path}",
+                context={"path": str(path), "error": str(exc)},
+            ) from exc
+
+        # Проверка прав на запись
+        if not os.access(path, os.W_OK):
+            raise LeyaConfigError(
+                f"brain_dir недоступен для записи: {path}",
+                context={"path": str(path)},
+            )
+
+        # Валидация порогов забывания (Эббингауз)
+        if not (0.0 < self.forgetting_threshold < 1.0):
+            raise LeyaConfigError(
+                "forgetting_threshold должен быть в (0.0, 1.0)",
+                context={"value": self.forgetting_threshold},
+            )
+
+        # Валидация интервалов метаболизма
+        if self.metabolism_interval_seconds <= 0:
+            raise LeyaConfigError(
+                "metabolism_interval_seconds должен быть > 0",
+                context={"value": self.metabolism_interval_seconds},
+            )
 
 
 @dataclass

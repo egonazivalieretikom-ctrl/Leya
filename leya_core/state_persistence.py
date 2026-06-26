@@ -1,71 +1,167 @@
-"""
-leya_core/state_persistence.py — Сохранение и загрузка состояния Леи между сессиями.
-"""
+# Расположение: leya_core/state_persistence.py
+# Заменить методы _save_state и _load_state полностью.
 
-import json
+import hashlib
+import hmac
 import os
-import logging
-from datetime import datetime
-from typing import Dict, Any
+import pickle
+import tempfile
+from pathlib import Path
+from typing import Any
 
-logger = logging.getLogger("StatePersistence")
+from .exceptions import (
+    LeyaAtomicWriteError,
+    LeyaPersistenceError,
+    LeyaStateCorruptedError,
+    LeyaStateVersionMismatchError,
+)
+
+# Текущая версия формата состояния.
+# Инкрементировать при несовместимых изменениях структуры payload.
+STATE_FORMAT_VERSION: int = 2
+
+# Ключ HMAC. В production должен браться из .env (LEYA_STATE_HMAC_KEY).
+# Здесь — fallback для разработки. НЕ ХРАНИТЬ В РЕПОЗИТОРИИ В ПРОДАКШЕНЕ.
+_DEFAULT_HMAC_KEY_ENV: str = "LEYA_STATE_HMAC_KEY"
+_FALLBACK_HMAC_KEY: bytes = b"leya-dev-key-change-me-in-production"
 
 
-class StatePersistence:
-    """Сохраняет и загружает состояние Леи из JSON файла."""
-    
-    def __init__(self, state_file: str = "./leya_brain/leya_state.json"):
-        self.state_file = state_file
-        self._ensure_directory()
-    
-    def _ensure_directory(self):
-        directory = os.path.dirname(self.state_file)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-    
-    def save_state(self, state: Dict[str, Any]) -> bool:
-        """Сохраняет состояние в JSON файл."""
+def _get_hmac_key() -> bytes:
+    key = os.environ.get(_DEFAULT_HMAC_KEY_ENV)
+    if key:
+        return key.encode("utf-8")
+    return _FALLBACK_HMAC_KEY
+
+
+def _compute_hmac(path: Path, key: bytes) -> str:
+    h = hmac.new(key, digestmod=hashlib.sha256)
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _save_state(self, payload: dict[str, Any]) -> None:
+    """
+    Атомарная запись состояния с HMAC-подписью и версионированием.
+
+    Алгоритм:
+    1. Обернуть payload в {'__version__': N, 'data': payload}.
+    2. Сериализовать pickle во временный файл в той же директории.
+    3. Вычислить HMAC-SHA256 от tmp-файла, записать в <file>.hmac.
+    4. os.replace(tmp → target) — атомарно на POSIX.
+    """
+    state_path = Path(self.state_path).expanduser().resolve()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    versioned_payload = {
+        "__version__": STATE_FORMAT_VERSION,
+        "data": payload,
+    }
+
+    # Временный файл в той же ФС, чтобы os.replace был атомарным
+    fd, tmp_path_str = tempfile.mkstemp(
+        prefix=state_path.name + ".",
+        suffix=".tmp",
+        dir=str(state_path.parent),
+    )
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            pickle.dump(versioned_payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        # Подпись
+        key = _get_hmac_key()
+        signature = _compute_hmac(tmp_path, key)
+        hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+        hmac_path.write_text(signature, encoding="utf-8")
+
+        # Атомарная замена
         try:
-            state["_saved_at"] = datetime.now().isoformat()
-            
-            # Создаём резервную копию предыдущего состояния
-            if os.path.exists(self.state_file):
-                backup_path = self.state_file + ".backup"
-                try:
-                    os.replace(self.state_file, backup_path)
-                except Exception:
-                    pass
-            
-            with open(self.state_file, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            
-            logger.info(f"StatePersistence: Состояние сохранено ({os.path.getsize(self.state_file)} байт)")
-            return True
-        
-        except Exception as e:
-            logger.error(f"StatePersistence: Ошибка сохранения: {e}")
-            return False
-    
-    def load_state(self) -> Dict[str, Any]:
-        """Загружает состояние из JSON файла."""
-        if not os.path.exists(self.state_file):
-            # Пробуем загрузить из резервной копии
-            backup_path = self.state_file + ".backup"
-            if os.path.exists(backup_path):
-                logger.info("StatePersistence: Основной файл не найден, загружаем из резервной копии")
-                self.state_file = backup_path
-            else:
-                logger.info("StatePersistence: Файл состояния не найден, начинаем с чистого листа")
-                return {}
-        
-        try:
-            with open(self.state_file, 'r', encoding='utf-8') as f:
-                state = json.load(f)
-            
-            saved_at = state.get("_saved_at", "неизвестно")
-            logger.info(f"StatePersistence: Состояние загружено (сохранено: {saved_at})")
-            return state
-        
-        except Exception as e:
-            logger.error(f"StatePersistence: Ошибка загрузки: {e}")
-            return {}
+            os.replace(tmp_path, state_path)
+        except OSError as exc:
+            raise LeyaAtomicWriteError(
+                "Не удалось атомарно заменить state-файл",
+                context={"target": str(state_path), "error": str(exc)},
+            ) from exc
+    except LeyaPersistenceError:
+        # Пробрасываем наши исключения
+        raise
+    except Exception as exc:
+        raise LeyaPersistenceError(
+            "Сбой при сохранении состояния",
+            context={"path": str(state_path), "error": str(exc)},
+        ) from exc
+    finally:
+        # Очистка tmp на случай ошибки до os.replace
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def _load_state(self) -> dict[str, Any] | None:
+    """
+    Загрузка состояния с проверкой HMAC и версии.
+
+    Возвращает:
+    - dict с данными (ключ 'data' распакован) — при успехе.
+    - None — если файл отсутствует.
+
+    Бросает:
+    - LeyaStateCorruptedError — не совпадает HMAC или повреждён pickle.
+    - LeyaStateVersionMismatchError — несовместимая версия.
+    """
+    state_path = Path(self.state_path).expanduser().resolve()
+    if not state_path.exists():
+        return None
+
+    hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+    key = _get_hmac_key()
+
+    # Проверка HMAC
+    if hmac_path.exists():
+        expected = hmac_path.read_text(encoding="utf-8").strip()
+        actual = _compute_hmac(state_path, key)
+        if not hmac.compare_digest(expected, actual):
+            raise LeyaStateCorruptedError(
+                "HMAC-подпись state-файла не совпадает",
+                context={"path": str(state_path)},
+            )
+    else:
+        # Файл без подписи — считаем недоверенным (кроме первого запуска)
+        raise LeyaStateCorruptedError(
+            "Отсутствует HMAC-подпись для state-файла",
+            context={"path": str(state_path)},
+        )
+
+    # Десериализация
+    try:
+        with state_path.open("rb") as f:
+            raw = pickle.load(f)
+    except (pickle.PickleError, EOFError, ValueError) as exc:
+        raise LeyaStateCorruptedError(
+            "Не удалось десериализовать state-файл",
+            context={"path": str(state_path), "error": str(exc)},
+        ) from exc
+
+    # Проверка версии
+    if not isinstance(raw, dict) or "__version__" not in raw:
+        raise LeyaStateVersionMismatchError(
+            "State-файл не содержит маркер версии (вероятно, старый формат)",
+            context={"path": str(state_path)},
+        )
+
+    file_version = raw["__version__"]
+    if file_version != STATE_FORMAT_VERSION:
+        raise LeyaStateVersionMismatchError(
+            "Несовместимая версия state-файла",
+            context={
+                "path": str(state_path),
+                "file_version": file_version,
+                "expected_version": STATE_FORMAT_VERSION,
+            },
+        )
+
+    return raw.get("data")
