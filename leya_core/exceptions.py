@@ -93,3 +93,39 @@ class LeyaBroadcastError(LeyaEnvironmentError):
 # --- Config ---
 class LeyaConfigError(LeyaError):
     """Ошибка конфигурации (невалидные значения .env)."""
+
+# --- Circuit Breaker ---
+class LeyaCircuitBreakerError(LeyaError):
+    """Ошибка Circuit Breaker (не связано с LLM напрямую)."""
+
+
+# --- Reflection / MetaCognition ---
+class LeyaReflectionError(LeyaError):
+    """Ошибка в мета-когниции (reflection, spontaneous thoughts)."""
+
+
+class LeyaInsightError(LeyaReflectionError):
+    """Ошибка генерации инсайта или экзистенциального вопроса."""
+
+
+# --- Tools ---
+class LeyaToolError(LeyaError):
+    """Ошибка выполнения инструмента."""
+
+
+class LeyaToolNotFoundError(LeyaToolError):
+    """Инструмент не найден в реестре."""
+
+
+class LeyaToolExecutionError(LeyaToolError):
+    """Ошибка выполнения инструмента (runtime)."""
+
+
+# --- Workspace ---
+class LeyaWorkspaceError(LeyaError):
+    """Ошибка в Global Workspace."""
+
+
+# --- Soul / Personality ---
+class LeyaSoulError(LeyaError):
+    """Ошибка загрузки или обновления души (personality, rules, values)."""

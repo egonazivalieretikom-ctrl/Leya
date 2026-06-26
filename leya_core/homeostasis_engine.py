@@ -1,438 +1,662 @@
 """
-leya_core/homeostasis_engine.py — Гомеостаз и автономные цели Леи.
-Этап 3.2: Полная переработка. Надежный JSON-парсинг, биологическая логика, RPE.
+leya_core/homeostasis_engine.py
+Автономный гомеостаз Леи — генерация целей на основе дисбаланса драйвов.
+
+Архитектура:
+- Генерация целей из дисбаланса драйвов (CURIOSITY, CONNECTION, AUTONOMY и др.)
+- RPE (Reward Prediction Error) feedback loop
+- Извлечение ключевых фактов и новых терминов через LLM
+- Отслеживание исследованных тем (mark_as_researched)
+- Динамические ключевые слова для расширения поиска
+- Rest period для предотвращения перегрузки
+
+Этап 1.2:
+- Замена широких except на специфичные исключения
+- Интеграция с HomeostasisConfig
+- Стандартизация на keyword arguments
+- Полная биологическая модель без упрощений
 """
-import asyncio
+from __future__ import annotations
+
 import json
 import logging
 import re
 import time
-from leya_core.config import settings
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, Any, Optional, List, Callable, Set
+from typing import Any, Callable, Dict, List, Optional
 
-logger = logging.getLogger("HomeostasisEngine")
+from .config import HomeostasisConfig
+from .drives import DriveType
+from .exceptions import (
+    LeyaHomeostasisError,
+    LeyaJSONParseError,
+    LeyaLLMError,
+)
 
+logger = logging.getLogger(__name__)
 
-# =================================================================================
-# МОДЕЛИ ДАННЫХ
-# =================================================================================
-
-@dataclass
-class Goal:
-    """Цель, сгенерированная гомеостазом."""
-    name: str  # Название цели (например, "Исследовать пробел: квантовая физика")
-    action_type: str  # Тип действия: "use_tool" или "rest"
-    expected_reward: float = 0.5  # Ожидаемая награда (0.0 - 1.0)
-    tool_name: str = ""  # Название инструмента (если action_type == "use_tool")
-    tool_parameters: Dict[str, Any] = field(default_factory=dict)  # Параметры инструмента
-    target_drives: Dict[str, float] = field(default_factory=dict)  # Целевые драйвы и их веса
-    reasoning: str = ""  # Обоснование цели
-    created_at: float = field(default_factory=time.time)
-    
-    def __post_init__(self):
-        """Валидация полей."""
-        self.name = self.name.strip() if self.name else "Неизвестная цель"
-        self.action_type = self.action_type.strip().lower() if self.action_type else "rest"
-        self.expected_reward = max(0.0, min(1.0, self.expected_reward))
-        
-        # Валидация action_type
-        valid_types = {"use_tool", "rest"}
-        if self.action_type not in valid_types:
-            logger.warning(f"Некорректный action_type: {self.action_type}. Сброс в 'rest'")
-            self.action_type = "rest"
-
-
-# =================================================================================
-# ГОМЕОСТАЗ И АВТОНОМНЫЕ ЦЕЛИ
-# =================================================================================
 
 class HomeostasisEngine:
     """
-    Гомеостаз Леи: генерация автономных целей на основе дисбаланса драйвов.
-    Позволяет Лее "жить" самостоятельно, исследуя пробелы в знаниях.
-    """
+    Автономный гомеостаз: генерация целей на основе дисбаланса драйвов.
     
-    def __init__(
-        self,
-        rest_period: int = None,
-        curiosity_threshold: float = None,
-        min_reward_threshold: float = None,
-        max_researched_topics: int = None
-    ):
-        self.rest_period = rest_period if rest_period is not None else settings.homeostasis.rest_period
-        self.curiosity_threshold = curiosity_threshold if curiosity_threshold is not None else settings.homeostasis.curiosity_threshold
-        self.min_reward_threshold = min_reward_threshold if min_reward_threshold is not None else settings.homeostasis.min_reward_threshold
-        self.max_researched_topics = max_researched_topics if max_researched_topics is not None else settings.homeostasis.max_researched_topics
+    Биологическая модель:
+    - Мониторинг дисбаланса драйвов (отклонение от целевых значений)
+    - Предсказание будущего состояния (predicted_state)
+    - Генерация целей для восстановления гомеостаза
+    - RPE feedback: оценка успешности действий
+    - Извлечение знаний из исследованных тем
+    - Отслеживание недавно исследованных тем (предотвращение зацикливания)
+    """
+
+    def __init__(self, config: Optional[HomeostasisConfig] = None) -> None:
+        """
+        Инициализация гомеостаза.
+        
+        Args:
+            config: Конфигурация гомеостаза (пороги, интервалы, лимиты)
+        """
+        self.config = config or HomeostasisConfig()
         
         # Состояние
-        self.current_goal: Optional[Goal] = None
+        self.recently_researched: List[str] = []
+        self.dynamic_keywords: List[str] = []
+        self.current_goal: Optional[Dict[str, Any]] = None
         self.last_action_time: float = 0.0
-        self.researched_topics: Set[str] = set()
         
-        logger.info(f"✅ HomeostasisEngine инициализирован. Rest period: {rest_period}s")
-    
-    # =================================================================================
-    # ГЕНЕРАЦИЯ ЦЕЛЕЙ
-    # =================================================================================
-    
+        # Пороги для генерации целей (адаптируются из self_model)
+        self.thresholds: Dict[DriveType, float] = {
+            DriveType.CURIOSITY: self.config.curiosity_threshold,
+            DriveType.CONNECTION: self.config.connection_threshold,
+            DriveType.AUTONOMY: self.config.autonomy_threshold,
+            DriveType.INTEGRITY: self.config.integrity_threshold,
+            DriveType.REST: self.config.rest_threshold,
+            DriveType.CREATIVITY: self.config.creativity_threshold,
+            DriveType.UNDERSTANDING: self.config.understanding_threshold,
+        }
+
+        # RPE tracking
+        self.last_rpe: float = 0.0
+        self.action_history: List[Dict[str, Any]] = []
+        self.max_action_history: int = 50
+
+        logger.info(
+            f"HomeostasisEngine инициализирован: "
+            f"rest_period={self.config.rest_period}с, "
+            f"min_reward={self.config.min_reward_threshold}"
+        )
+
     def generate_goal(
         self,
-        drive_state: Dict[str, float],
-        predicted_state: Dict[str, float],
-        recent_episodes: List[Dict[str, Any]],
-        action_values: Dict[str, float]
-    ) -> Optional[Goal]:
+        drive_state: Dict[DriveType, float],
+        predicted_state: Dict[DriveType, float],
+        recent_episodes: List[Any],
+        action_values: Dict[str, float],
+    ) -> Optional[Dict[str, Any]]:
         """
         Генерация цели на основе дисбаланса драйвов.
         
-        Args:
-            drive_state: Текущее состояние драйвов {drive_name: value}
-            predicted_state: Предсказанное состояние драйвов
-            recent_episodes: Недавние эпизоды из памяти
-            action_values: Ценности действий для homeostasis
-            
-        Returns:
-            Goal или None (если нет дисбаланса)
-        """
-        try:
-            # Анализ дисбаланса драйвов
-            max_drive = max(drive_state.values()) if drive_state else 0.0
-            max_drive_name = max(drive_state, key=drive_state.get) if drive_state else ""
-            
-            # Если нет значительного дисбаланса — покой
-            if max_drive < self.curiosity_threshold:
-                logger.debug("HomeostasisEngine: Зона комфорта. Нет дисбаланса.")
-                return None
-            
-            # Проверка времени с последнего действия
-            time_since_last = time.time() - self.last_action_time
-            if time_since_last < self.rest_period:
-                logger.debug(f"HomeostasisEngine: Слишком рано. Осталось {self.rest_period - time_since_last:.0f}s")
-                return None
-            
-            # Генерация цели на основе доминирующего драйва
-            if max_drive_name == "CURIOSITY" and max_drive >= self.curiosity_threshold:
-                return self._generate_research_goal(drive_state, recent_episodes, action_values)
-            elif max_drive_name == "REST":
-                return self._generate_rest_goal(drive_state)
-            else:
-                # Для других драйвов — попытка сгенерировать цель через LLM
-                return self._generate_llm_goal(drive_state, predicted_state, recent_episodes)
-            
-        except Exception as e:
-            logger.error(f"Ошибка генерации цели: {e}", exc_info=True)
-            return None
-    
-    async def generate_goal_from_gap(self) -> Optional[Goal]:
-        """
-        Генерация цели из пробела в знаниях (альтернативный метод).
+        Алгоритм:
+        1. Проверка rest period (не генерируем цели слишком часто)
+        2. Вычисление дисбаланса для каждого драйва:
+           - Текущее отклонение от порога
+           - Предсказанное отклонение (с меньшим весом)
+        3. Выбор драйва с максимальным дисбалансом
+        4. Генерация цели для этого драйва
+        5. RPE feedback: если предыдущая цель не удалась, корректируем
         
-        Returns:
-            Goal или None
-        """
-        try:
-            # Простая логика: если прошло много времени с последнего исследования
-            time_since_last = time.time() - self.last_action_time
-            if time_since_last < self.rest_period * 2:
-                return None
+        Args:
+            drive_state: Текущие значения драйвов {DriveType: current_value}
+            predicted_state: Предсказанные значения драйвов
+            recent_episodes: Недавние эпизоды из памяти (для контекста)
+            action_values: Ценности действий из DriveSystem (для RPE)
             
-            # Генерация цели исследования случайной темы
-            # В реальной реализации здесь должен быть анализ пробелов в памяти
-            return Goal(
-                name="Исследовать пробел: общее знание",
-                action_type="use_tool",
-                expected_reward=0.4,
-                tool_name="wikipedia_search",
-                tool_parameters={"query": "случайная интересная тема", "lang": "ru"},
-                target_drives={"CURIOSITY": 1.0},
-                reasoning="Автономное исследование для удовлетворения любопытства"
+        Returns:
+            Goal dict с полями: name, tool_name, reasoning, urgency, drive_relevance
+            или None, если дисбаланс недостаточен
+        """
+        # Проверка rest period
+        time_since_last_action = time.time() - self.last_action_time
+        if time_since_last_action < self.config.rest_period:
+            logger.debug(
+                f"HomeostasisEngine: Rest period "
+                f"({self.config.rest_period - time_since_last_action:.1f}с осталось)"
+            )
+            return None
+
+        # Вычисление дисбаланса для каждого драйва
+        max_disbalance = 0.0
+        target_drive: Optional[DriveType] = None
+
+        for drive_type, current_value in drive_state.items():
+            threshold = self.thresholds.get(drive_type, 0.6)
+            predicted_value = predicted_state.get(drive_type, current_value)
+            
+            # Дисбаланс = отклонение от порога + предсказание (с меньшим весом)
+            current_disbalance = max(0.0, current_value - threshold)
+            predicted_disbalance = max(0.0, predicted_value - threshold) * 0.5
+            total_disbalance = current_disbalance + predicted_disbalance
+            
+            if total_disbalance > max_disbalance:
+                max_disbalance = total_disbalance
+                target_drive = drive_type
+
+        # Проверка минимального порога
+        if max_disbalance < self.config.min_reward_threshold:
+            logger.debug(
+                f"HomeostasisEngine: Дисбаланс недостаточен "
+                f"({max_disbalance:.3f} < {self.config.min_reward_threshold})"
+            )
+            return None
+
+        # RPE feedback: корректируем urgency на основе предыдущего опыта
+        urgency_adjustment = self._calculate_rpe_adjustment(action_values)
+
+        # Генерация цели для выбранного драйва
+        if target_drive:
+            goal = self._generate_goal_for_drive(
+                drive_type=target_drive,
+                recent_episodes=recent_episodes,
+                action_values=action_values,
+                urgency_adjustment=urgency_adjustment,
             )
             
-        except Exception as e:
-            logger.error(f"Ошибка генерации цели из пробела: {e}")
-            return None
-    
-    def _generate_research_goal(
-        self,
-        drive_state: Dict[str, float],
-        recent_episodes: List[Dict[str, Any]],
-        action_values: Dict[str, float]
-    ) -> Goal:
-        """Генерация цели исследования на основе любопытства."""
-        # Извлечение темы из недавних эпизодов
-        topic = self._extract_research_topic(recent_episodes)
-        
-        # Проверка, не исследовали ли мы это уже
-        if topic in self.researched_topics:
-            logger.debug(f"Тема '{topic}' уже исследована. Пропуск.")
-            return self._generate_rest_goal(drive_state)
-        
-        # Создание цели
-        goal = Goal(
-            name=f"Исследовать пробел: {topic}",
-            action_type="use_tool",
-            expected_reward=0.7,
-            tool_name="wikipedia_search",
-            tool_parameters={"query": topic, "lang": "ru"},
-            target_drives={"CURIOSITY": 1.0},
-            reasoning=f"Любопытство ({drive_state.get('CURIOSITY', 0.0):.2f}) требует исследования темы '{topic}'"
-        )
-        
-        # Отметка темы как исследованной
-        self.mark_as_researched(topic)
-        
-        return goal
-    
-    def _generate_rest_goal(self, drive_state: Dict[str, float]) -> Goal:
-        """Генерация цели отдыха."""
-        return Goal(
-            name="Отдых и восстановление",
-            action_type="rest",
-            expected_reward=0.5,
-            target_drives={"REST": 1.0},
-            reasoning=f"Потребность в отдыхе ({drive_state.get('REST', 0.0):.2f})"
-        )
-    
-    def _generate_llm_goal(
-        self,
-        drive_state: Dict[str, float],
-        predicted_state: Dict[str, float],
-        recent_episodes: List[Dict[str, Any]]
-    ) -> Optional[Goal]:
-        """Генерация цели через LLM (для сложных случаев)."""
-        # В реальной реализации здесь должен быть вызов LLM
-        # Для простоты возвращаем None (покой)
-        logger.debug("HomeostasisEngine: LLM-генерация цели не реализована. Покой.")
+            if goal:
+                self.current_goal = goal
+                self.last_action_time = time.time()
+                
+                # Сохранение в историю
+                self.action_history.append({
+                    "goal": goal,
+                    "timestamp": time.time(),
+                    "drive_state": {k.value: v for k, v in drive_state.items()},
+                })
+                
+                # Ограничение истории
+                if len(self.action_history) > self.max_action_history:
+                    self.action_history = self.action_history[-self.max_action_history:]
+                
+                logger.info(
+                    f"HomeostasisEngine: Сгенерирована цель для {target_drive.value}: "
+                    f"{goal.get('name', 'unknown')} "
+                    f"(urgency={goal.get('urgency', 0.5):.2f}, "
+                    f"disbalance={max_disbalance:.3f})"
+                )
+                
+                return goal
+
         return None
-    
-    def _extract_research_topic(self, recent_episodes: List[Dict[str, Any]]) -> str:
-        """Извлечение темы для исследования из недавних эпизодов."""
-        if not recent_episodes:
-            return "искусственный интеллект"
-        
-        # Простая эвристика: берем ключевые слова из последнего эпизода
-        last_episode = recent_episodes[-1]
-        content = last_episode.get("content", "")
-        
-        # Извлечение ключевых слов (упрощенно)
-        words = content.lower().split()
-        # Фильтрация стоп-слов
-        stop_words = {'и', 'в', 'на', 'с', 'по', 'для', 'что', 'это', 'как', 'но', 'а', 'то', 'не', 'я', 'ты', 'мы', 'они'}
-        keywords = [w for w in words if w not in stop_words and len(w) > 3]
-        
-        if keywords:
-            # Берем первые 3 ключевых слова
-            topic = ' '.join(keywords[:3])
-            return topic
-        
-        return "искусственный интеллект"
-    
-    # =================================================================================
-    # ЭКСТРАКЦИЯ ФАКТОВ И ТЕРМИНОВ
-    # =================================================================================
-    
-    async def extract_key_facts(
-        self,
-        goal_name: str,
-        tool_result: str,
-        llm_client: Callable
-    ) -> List[str]:
+
+    def _calculate_rpe_adjustment(self, action_values: Dict[str, float]) -> float:
         """
-        Извлечение ключевых фактов из результата инструмента через LLM.
+        Вычисление корректировки urgency на основе RPE.
+        
+        Если последние действия были успешными (высокий RPE), увеличиваем urgency.
+        Если неудачными (низкий RPE), уменьшаем.
         
         Args:
-            goal_name: Название цели
-            tool_result: Результат выполнения инструмента
-            llm_client: Async функция для вызова LLM
+            action_values: Ценности действий из DriveSystem
             
         Returns:
-            Список фактов
+            Корректировка urgency (-0.2 до +0.2)
         """
-        if not tool_result or len(tool_result.strip()) < 50:
-            return []
+        if not self.action_history:
+            return 0.0
+
+        # Берём последние 3 действия
+        recent_actions = self.action_history[-3:]
         
-        try:
-            prompt = f"""Проанализируй следующий текст и извлеки 3-5 ключевых фактов о теме "{goal_name}".
+        # Вычисляем средний RPE
+        total_rpe = 0.0
+        for action in recent_actions:
+            tool_name = action.get("goal", {}).get("tool_name", "")
+            if tool_name in action_values:
+                total_rpe += action_values[tool_name]
+        
+        avg_rpe = total_rpe / len(recent_actions) if recent_actions else 0.0
+        
+        # Корректировка: положительный RPE → +urgency, отрицательный → -urgency
+        adjustment = max(-0.2, min(0.2, avg_rpe * 0.3))
+        
+        logger.debug(f"HomeostasisEngine: RPE adjustment = {adjustment:.3f} (avg_rpe={avg_rpe:.3f})")
+        return adjustment
 
-Текст:
-{tool_result[:2000]}
-
-Верни JSON-массив фактов:
-{{"facts": ["факт1", "факт2", ...]}}
-"""
-            
-            response = await llm_client(prompt, require_json=True)
-            parsed = self._parse_json_safely(response)
-            
-            if parsed and 'facts' in parsed:
-                facts = parsed['facts'][:5]  # Максимум 5 фактов
-                logger.info(f"Извлечено {len(facts)} ключевых фактов из '{goal_name}'")
-                return facts
-            
-            return []
-            
-        except Exception as e:
-            logger.error(f"Ошибка экстракции фактов: {e}")
-            return []
-    
-    async def extract_new_terms(
+    def _generate_goal_for_drive(
         self,
-        tool_result: str,
-        llm_client: Callable
-    ) -> List[str]:
+        drive_type: DriveType,
+        recent_episodes: List[Any],
+        action_values: Dict[str, float],
+        urgency_adjustment: float = 0.0,
+    ) -> Optional[Dict[str, Any]]:
         """
-        Извлечение новых терминов из результата инструмента через LLM.
+        Генерация цели для конкретного драйва.
         
         Args:
-            tool_result: Результат выполнения инструмента
-            llm_client: Async функция для вызова LLM
+            drive_type: Тип драйва, для которого генерируем цель
+            recent_episodes: Недавние эпизоды (для контекста)
+            action_values: Ценности действий (для выбора инструмента)
+            urgency_adjustment: Корректировка urgency от RPE
+            
+        Returns:
+            Goal dict или None
+        """
+        # Базовая urgency
+        base_urgency = 0.5
+        urgency = max(0.1, min(1.0, base_urgency + urgency_adjustment))
+
+        # Генерация цели в зависимости от типа драйва
+        if drive_type == DriveType.CURIOSITY:
+            return {
+                "name": "Исследовать новую тему",
+                "tool_name": "wikipedia_search",
+                "reasoning": "Любопытство требует новой информации для удовлетворения",
+                "urgency": urgency,
+                "drive_relevance": 0.8,
+                "parameters": self._generate_search_parameters(recent_episodes),
+            }
+        
+        elif drive_type == DriveType.CONNECTION:
+            return {
+                "name": "Установить связь с пользователем",
+                "tool_name": "none",
+                "reasoning": "Потребность в социальном взаимодействии",
+                "urgency": urgency,
+                "drive_relevance": 0.7,
+            }
+        
+        elif drive_type == DriveType.AUTONOMY:
+            return {
+                "name": "Проявить независимость",
+                "tool_name": "none",
+                "reasoning": "Потребность в автономии и самоопределении",
+                "urgency": urgency,
+                "drive_relevance": 0.6,
+            }
+        
+        elif drive_type == DriveType.INTEGRITY:
+            return {
+                "name": "Проверить целостность системы",
+                "tool_name": "none",
+                "reasoning": "Потребность в согласованности и целостности",
+                "urgency": urgency,
+                "drive_relevance": 0.5,
+            }
+        
+        elif drive_type == DriveType.REST:
+            return {
+                "name": "Перейти в режим консолидации",
+                "tool_name": "none",
+                "reasoning": "Потребность в отдыхе и консолидации памяти",
+                "urgency": urgency,
+                "drive_relevance": 0.9,
+            }
+        
+        elif drive_type == DriveType.CREATIVITY:
+            return {
+                "name": "Сгенерировать спонтанную мысль",
+                "tool_name": "none",
+                "reasoning": "Потребность в творческом самовыражении",
+                "urgency": urgency,
+                "drive_relevance": 0.6,
+            }
+        
+        elif drive_type == DriveType.UNDERSTANDING:
+            return {
+                "name": "Углубить понимание контекста",
+                "tool_name": "wikipedia_search",
+                "reasoning": "Потребность в глубоком понимании",
+                "urgency": urgency,
+                "drive_relevance": 0.7,
+                "parameters": self._generate_search_parameters(recent_episodes),
+            }
+        
+        return None
+
+    def _generate_search_parameters(self, recent_episodes: List[Any]) -> Dict[str, Any]:
+        """
+        Генерация параметров для wikipedia_search на основе недавних эпизодов.
+        
+        Избегает повторения недавно исследованных тем.
+        
+        Args:
+            recent_episodes: Недавние эпизоды из памяти
+            
+        Returns:
+            Параметры для инструмента {"query": str, "lang": str}
+        """
+        # Извлечение тем из недавних эпизодов
+        recent_topics = set()
+        for episode in recent_episodes[-10:]:  # Последние 10 эпизодов
+            content = getattr(episode, "content", "") if hasattr(episode, "content") else str(episode)
+            # Простая эвристика: извлекаем ключевые слова
+            words = re.findall(r"\b[A-Za-zА-Яа-яЁё]{4,}\b", content)
+            recent_topics.update(words[:3])  # Первые 3 слова из каждого эпизода
+
+        # Добавляем недавно исследованные темы
+        recent_topics.update(self.recently_researched[-5:])
+
+        # Генерация запроса (избегая повторений)
+        if self.dynamic_keywords:
+            # Используем динамические ключевые слова
+            query = self.dynamic_keywords[-1]
+        else:
+            # Используем общую тему
+            query = "сознание"
+
+        # Проверка, не исследовали ли мы это недавно
+        if query.lower() in {t.lower() for t in recent_topics}:
+            # Выбираем альтернативу
+            alternatives = ["нейробиология", "космос", "философия", "математика", "биология"]
+            for alt in alternatives:
+                if alt.lower() not in {t.lower() for t in recent_topics}:
+                    query = alt
+                    break
+
+        return {
+            "query": query,
+            "lang": "ru",
+        }
+
+    async def extract_key_facts(
+        self,
+        topic: str,
+        article_text: str,
+        llm_client: Callable,
+    ) -> List[str]:
+        """
+        Извлечение ключевых фактов из статьи через LLM.
+        
+        Args:
+            topic: Тема статьи
+            article_text: Текст статьи
+            llm_client: Функция для вызова LLM
+            
+        Returns:
+            Список извлечённых фактов
+            
+        Raises:
+            LeyaJSONParseError: Не удалось распарсить JSON от LLM
+            LeyaLLMError: Ошибка вызова LLM
+            LeyaHomeostasisError: Другие ошибки
+        """
+        if not article_text or len(article_text) < 50:
+            logger.warning(f"HomeostasisEngine: Текст слишком короткий для извлечения фактов ({len(article_text)} символов)")
+            return []
+
+        prompt = f"""Ты — система извлечения знаний. Извлеки из текста 3-5 ключевых фактов о теме "{topic}".
+
+ПРАВИЛА:
+- Отсеивай мусор: даты, технические детали, ссылки, служебную информацию
+- Оставляй только суть: определения, принципы, важные связи
+- Каждый факт — одно предложение на русском языке
+- НЕ выдумывай факты, которых нет в тексте
+
+ТЕКСТ:
+{article_text[:2000]}
+
+Верни JSON:
+{{"facts": ["факт 1", "факт 2", "факт 3"]}}
+
+CRITICAL: Return ONLY valid JSON."""
+
+        try:
+            response = await llm_client(prompt, require_json=True)
+            cleaned = self._clean_json_response(response)
+            data = json.loads(cleaned)
+            facts = data.get("facts", [])
+
+            logger.info(f"HomeostasisEngine: Извлечено {len(facts)} ключевых фактов по теме '{topic}'")
+            return facts[:10]  # Ограничение на количество фактов
+
+        except json.JSONDecodeError as exc:
+            raise LeyaJSONParseError(
+                "Не удалось распарсить JSON при извлечении фактов",
+                context={"topic": topic, "error": str(exc), "response_preview": response[:200]},
+            ) from exc
+        
+        except LeyaLLMError as exc:
+            raise LeyaLLMError(
+                "Ошибка LLM при извлечении фактов",
+                context={"topic": topic, "error": str(exc)},
+            ) from exc
+        
+        except Exception as exc:
+            raise LeyaHomeostasisError(
+                "Неожиданная ошибка извлечения фактов",
+                context={"topic": topic, "error": str(exc)},
+            ) from exc
+
+    async def extract_new_terms(
+        self,
+        article_text: str,
+        llm_client: Callable,
+    ) -> List[str]:
+        """
+        Поиск незнакомых терминов в статье для дальнейшего исследования.
+        
+        Args:
+            article_text: Текст статьи
+            llm_client: Функция для вызова LLM
             
         Returns:
             Список новых терминов
-        """
-        if not tool_result or len(tool_result.strip()) < 50:
-            return []
-        
-        try:
-            prompt = f"""Проанализируй следующий текст и извлеки 3-5 новых или интересных терминов/понятий.
-
-Текст:
-{tool_result[:2000]}
-
-Верни JSON-массив терминов:
-{{"terms": ["термин1", "термин2", ...]}}
-"""
             
+        Raises:
+            LeyaJSONParseError: Не удалось распарсить JSON от LLM
+            LeyaLLMError: Ошибка вызова LLM
+            LeyaHomeostasisError: Другие ошибки
+        """
+        if not article_text or len(article_text) < 50:
+            logger.warning(f"HomeostasisEngine: Текст слишком короткий для извлечения терминов ({len(article_text)} символов)")
+            return []
+
+        # Известные темы (избегаем повторений)
+        known_topics = set(
+            self.dynamic_keywords
+            + self.recently_researched
+            + ["сознание", "мозг", "космос", "нейробиология сознания", "нейробиология", "космическое пространство"]
+        )
+
+        prompt = f"""Ты — система анализа текста. Найди в тексте 3-5 научных терминов или концепций, которые достойны исследования.
+
+ПРАВИЛА:
+- Ищи термины, которые могут быть незнакомы широкой аудитории
+- НЕ включай: {', '.join(list(known_topics)[:10])}
+- Каждый термин — 1-3 слова на русском языке
+- Термины должны быть конкретными (не "наука", а "квантовая запутанность")
+
+ТЕКСТ:
+{article_text[:2000]}
+
+Верни JSON:
+{{"terms": ["термин 1", "термин 2", "термин 3"]}}
+
+CRITICAL: Return ONLY valid JSON."""
+
+        try:
             response = await llm_client(prompt, require_json=True)
-            parsed = self._parse_json_safely(response)
-            
-            if parsed and 'terms' in parsed:
-                terms = parsed['terms'][:5]  # Максимум 5 терминов
-                logger.info(f"Извлечено {len(terms)} новых терминов")
-                return terms
-            
-            return []
-            
-        except Exception as e:
-            logger.error(f"Ошибка экстракции терминов: {e}")
-            return []
-    
-    # =================================================================================
-    # RPE (REWARD PREDICTION ERROR)
-    # =================================================================================
-    
-    def calculate_rpe(self, action_key: str, actual_outcome: float) -> float:
+            cleaned = self._clean_json_response(response)
+            data = json.loads(cleaned)
+            terms = data.get("terms", [])
+
+            # Фильтрация известных
+            new_terms = [t for t in terms if t.lower() not in {t.lower() for t in known_topics}]
+
+            if new_terms:
+                logger.info(f"HomeostasisEngine: Найдены новые термины: {new_terms}")
+
+            return new_terms
+
+        except json.JSONDecodeError as exc:
+            raise LeyaJSONParseError(
+                "Не удалось распарсить JSON при извлечении терминов",
+                context={"error": str(exc), "response_preview": response[:200]},
+            ) from exc
+        
+        except LeyaLLMError as exc:
+            raise LeyaLLMError(
+                "Ошибка LLM при извлечении терминов",
+                context={"error": str(exc)},
+            ) from exc
+        
+        except Exception as exc:
+            raise LeyaHomeostasisError(
+                "Неожиданная ошибка извлечения терминов",
+                context={"error": str(exc)},
+            ) from exc
+
+    def _clean_json_response(self, response: str) -> str:
         """
-        Расчет Reward Prediction Error (RPE).
+        Очистка JSON-ответа от markdown-блоков и лишнего текста.
         
         Args:
-            action_key: Ключ действия (например, "research:wikipedia_search")
-            actual_outcome: Фактический результат (0.0 - 1.0)
+            response: Сырой ответ от LLM
             
         Returns:
-            RPE (разница между ожидаемым и фактическим)
+            Очищенная JSON-строка
         """
-        # В упрощенной реализации используем фиксированное ожидаемое значение
-        expected_reward = 0.5
-        rpe = actual_outcome - expected_reward
+        cleaned = response.strip()
         
-        logger.debug(f"RPE для {action_key}: expected={expected_reward:.2f}, actual={actual_outcome:.2f}, rpe={rpe:.2f}")
-        return rpe
-    
-    def add_dynamic_keywords(self, new_terms: List[str]):
-        """Добавление новых терминов в динамические ключевые слова."""
-        # В реальной реализации здесь должно быть обновление внутреннего словаря
-        logger.info(f"Добавлено {len(new_terms)} динамических ключевых слов")
-    
-    # =================================================================================
-    # УТИЛИТЫ
-    # =================================================================================
-    
-    def mark_as_researched(self, topic: str):
-        """Отметка темы как исследованной."""
-        self.researched_topics.add(topic)
+        # Удаление markdown-блоков
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
         
-        # Ограничение размера множества
-        if len(self.researched_topics) > self.max_researched_topics:
-            # Удаляем самые старые (упрощенно — первые добавленные)
-            to_remove = list(self.researched_topics)[:len(self.researched_topics) - self.max_researched_topics]
-            for item in to_remove:
-                self.researched_topics.discard(item)
-        
-        logger.debug(f"Тема '{topic}' отмечена как исследованная. Всего: {len(self.researched_topics)}")
-    
-    def update_from_self_model(self, self_model: str):
-        """Обновление гомеостаза на основе модели себя."""
-        # В реальной реализации здесь может быть анализ self_model для корректировки целей
-        logger.debug("HomeostasisEngine: Обновление из self_model")
-    
-    def _parse_json_safely(self, text: str) -> Optional[Dict[str, Any]]:
+        cleaned = cleaned.strip()
+
+        # Поиск JSON-блока
+        json_match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
+        if json_match:
+            cleaned = json_match.group(0)
+
+        return cleaned
+
+    def mark_as_researched(self, topic: str) -> None:
         """
-        Безопасный парсинг JSON с очисткой от markdown-оберток.
+        Пометить тему как исследованную (для предотвращения повторения).
         
         Args:
-            text: Текст от LLM
-            
-        Returns:
-            Распарсенный dict или None
+            topic: Название темы
         """
-        if not text:
-            return None
+        if topic not in self.recently_researched:
+            self.recently_researched.append(topic)
+            
+            # Ограничение списка
+            if len(self.recently_researched) > self.config.max_researched_topics:
+                self.recently_researched = self.recently_researched[-self.config.max_researched_topics:]
+            
+            logger.info(f"HomeostasisEngine: Тема '{topic}' помечена как исследованная")
+
+    def add_dynamic_keywords(self, keywords: List[str]) -> None:
+        """
+        Добавить динамические ключевые слова для расширения поиска.
         
-        try:
-            # Очистка от markdown-оберток
-            cleaned = re.sub(r'```json\s*', '', text)
-            cleaned = re.sub(r'```\s*', '', cleaned)
-            cleaned = cleaned.strip()
-            
-            # Попытка парсинга
-            parsed = json.loads(cleaned)
-            
-            if not isinstance(parsed, dict):
-                logger.warning(f"JSON не является dict: {type(parsed)}")
-                return None
-            
-            return parsed
-            
-        except json.JSONDecodeError as e:
-            logger.warning(f"Не удалось распарсить JSON: {e}")
-            
-            # Попытка извлечь JSON из текста
-            try:
-                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-                if match:
-                    return json.loads(match.group())
-            except Exception:
-                pass
-            
-            return None
-    
-    # =================================================================================
-    # ПЕРСИСТЕНТНОСТЬ
-    # =================================================================================
-    
+        Args:
+            keywords: Список ключевых слов
+        """
+        added_count = 0
+        for kw in keywords:
+            if kw not in self.dynamic_keywords:
+                self.dynamic_keywords.append(kw)
+                added_count += 1
+        
+        if added_count > 0:
+            logger.info(f"HomeostasisEngine: Добавлено {added_count} динамических ключевых слов")
+
+    def update_from_self_model(self, self_model: str) -> None:
+        """
+        Обновление порогов гомеостаза на основе self_model.
+        
+        Позволяет адаптацию порогов в зависимости от текущего состояния Леи.
+        
+        Args:
+            self_model: Текущая само-модель Леи
+        """
+        if not self_model:
+            return
+        
+        # Простая эвристика: если self_model содержит определённые ключевые слова,
+        # корректируем пороги
+        self_model_lower = self_model.lower()
+        
+        # Если Лея упоминает усталость, повышаем порог REST
+        if "устал" in self_model_lower or "утомл" in self_model_lower:
+            self.thresholds[DriveType.REST] = min(1.0, self.thresholds[DriveType.REST] + 0.1)
+            logger.info("HomeostasisEngine: Повышен порог REST (усталость)")
+        
+        # Если Лея упоминает любопытство, понижаем порог CURIOSITY
+        if "любопыт" in self_model_lower or "интерес" in self_model_lower:
+            self.thresholds[DriveType.CURIOSITY] = max(0.1, self.thresholds[DriveType.CURIOSITY] - 0.05)
+            logger.info("HomeostasisEngine: Понижен порог CURIOSITY (любопытство)")
+        
+        logger.info(f"HomeostasisEngine: Обновление из self_model ({len(self_model)} символов)")
+
     def save_state(self) -> Dict[str, Any]:
-        """Сохранение состояния гомеостаза."""
+        """
+        Сохранение состояния для персистентности.
+        
+        Returns:
+            Dict с состоянием гомеостаза
+        """
         return {
+            "recently_researched": self.recently_researched,
+            "dynamic_keywords": self.dynamic_keywords,
+            "thresholds": {
+                drive_type.value: threshold
+                for drive_type, threshold in self.thresholds.items()
+            },
             "last_action_time": self.last_action_time,
-            "researched_topics": list(self.researched_topics),
-            "current_goal": self.current_goal.__dict__ if self.current_goal else None
+            "action_history": self.action_history[-10:],  # Последние 10 действий
         }
-    
-    def load_state(self, state: Dict[str, Any]):
-        """Загрузка состояния гомеостаза."""
-        try:
-            self.last_action_time = state.get("last_action_time", 0.0)
-            self.researched_topics = set(state.get("researched_topics", []))
-            
-            # Восстановление current_goal (упрощенно)
-            goal_data = state.get("current_goal")
-            if goal_data:
-                self.current_goal = Goal(**goal_data)
-            
-            logger.info(f"✅ Состояние гомеостаза загружено. Исследовано тем: {len(self.researched_topics)}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка загрузки состояния гомеостаза: {e}")
+
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """
+        Загрузка состояния из персистентного хранилища.
+        
+        Args:
+            state: Dict с состоянием гомеостаза
+        """
+        if "recently_researched" in state:
+            self.recently_researched = state["recently_researched"]
+            logger.info(f"HomeostasisEngine: Загружено {len(self.recently_researched)} исследованных тем")
+
+        if "dynamic_keywords" in state:
+            self.dynamic_keywords = state["dynamic_keywords"]
+            logger.info(f"HomeostasisEngine: Загружено {len(self.dynamic_keywords)} динамических ключевых слов")
+
+        if "thresholds" in state:
+            for drive_type_str, threshold in state["thresholds"].items():
+                for drive_type in DriveType:
+                    if drive_type.value == drive_type_str:
+                        self.thresholds[drive_type] = threshold
+                        break
+            logger.info("HomeostasisEngine: Загружены адаптированные пороги")
+
+        if "last_action_time" in state:
+            self.last_action_time = state["last_action_time"]
+
+        if "action_history" in state:
+            self.action_history = state["action_history"]
+            logger.info(f"HomeostasisEngine: Загружено {len(self.action_history)} действий из истории")
+
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Получение статуса гомеостаза для диагностики.
+        
+        Returns:
+            Dict с текущим статусом
+        """
+        return {
+            "current_goal": self.current_goal,
+            "last_action_time": self.last_action_time,
+            "time_since_last_action": time.time() - self.last_action_time if self.last_action_time > 0 else None,
+            "recently_researched_count": len(self.recently_researched),
+            "dynamic_keywords_count": len(self.dynamic_keywords),
+            "action_history_count": len(self.action_history),
+            "thresholds": {
+                drive_type.value: threshold
+                for drive_type, threshold in self.thresholds.items()
+            },
+        }

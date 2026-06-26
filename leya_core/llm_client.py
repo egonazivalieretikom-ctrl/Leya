@@ -1,29 +1,28 @@
 """
 leya_core/llm_client.py
-HTTP-клиент для Ollama с Circuit Breaker и Retry.
+Circuit Breaker + обёртка для HTTP-запросов к Ollama.
 
-Архитектура:
-- Circuit Breaker (CLOSED → OPEN → HALF_OPEN)
-- Retry с экспоненциальной задержкой
-- Token estimation (эвристика для русского: ~4 символа = 1 токен)
-- Специфичные исключения из leya_core/exceptions.py
+Состояния:
+- CLOSED: нормальная работа
+- OPEN: LLM недоступна, все запросы идут в fallback
+- HALF_OPEN: периодическая проверка восстановления
 
-Все методы — async.
+Защита от:
+- Таймаутов
+- Сетевых ошибок
+- Бесконечных ожиданий
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Optional
 
 import aiohttp
 
-from .config import LeyaConfig
 from .exceptions import (
-    LeyaJSONParseError,
     LeyaLLMError,
     LeyaLLMTimeoutError,
     LeyaLLMUnavailableError,
@@ -34,53 +33,152 @@ logger = logging.getLogger(__name__)
 
 class CircuitState(str, Enum):
     """Состояние Circuit Breaker."""
-    CLOSED = "closed"        # Нормальная работа
-    OPEN = "open"            # Сбой, запросы блокируются
-    HALF_OPEN = "half_open"  # Тестовый запрос
+    CLOSED = "closed"          # Нормальная работа
+    OPEN = "open"              # LLM недоступна, fallback
+    HALF_OPEN = "half_open"    # Проверка восстановления
 
 
-@dataclass
-class CircuitBreakerConfig:
-    """Конфигурация Circuit Breaker."""
-    failure_threshold: int = 5          # Количество неудач до открытия
-    recovery_timeout: float = 60.0      # Секунд до попытки HALF_OPEN
-    success_threshold: int = 2          # Успехов в HALF_OPEN для закрытия
+class CircuitBreaker:
+    """
+    Circuit Breaker для защиты от каскадных отказов LLM.
+    
+    Параметры:
+    - failure_threshold: количество подряд идущих отказов для открытия
+    - recovery_timeout: секунд до попытки half-open
+    - success_threshold: количество успешных запросов в half-open для закрытия
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 3,
+        recovery_timeout: float = 60.0,
+        success_threshold: int = 2,
+    ) -> None:
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.success_threshold = success_threshold
+
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._last_failure_time: float = 0.0
+        self._last_state_change: float = time.time()
+
+    @property
+    def state(self) -> CircuitState:
+        """Текущее состояние (с автоматическим переходом в half-open)."""
+        if self._state == CircuitState.OPEN:
+            if time.time() - self._last_failure_time >= self.recovery_timeout:
+                self._transition_to(CircuitState.HALF_OPEN)
+        return self._state
+
+    @property
+    def is_available(self) -> bool:
+        """Можно ли делать запросы (CLOSED или HALF_OPEN)."""
+        return self.state != CircuitState.OPEN
+
+    def record_success(self) -> None:
+        """Записать успешный запрос."""
+        if self._state == CircuitState.HALF_OPEN:
+            self._success_count += 1
+            if self._success_count >= self.success_threshold:
+                self._transition_to(CircuitState.CLOSED)
+        elif self._state == CircuitState.CLOSED:
+            self._failure_count = 0  # Сброс счётчика отказов
+
+    def record_failure(self) -> None:
+        """Записать отказ."""
+        self._failure_count += 1
+        self._last_failure_time = time.time()
+        
+        if self._state == CircuitState.HALF_OPEN:
+            self._transition_to(CircuitState.OPEN)
+        elif self._state == CircuitState.CLOSED:
+            if self._failure_count >= self.failure_threshold:
+                self._transition_to(CircuitState.OPEN)
+
+    def _transition_to(self, new_state: CircuitState) -> None:
+        """Переход в новое состояние с логированием."""
+        old_state = self._state
+        self._state = new_state
+        self._last_state_change = time.time()
+        
+        if new_state == CircuitState.CLOSED:
+            self._failure_count = 0
+            self._success_count = 0
+            logger.info(f"CircuitBreaker: {old_state.value} → CLOSED (LLM восстановлена)")
+        elif new_state == CircuitState.OPEN:
+            self._success_count = 0
+            logger.warning(
+                f"CircuitBreaker: {old_state.value} → OPEN "
+                f"(LLM недоступна, recovery через {self.recovery_timeout:.0f}с)"
+            )
+        elif new_state == CircuitState.HALF_OPEN:
+            self._success_count = 0
+            logger.info(f"CircuitBreaker: {old_state.value} → HALF_OPEN (проверка LLM)")
+
+    def get_status(self) -> dict[str, Any]:
+        """Статус для диагностики."""
+        return {
+            "state": self._state.value,
+            "failure_count": self._failure_count,
+            "success_count": self._success_count,
+            "last_failure_ago": (
+                time.time() - self._last_failure_time
+                if self._last_failure_time > 0 else None
+            ),
+        }
 
 
 class OllamaClient:
     """
-    HTTP-клиент для Ollama с Circuit Breaker.
+    Клиент для Ollama с Circuit Breaker и retry-логикой.
     
     Использование:
-        client = OllamaClient(config)
-        response = await client.generate("Привет", require_json=True)
+        client = OllamaClient(base_url="http://localhost:11434", model="qwen2.5:14b-instruct-q3_K_M")
+        response = await client.chat(prompt, require_json=True)
     """
 
-    def __init__(self, config: LeyaConfig) -> None:
-        self.config = config
-        self.base_url = config.ollama.base_url.rstrip("/")
-        self.model = config.ollama.model
-        self.timeout = config.ollama.timeout
-        self.temperature = config.ollama.temperature
-        self.num_ctx = config.ollama.num_ctx
-        
-        # Circuit Breaker state
-        self._circuit_state = CircuitState.CLOSED
-        self._failure_count = 0
-        self._success_count = 0
-        self._last_failure_time = 0.0
-        self._breaker_config = CircuitBreakerConfig()
-        
-        # HTTP session (создаётся лениво)
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "qwen2.5:14b-instruct-q3_K_M",
+        timeout: float = 180.0,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 40,
+        max_tokens: int = 1024,
+        repeat_penalty: float = 1.1,
+        system_prompt: str = "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке.",
+        failure_threshold: int = 3,
+        recovery_timeout: float = 60.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.max_tokens = max_tokens
+        self.repeat_penalty = repeat_penalty
+        self.system_prompt = system_prompt
+
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=failure_threshold,
+            recovery_timeout=recovery_timeout,
+        )
+
         self._session: Optional[aiohttp.ClientSession] = None
-        
-        logger.info(f"OllamaClient инициализирован: {self.base_url}, model={self.model}")
+        self._fallback_fn: Optional[Callable] = None
+
+    def set_fallback(self, fallback_fn: Callable) -> None:
+        """Установить fallback-функцию на случай недоступности LLM."""
+        self._fallback_fn = fallback_fn
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Ленивая инициализация HTTP-сессии."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = aiohttp.ClientSession()
         return self._session
 
     async def close(self) -> None:
@@ -89,58 +187,99 @@ class OllamaClient:
             await self._session.close()
             self._session = None
 
-    def _check_circuit(self) -> None:
-        """Проверка состояния Circuit Breaker."""
-        if self._circuit_state == CircuitState.OPEN:
-            # Проверяем, прошло ли время восстановления
-            if time.time() - self._last_failure_time >= self._breaker_config.recovery_timeout:
-                self._circuit_state = CircuitState.HALF_OPEN
-                logger.info("Circuit Breaker: OPEN → HALF_OPEN (тестовый запрос)")
-            else:
-                raise LeyaLLMUnavailableError(
-                    "Ollama недоступна (Circuit Breaker OPEN)",
-                    context={
-                        "state": self._circuit_state.value,
-                        "failure_count": self._failure_count,
-                        "recovery_timeout": self._breaker_config.recovery_timeout,
-                    },
-                )
-
-    def _record_success(self) -> None:
-        """Запись успешного запроса."""
-        if self._circuit_state == CircuitState.HALF_OPEN:
-            self._success_count += 1
-            if self._success_count >= self._breaker_config.success_threshold:
-                self._circuit_state = CircuitState.CLOSED
-                self._failure_count = 0
-                self._success_count = 0
-                logger.info("Circuit Breaker: HALF_OPEN → CLOSED (восстановление)")
-        else:
-            self._failure_count = 0
-
-    def _record_failure(self, error: Exception) -> None:
-        """Запись неудачного запроса."""
-        self._failure_count += 1
-        self._last_failure_time = time.time()
-        
-        if self._failure_count >= self._breaker_config.failure_threshold:
-            self._circuit_state = CircuitState.OPEN
-            logger.error(
-                f"Circuit Breaker: → OPEN (неудач: {self._failure_count})",
-                exc_info=False,
-            )
-        
-        if self._circuit_state == CircuitState.HALF_OPEN:
-            # Тестовый запрос не удался — возвращаемся в OPEN
-            self._circuit_state = CircuitState.OPEN
-            logger.error("Circuit Breaker: HALF_OPEN → OPEN (тест провален)")
-
-    async def generate(
+    async def chat(
         self,
         prompt: str,
-        system: Optional[str] = None,
         require_json: bool = False,
-        max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> str:
         """
+        Отправка запроса к Ollama с защитой Circuit Breaker.
+        
+        Бросает:
+        - LeyaLLMUnavailableError: Circuit Breaker в состоянии OPEN
+        - LeyaLLMTimeoutError: превышен таймаут
+        - LeyaLLMError: другие ошибки
+        """
+        # Проверка Circuit Breaker
+        if not self.circuit_breaker.is_available:
+            logger.warning("OllamaClient: Circuit Breaker OPEN, используем fallback")
+            if self._fallback_fn:
+                return await self._fallback_fn(prompt)
+            raise LeyaLLMUnavailableError(
+                "Ollama недоступна (Circuit Breaker OPEN)",
+                context=self.circuit_breaker.get_status(),
+            )
+
+        # Формирование payload
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": temperature if temperature is not None else self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "num_predict": max_tokens if max_tokens is not None else self.max_tokens,
+                "repeat_penalty": self.repeat_penalty,
+            },
+        }
+        if require_json:
+            payload["format"] = "json"
+
+        # HTTP-запрос
+        try:
+            session = await self._get_session()
+            async with session.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    message = data.get("message", {})
+                    content = message.get("content", "")
+                    self.circuit_breaker.record_success()
+                    return content
+                else:
+                    error_text = await response.text()
+                    self.circuit_breaker.record_failure()
+                    raise LeyaLLMError(
+                        f"Ollama вернул статус {response.status}",
+                        context={"status": response.status, "body": error_text[:500]},
+                    )
+
+        except asyncio.TimeoutError as exc:
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMTimeoutError(
+                f"Превышен таймаут {self.timeout}с",
+                context={"timeout": self.timeout},
+            ) from exc
+
+        except aiohttp.ClientError as exc:
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMUnavailableError(
+                "Ошибка подключения к Ollama",
+                context={"error": str(exc), "base_url": self.base_url},
+            ) from exc
+
+        except LeyaLLMError:
+            # Пробрасываем наши исключения
+            raise
+
+        except Exception as exc:
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMError(
+                "Неожиданная ошибка вызова LLM",
+                context={"error": str(exc)},
+            ) from exc
+
+    async def __aenter__(self) -> "OllamaClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
