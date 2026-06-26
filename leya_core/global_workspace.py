@@ -270,6 +270,48 @@ class GlobalWorkspace:
             "total_selections": self.total_selections,
         }
 
+    def get_workspace_status(self) -> dict[str, Any]:
+        """
+        Возвращает полное состояние workspace: proposals + focus.
+        Публичный API для UI.
+    
+        Returns:
+            dict с ключами:
+                "proposals": list[dict]
+                "focus": dict | None
+                "total": int
+        """
+        proposals = [
+            {
+                "id": i,
+                "source": p.source,
+                "content": p.content,
+                "action_type": p.action_type,
+                "priority": p.priority.name,
+                "urgency": p.urgency,
+                "drive_relevance": p.drive_relevance,
+                "timestamp": p.timestamp,
+                "age_seconds": time.time() - p.timestamp,
+            }
+            for i, p in enumerate(self.proposals)
+        ]
+    
+        focus = self.get_focus()
+        focus_data = None
+        if focus:
+            focus_data = {
+                "source": focus.source,
+                "content": focus.content,
+                "action_type": focus.action_type,
+                "priority": focus.priority.name,
+            }
+    
+        return {
+            "proposals": proposals,
+            "focus": focus_data,
+            "total": len(proposals),
+        }
+
     def force_submit(
         self,
         source: str,
