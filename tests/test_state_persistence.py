@@ -11,15 +11,14 @@
 - Атомарную запись (tmp + replace)
 - Бэкап предыдущего состояния
 """
+
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 
-from leya_core.exceptions import LeyaPersistenceError, LeyaStateCorruptedError
+from leya_core.exceptions import LeyaStateCorruptedError
 from leya_core.state_persistence import StatePersistence
 
 
@@ -29,7 +28,7 @@ class TestStatePersistenceInit:
     def test_init_creates_directory(self, tmp_path):
         """StatePersistence создаёт директорию при инициализации."""
         state_file = tmp_path / "subdir" / "state.json"
-        persistence = StatePersistence(state_file=str(state_file))
+        StatePersistence(state_file=str(state_file))
 
         assert state_file.parent.exists()
 
@@ -61,7 +60,7 @@ class TestSaveState:
         state = {"drives": {"curiosity": 0.5, "connection": 0.3}}
         persistence.save_state(state)
 
-        with open(state_file, "r", encoding="utf-8") as f:
+        with open(state_file, encoding="utf-8") as f:
             loaded = json.load(f)
 
         assert loaded["drives"]["curiosity"] == 0.5
@@ -85,7 +84,7 @@ class TestSaveState:
         backup_file = state_file.with_suffix(".json.backup")
         assert backup_file.exists()
 
-        with open(backup_file, "r", encoding="utf-8") as f:
+        with open(backup_file, encoding="utf-8") as f:
             backup = json.load(f)
         assert backup["version"] == 1
 
@@ -99,7 +98,7 @@ class TestSaveState:
 
         # Проверяем, что основной файл существует и содержит данные
         assert state_file.exists()
-        with open(state_file, "r", encoding="utf-8") as f:
+        with open(state_file, encoding="utf-8") as f:
             loaded = json.load(f)
         assert loaded["test"] == "data"
 

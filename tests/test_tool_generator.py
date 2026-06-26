@@ -11,6 +11,7 @@
 - Регистрацию инструмента
 - Получение сводки
 """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from leya_core.tool_generator import ToolGenerator
-
 
 # ============================================================================
 # Fixtures
@@ -44,13 +44,16 @@ def mock_tool_registry():
 @pytest.fixture
 def mock_llm_client():
     """Mock LLM client для генерации инструментов."""
+
     async def _mock_llm(prompt: str, require_json: bool = False) -> str:
-        return json.dumps({
-            "name": "custom_test_tool",
-            "description": "Тестовый инструмент",
-            "parameters": {"param1": "str"},
-            "code": "async def custom_test_tool(param1: str = 'default'):\n    return f'Result: {param1}'",
-        })
+        return json.dumps(
+            {
+                "name": "custom_test_tool",
+                "description": "Тестовый инструмент",
+                "parameters": {"param1": "str"},
+                "code": "async def custom_test_tool(param1: str = 'default'):\n    return f'Result: {param1}'",
+            }
+        )
 
     return _mock_llm
 

@@ -10,11 +10,10 @@
 - Обработка батареи
 - Обработка ошибок psutil
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from leya_core.system_metrics import SystemMetrics
 
@@ -39,31 +38,33 @@ class TestCollectMetrics:
 
     def test_collect_with_psutil(self):
         """collect собирает метрики с psutil."""
-        with patch("leya_core.system_metrics.PSUTIL_AVAILABLE", True):
-            with patch("leya_core.system_metrics.psutil") as mock_psutil:
-                # Настраиваем mock
-                mock_psutil.cpu_percent.return_value = 50.0
-                mock_psutil.virtual_memory.return_value = MagicMock(percent=60.0)
-                mock_psutil.disk_usage.return_value = MagicMock(percent=70.0)
-                mock_psutil.disk_io_counters.return_value = MagicMock(
-                    read_bytes=1000000,
-                    write_bytes=500000,
-                )
-                mock_psutil.net_io_counters.return_value = MagicMock(
-                    bytes_sent=2000000,
-                    bytes_recv=1000000,
-                )
-                mock_psutil.sensors_battery.return_value = MagicMock(percent=80)
+        with (
+            patch("leya_core.system_metrics.PSUTIL_AVAILABLE", True),
+            patch("leya_core.system_metrics.psutil") as mock_psutil,
+        ):
+            # Настраиваем mock
+            mock_psutil.cpu_percent.return_value = 50.0
+            mock_psutil.virtual_memory.return_value = MagicMock(percent=60.0)
+            mock_psutil.disk_usage.return_value = MagicMock(percent=70.0)
+            mock_psutil.disk_io_counters.return_value = MagicMock(
+                read_bytes=1000000,
+                write_bytes=500000,
+            )
+            mock_psutil.net_io_counters.return_value = MagicMock(
+                bytes_sent=2000000,
+                bytes_recv=1000000,
+            )
+            mock_psutil.sensors_battery.return_value = MagicMock(percent=80)
 
-                metrics = SystemMetrics()
-                result = metrics.collect()
+            metrics = SystemMetrics()
+            result = metrics.collect()
 
-                assert "cpu" in result
-                assert "ram" in result
-                assert "disk" in result
-                assert "battery" in result
-                assert 0.0 <= result["cpu"] <= 1.0
-                assert 0.0 <= result["ram"] <= 1.0
+            assert "cpu" in result
+            assert "ram" in result
+            assert "disk" in result
+            assert "battery" in result
+            assert 0.0 <= result["cpu"] <= 1.0
+            assert 0.0 <= result["ram"] <= 1.0
 
     def test_collect_without_psutil(self):
         """collect возвращает fallback метрики без psutil."""
@@ -78,15 +79,17 @@ class TestCollectMetrics:
 
     def test_collect_handles_psutil_error(self):
         """collect обрабатывает ошибки psutil."""
-        with patch("leya_core.system_metrics.PSUTIL_AVAILABLE", True):
-            with patch("leya_core.system_metrics.psutil") as mock_psutil:
-                mock_psutil.cpu_percent.side_effect = Exception("psutil error")
+        with (
+            patch("leya_core.system_metrics.PSUTIL_AVAILABLE", True),
+            patch("leya_core.system_metrics.psutil") as mock_psutil,
+        ):
+            mock_psutil.cpu_percent.side_effect = Exception("psutil error")
 
-                metrics = SystemMetrics()
-                result = metrics.collect()
+            metrics = SystemMetrics()
+            result = metrics.collect()
 
-                # Должен вернуться fallback
-                assert result["cpu"] == 0.5
+            # Должен вернуться fallback
+            assert result["cpu"] == 0.5
 
 
 class TestGetBattery:
