@@ -22,13 +22,14 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from typing import Optional, Any
+from typing import Any
 
 from .config import ThinkerConfig
 from .exceptions import LeyaJSONParseError, LeyaLLMError
 from .interfaces import ICoreThinker
 
 logger = logging.getLogger(__name__)
+
 
 def repair_json(raw: str) -> str:
     """
@@ -53,15 +54,15 @@ def repair_json(raw: str) -> str:
     text = raw.strip()
 
     # 1. Убираем markdown code blocks: ```json ... ``` или ``` ... ```
-    md_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
+    md_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
     if md_match:
         text = md_match.group(1).strip()
 
     # 2. Если текст не начинается с { или [, ищем первый JSON-объект/массив
-    if not text.startswith(('{', '[')):
+    if not text.startswith(("{", "[")):
         # Ищем первое вхождение { или [
-        first_brace = text.find('{')
-        first_bracket = text.find('[')
+        first_brace = text.find("{")
+        first_bracket = text.find("[")
 
         if first_brace == -1 and first_bracket == -1:
             # Нет JSON вообще — возвращаем пустой объект
@@ -90,7 +91,7 @@ def repair_json(raw: str) -> str:
         if escape_next:
             escape_next = False
             continue
-        if ch == '\\':
+        if ch == "\\":
             escape_next = True
             continue
         if ch == '"':
@@ -99,16 +100,16 @@ def repair_json(raw: str) -> str:
         if in_string:
             continue
 
-        if ch == '{':
+        if ch == "{":
             depth_brace += 1
-        elif ch == '}':
+        elif ch == "}":
             depth_brace -= 1
             if depth_brace == 0 and depth_bracket == 0:
                 end_pos = i + 1
                 break
-        elif ch == '[':
+        elif ch == "[":
             depth_bracket += 1
-        elif ch == ']':
+        elif ch == "]":
             depth_bracket -= 1
             if depth_brace == 0 and depth_bracket == 0:
                 end_pos = i + 1
@@ -117,7 +118,7 @@ def repair_json(raw: str) -> str:
     text = text[:end_pos]
 
     # 4. Убираем трейлинг-запятые перед } или ]
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
 
     # 5. Попытка валидации — если невалидно, пробуем восстановить
     try:
@@ -127,13 +128,13 @@ def repair_json(raw: str) -> str:
         pass
 
     # 6. Если скобки не сбалансированы — добавляем недостающие
-    open_braces = text.count('{') - text.count('}')
-    open_brackets = text.count('[') - text.count(']')
+    open_braces = text.count("{") - text.count("}")
+    open_brackets = text.count("[") - text.count("]")
 
     if open_braces > 0:
-        text += '}' * open_braces
+        text += "}" * open_braces
     if open_brackets > 0:
-        text += ']' * open_brackets
+        text += "]" * open_brackets
 
     # Финальная попытка
     try:
@@ -142,6 +143,7 @@ def repair_json(raw: str) -> str:
     except json.JSONDecodeError:
         logger.warning(f"repair_json: Не удалось восстановить JSON: {text[:200]}")
         return "{}"
+
 
 class CoreThinker(ICoreThinker):
     """
@@ -431,7 +433,7 @@ CRITICAL: Return ONLY valid JSON.
     def _safe_parse_json(self, response: str) -> dict[str, Any]:
         """
         Безопасный парсинг JSON с учётом markdown-блоков LLM.
-    
+
         Использует repair_json() для очистки от QWEN-артефактов.
 
         Raises:
@@ -442,7 +444,7 @@ CRITICAL: Return ONLY valid JSON.
 
         # ИСПРАВЛЕНИЕ ШАГ 4: Используем repair_json() вместо ручной очистки
         cleaned = repair_json(response)
-    
+
         if cleaned == "{}":
             # repair_json не смог восстановить — пробуем прямой парсинг как последний шанс
             try:

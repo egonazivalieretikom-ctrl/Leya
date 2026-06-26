@@ -439,7 +439,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                     logger.debug(f"Не удалось распарсить спонтанную мысль как JSON: {parse_exc}")
                     # Fallback: возвращаем как есть
                     pass
-        
+
             return result
         except LeyaLLMError as exc:
             logger.warning(f"MetaCognition: Ошибка LLM при генерации спонтанной мысли: {exc}")

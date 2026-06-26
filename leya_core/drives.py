@@ -390,7 +390,7 @@ class DriveSystem:
         """
         Возвращает полное состояние всех драйвов в структурированном виде.
         Публичный API для UI и внешних потребителей.
-    
+
         Returns:
             dict вида:
             {
@@ -408,11 +408,10 @@ class DriveSystem:
                 "current": drive.current,
                 "tension": drive.tension,
                 "target": drive.target,
-                "satisfaction": getattr(drive, 'satisfaction', 0.0),
+                "satisfaction": getattr(drive, "satisfaction", 0.0),
             }
             for drive_type, drive in self.drives.items()
         }
-
 
         result = {}
         for drive_type, drive in self.drives.items():
@@ -420,7 +419,9 @@ class DriveSystem:
                 "current": drive.current,
                 "tension": drive.tension,
                 "target": drive.target,
-                "satisfaction": drive.current - drive.tension if drive.current > drive.tension else 0.0,
+                "satisfaction": (
+                    drive.current - drive.tension if drive.current > drive.tension else 0.0
+                ),
             }
         return result
 

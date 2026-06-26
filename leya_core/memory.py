@@ -425,8 +425,6 @@ class MemorySystem:
         candidates.sort(key=lambda e: e.timestamp, reverse=True)
         return candidates[:limit]
 
-    
-
     async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
         """Получить недавние спонтанные мысли (помеченные в metadata)."""
         thoughts = [
@@ -674,12 +672,12 @@ class MemorySystem:
         Возвращает данные для визуализации графа памяти.
         Вся логика фильтрации, сортировки и построения nodes/edges
         инкапсулирована здесь.
-    
+
         Args:
             min_retention: минимальный retention_strength для включения
             max_nodes: максимальное количество узлов
             include_synapses: включать ли рёбра (synapses)
-        
+
         Returns:
             dict с ключами:
                 "nodes": list[dict] — узлы графа
@@ -688,71 +686,70 @@ class MemorySystem:
                 "total_synapses": int
         """
         # Фильтрация энграмм по retention_strength
-        engrams = [
-            e for e in self.engrams.values()
-            if e.retention_strength >= min_retention
-        ]
-    
+        engrams = [e for e in self.engrams.values() if e.retention_strength >= min_retention]
+
         # Сортировка по retention_strength (сильные сначала)
         engrams.sort(key=lambda e: e.retention_strength, reverse=True)
-    
+
         # Ограничение количества
         engrams = engrams[:max_nodes]
-    
+
         # Построение узлов
         nodes = []
         for engram in engrams:
             color = "#00d4ff" if engram.memory_type.value == "episodic" else "#ffb347"
             size = 10 + min(30, engram.retrieval_count * 2)
             label = engram.content[:50] + "..." if len(engram.content) > 50 else engram.content
-        
-            nodes.append({
-                "id": engram.id,
-                "label": label,
-                "title": (
-                    f"**{engram.memory_type.value}**\n\n"
-                    f"{engram.content}\n\n"
-                    f"Retention: {engram.retention_strength:.2f}\n"
-                    f"Retrievals: {engram.retrieval_count}\n"
-                    f"Emotional: {engram.emotional_boost:.2f}"
-                ),
-                "color": {
-                    "background": color,
-                    "border": color,
-                    "highlight": {"background": "#ffffff", "border": color},
-                },
-                "size": size,
-                "memory_type": engram.memory_type.value,
-                "retention_strength": engram.retention_strength,
-                "retrieval_count": engram.retrieval_count,
-                "emotional_boost": engram.emotional_boost,
-            })
-    
+
+            nodes.append(
+                {
+                    "id": engram.id,
+                    "label": label,
+                    "title": (
+                        f"**{engram.memory_type.value}**\n\n"
+                        f"{engram.content}\n\n"
+                        f"Retention: {engram.retention_strength:.2f}\n"
+                        f"Retrievals: {engram.retrieval_count}\n"
+                        f"Emotional: {engram.emotional_boost:.2f}"
+                    ),
+                    "color": {
+                        "background": color,
+                        "border": color,
+                        "highlight": {"background": "#ffffff", "border": color},
+                    },
+                    "size": size,
+                    "memory_type": engram.memory_type.value,
+                    "retention_strength": engram.retention_strength,
+                    "retrieval_count": engram.retrieval_count,
+                    "emotional_boost": engram.emotional_boost,
+                }
+            )
+
         # Построение рёбер
         edges = []
         if include_synapses:
             node_ids = {n["id"] for n in nodes}
             for synapse in self.synapses.values():
                 if synapse.source_id in node_ids and synapse.target_id in node_ids:
-                    edges.append({
-                        "from": synapse.source_id,
-                        "to": synapse.target_id,
-                        "width": 1 + synapse.weight * 5,
-                        "color": {
-                            "color": f"rgba(0, 212, 255, {synapse.weight})",
-                            "highlight": "#ffffff",
-                        },
-                        "title": f"Weight: {synapse.weight:.2f}\nActivations: {synapse.activation_count}",
-                    })
-    
+                    edges.append(
+                        {
+                            "from": synapse.source_id,
+                            "to": synapse.target_id,
+                            "width": 1 + synapse.weight * 5,
+                            "color": {
+                                "color": f"rgba(0, 212, 255, {synapse.weight})",
+                                "highlight": "#ffffff",
+                            },
+                            "title": f"Weight: {synapse.weight:.2f}\nActivations: {synapse.activation_count}",
+                        }
+                    )
+
         return {
             "nodes": nodes,
             "edges": edges,
             "total_engrams": len(self.engrams),
             "total_synapses": len(self.synapses),
         }
-
-
 
     async def _extract_semantic_facts(self, episodes: list[Engram]) -> list[str]:
         """
