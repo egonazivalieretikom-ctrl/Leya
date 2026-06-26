@@ -272,11 +272,10 @@ class DriveSystem:
         total_effect = 0.0
 
         for (source_type, tgt_type), coefficient in self.CROSS_INFLUENCE.items():
-            if tgt_type == target_type:
-                if source_type in self.drives:
-                    source = self.drives[source_type]
-                    source_deviation = source.current - source.baseline
-                    total_effect += coefficient * source_deviation
+            if tgt_type == target_type and source_type in self.drives:
+                source = self.drives[source_type]
+                source_deviation = source.current - source.baseline
+                total_effect += coefficient * source_deviation
 
         return total_effect
 

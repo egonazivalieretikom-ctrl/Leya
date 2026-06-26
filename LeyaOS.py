@@ -1,7 +1,7 @@
 """
 LeyaOS.py — Оркестратор цифрового сознания Леи.
 
-Версия: 3.0 (после Этапов 1.1-1.3 и 2.1)
+Версия: 3.0
 
 Архитектурные принципы:
 - Использование Protocol-интерфейсов (вместо hasattr)
@@ -12,30 +12,19 @@ LeyaOS.py — Оркестратор цифрового сознания Леи.
 - Graceful shutdown с сохранением состояния
 - Централизованная конфигурация (LeyaConfig)
 - Keyword arguments везде
-
-Биологическая модель сохраняется без упрощений:
-- Драйвы с метаболизмом и RPE
-- Гомеостаз с автономной генерацией целей
-- Память с забыванием (Эббингауз) и консолидацией
-- Мета-когниция и спонтанные мысли
-- Конституциональные ограничения
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import sys
 from datetime import datetime
 from typing import Any
 
-# Отключение телеметрии ChromaDB ДО импорта
-os.environ["ANONYMIZED_TELEMETRY"] = "false"
-os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
-logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
-
+# Bootstrap выполняется автоматически при импорте leya_core (см. leya_core/__init__.py)
+# os.environ устанавливается там ДО загрузки chromadb
 # Импорт конфигурации
 from leya_core.config import LeyaConfig
 
@@ -80,6 +69,8 @@ from leya_core.thinker import CoreThinker
 from leya_core.tool_generator import ToolGenerator
 from web_interface.web_environment import WebEnvironment
 
+# Настройка логирования ПОСЛЕ всех импортов
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 logger = logging.getLogger("LeyaOS")
 
 
@@ -364,9 +355,18 @@ class LeyaOS:
                 logger.error(f"Неожиданная ошибка запуска веб-сервера: {exc}", exc_info=True)
 
         # Установка обработчиков сигналов для graceful shutdown
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self.shutdown()))
+        if sys.platform != "win32":
+            try:
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self.shutdown()))
+            except NotImplementedError:
+                logger.warning(
+                    "Signal handlers не поддерживаются на этой платформе. Используйте Ctrl+C."
+                )
+        else:
+            # Windows: используем стандартную обработку KeyboardInterrupt
+            logger.info("Windows: обработка сигналов через KeyboardInterrupt")
 
         # Главный цикл восприятия
         try:

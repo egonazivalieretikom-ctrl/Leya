@@ -171,17 +171,13 @@ class TestSoulFileManager:
     """Тесты менеджера файлов души."""
 
     def test_init_creates_directory(self, tmp_path):
-        """SoulFileManager создаёт директорию."""
         soul_dir = tmp_path / "leya_soul"
-        manager = SoulFileManager(soul_dir=str(soul_dir))
-
+        SoulFileManager(soul_dir=str(soul_dir))
         assert soul_dir.exists()
 
     def test_init_creates_default_files(self, tmp_path):
-        """SoulFileManager создаёт файлы по умолчанию."""
         soul_dir = tmp_path / "leya_soul"
-        manager = SoulFileManager(soul_dir=str(soul_dir))
-
+        SoulFileManager(soul_dir=str(soul_dir))
         assert (soul_dir / "personality.txt").exists()
         assert (soul_dir / "rules.txt").exists()
         assert (soul_dir / "values.txt").exists()

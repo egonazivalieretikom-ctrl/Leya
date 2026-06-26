@@ -178,7 +178,7 @@ class TestGlobalWorkspace:
         )
         ws.submit(proposal)
 
-        winner = ws.select_winner({})
+        ws.select_winner({})
 
         assert len(ws.proposals) == 0
         assert len(ws.history) == 1

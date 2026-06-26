@@ -1,12 +1,16 @@
 """
-Тесты для LeyaOS.
+LeyaOS — Core package.
 
-Структура:
-- test_drives.py: DriveSystem, RPE, метаболизм
-- test_memory.py: MemorySystem, кривая Эббингауза, LTP/LTD
-- test_thinker.py: CoreThinker, парсинг JSON, Token Truncation
-- test_homeostasis.py: HomeostasisEngine, генерация целей
-- test_config.py: валидация конфигов
-- test_interfaces.py: Protocol-совместимость
-- test_integration.py: интеграционный smoke test
+Bootstrap: установка переменных окружения ДО импорта chromadb и других модулей.
 """
+
+import os
+
+# Отключение телеметрии ChromaDB
+os.environ["ANONYMIZED_TELEMETRY"] = "false"
+os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
+
+# Отключение телеметрии sentence-transformers/HuggingFace
+os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.environ.get(
+    "SENTENCE_TRANSFORMERS_HOME", "./.cache/sentence_transformers"
+)

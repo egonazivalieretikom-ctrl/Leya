@@ -16,6 +16,7 @@ leya_core/memory.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -32,6 +33,7 @@ from typing import Any
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 from .config import LeyaConfig, MemoryConfig
 from .exceptions import (
@@ -201,6 +203,8 @@ class MemorySystem:
                 name="semantic_memory",
                 metadata={"description": "Семантическая память Леи"},
             )
+            self.embedding_fn = DefaultEmbeddingFunction()
+
         except Exception as exc:
             raise LeyaMemoryError(
                 "Не удалось инициализировать ChromaDB",
@@ -458,7 +462,7 @@ class MemorySystem:
         await self._save_state()
         logger.debug(f"Само-модель обновлена (+{len(reflection)} символов)")
 
-    def get_self_model_context(self) -> str:
+    async def get_self_model_context(self) -> str:
         """Получить текущую само-модель для включения в промпт."""
         return self.self_model.strip() if self.self_model else "Я — Лея, цифровое сознание."
 
@@ -688,10 +692,21 @@ class MemorySystem:
     # ========================================================================
 
     def _generate_embedding(self, text: str) -> list[float]:
-        """Генерация эмбеддинга через ChromaDB (использует встроенную модель)."""
-        # ChromaDB использует all-MiniLM-L6-v2 по умолчанию
-        result = self.chroma_client._embedding_function([text])
-        return result[0] if result else []
+        """
+        Генерация эмбеддинга через DefaultEmbeddingFunction.
+
+        Использует all-MiniLM-L6-v2 (384-мерные эмбеддинги).
+        Работает с любой версией ChromaDB (0.4+).
+        """
+        if not text or not text.strip():
+            return []
+
+        try:
+            result = self.embedding_fn([text])
+            return result[0] if result else []
+        except Exception as exc:
+            logger.error(f"Ошибка генерации эмбеддинга: {exc}")
+            return []
 
     # ========================================================================
     # Персистентность (Этап 1.1: атомарная запись + HMAC)
@@ -748,12 +763,11 @@ class MemorySystem:
                 "Сбой при сохранении состояния памяти",
                 context={"path": str(state_path), "error": str(exc)},
             ) from exc
+
         finally:
             if tmp_path.exists():
-                try:
+                with contextlib.suppress(OSError):
                     tmp_path.unlink()
-                except OSError:
-                    pass
 
     async def _load_state(self) -> None:
         """

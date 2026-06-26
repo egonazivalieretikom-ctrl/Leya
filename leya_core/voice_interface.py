@@ -131,9 +131,8 @@ class VoiceInterface:
                 if energy > silence_threshold:
                     # Есть речь — распознаём
                     transcript = await self.transcribe(audio)
-                    if transcript and len(transcript) > 3:
-                        if self.on_transcript:
-                            await self.on_transcript(transcript)
+                    if transcript and len(transcript) > 3 and self.on_transcript:
+                        await self.on_transcript(transcript)
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Ошибка в always_listening: {e}")
@@ -158,11 +157,7 @@ class VoiceInterface:
             return True
 
         # Если короткий запрос или продолжение разговора — вероятно к ней
-        if len(text.split()) < 8 and last_messages:
-            return True
-
-        # Иначе — не к ней (разговор с кем-то другим)
-        return False
+        return len(text.split()) < 8 and bool(last_messages)
 
 
 # Пример использования (для теста)

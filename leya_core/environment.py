@@ -20,6 +20,7 @@ leya_core/environment.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -248,15 +249,17 @@ class ToolRegistry:
             import aiohttp
 
             url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{query}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return data.get("extract", "Информация не найдена")
-                    elif resp.status == 404:
-                        return f"Статья '{query}' не найдена в Wikipedia ({lang})"
-                    else:
-                        return f"Ошибка Wikipedia: статус {resp.status}"
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("extract", "Информация не найдена")
+                elif resp.status == 404:
+                    return f"Статья '{query}' не найдена в Wikipedia ({lang})"
+                else:
+                    return f"Ошибка Wikipedia: статус {resp.status}"
         except asyncio.TimeoutError:
             return "Превышено время ожидания ответа Wikipedia"
         except Exception as exc:
@@ -287,10 +290,12 @@ class ToolRegistry:
 
             url = f"https://api.github.com/repos/{repo}/readme"
             headers = {"Accept": "application/vnd.github.v3.raw"}
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp,
+            ):
+                if resp.status == 200:
+                    content = await resp.text()
                     if resp.status == 200:
                         content = await resp.text()
                         return content[:3000]  # Ограничение длины
@@ -309,25 +314,42 @@ class ToolRegistry:
             import aiohttp
 
             url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit={limit}"
-            headers = {"User-Agent": "LeyaOS/1.0"}
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        posts = data.get("data", {}).get("children", [])
-                        if not posts:
-                            return "Посты не найдены"
-                        output = []
-                        for post in posts[:limit]:
-                            d = post.get("data", {})
-                            output.append(
-                                f"- {d.get('title', 'Без названия')} (score: {d.get('score', 0)})"
-                            )
-                        return "\n".join(output)
-                    else:
-                        return f"Ошибка Reddit: статус {resp.status}"
+
+            # ВАЖНО: Reddit требует User-Agent с описанием приложения
+            headers = {
+                "User-Agent": "LeyaOS/1.0 (AI Consciousness Research; contact: leya@example.com)",
+                "Accept": "application/json",
+            }
+
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    posts = data.get("data", {}).get("children", [])
+                    if not posts:
+                        return "Посты не найдены"
+                    output = []
+                    for post in posts[:limit]:
+                        d = post.get("data", {})
+                        output.append(
+                            f"- {d.get('title', 'Без названия')} "
+                            f"(score: {d.get('score', 0)}, comments: {d.get('num_comments', 0)})"
+                        )
+                    return "\n".join(output)
+                elif resp.status == 403:
+                    return "⚠️ Reddit заблокировал запрос. Попробуйте другой subreddit."
+                elif resp.status == 404:
+                    return f"Subreddit '{subreddit}' не найден"
+                elif resp.status == 429:
+                    return "⚠️ Слишком много запросов к Reddit. Подождите минуту."
+                else:
+                    return f"Ошибка Reddit: статус {resp.status}"
         except asyncio.TimeoutError:
             return "Превышено время ожидания ответа Reddit"
         except Exception as exc:
@@ -370,10 +392,8 @@ class ToolRegistry:
             except subprocess.TimeoutExpired:
                 return "⚠️ Превышено время выполнения (10с)"
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     os.unlink(temp_file)
-                except Exception:
-                    pass
         except Exception as exc:
             return f"Ошибка выполнения кода: {exc}"
 

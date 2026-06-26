@@ -343,12 +343,7 @@ class HomeostasisEngine:
         recent_topics.update(self.recently_researched[-5:])
 
         # Генерация запроса (избегая повторений)
-        if self.dynamic_keywords:
-            # Используем динамические ключевые слова
-            query = self.dynamic_keywords[-1]
-        else:
-            # Используем общую тему
-            query = "сознание"
+        query = self.dynamic_keywords[-1] if self.dynamic_keywords else "сознание"
 
         # Проверка, не исследовали ли мы это недавно
         if query.lower() in {t.lower() for t in recent_topics}:

@@ -98,8 +98,7 @@ class VoiceEnvironment(Environment):
             return
 
         async def handle_transcript(text: str):
-            if self.voice.is_addressed_to_me(text):
-                if self.leya_os:
-                    await self.leya_os.perceive({"type": "voice", "content": text})
+            if self.voice.is_addressed_to_me(text) and self.leya_os:
+                await self.leya_os.perceive({"type": "voice", "content": text})
 
         await self.voice.start_always_listening(handle_transcript)

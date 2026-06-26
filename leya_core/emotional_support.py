@@ -76,27 +76,25 @@ class EmotionalSupport:
         """
         mood = user_state.get("mood", "neutral")
 
-        if mood == "sad":
-            return (
+        responses = {
+            "sad": (
                 "Я слышу, что тебе сейчас непросто. "
                 "Хочешь рассказать подробнее? Я здесь и готова выслушать. "
                 "Иногда просто проговорить проблему уже помогает."
-            )
-
-        elif mood == "angry":
-            return (
+            ),
+            "angry": (
                 "Похоже, ты сейчас сильно раздражён. Это нормально. "
                 "Хочешь выговориться? Я могу просто слушать или помочь разобраться, что можно сделать."
-            )
-
-        elif mood == "happy":
-            return (
+            ),
+            "happy": (
                 "Рада слышать, что у тебя хорошее настроение! "
                 "Расскажи, что такого приятного произошло?"
-            )
-
-        else:
-            return "Я здесь. Расскажи, что у тебя на душе. " "Иногда полезно просто поделиться."
+            ),
+        }
+        return responses.get(
+            mood,
+            "Я здесь. Расскажи, что у тебя на душе. Иногда полезно просто поделиться.",
+        )
 
     def add_emotional_note_to_memory(self, user_state: dict):
         """
@@ -104,8 +102,6 @@ class EmotionalSupport:
         """
         if self.memory and hasattr(self.memory, "store_perception"):
             try:
-                note = f"Эмоциональное состояние пользователя: {user_state['mood']}. Текст: {user_state['text'][:200]}"
-                # Здесь можно вызвать store_perception, но для безопасности делаем через лог
                 logger.info(
                     f"[EmotionalSupport] Сохранено эмоциональное состояние: {user_state['mood']}"
                 )

@@ -81,7 +81,7 @@ def create_app(web_environment) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def root(request: Request):
         """Главная страница — Advanced UI."""
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request, "index.html")
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
@@ -424,6 +424,63 @@ def create_app(web_environment) -> FastAPI:
         except Exception as e:
             logger.error(f"Ошибка обновления soul file: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    # web_interface/server.py, добавить после /api/drives
+
+    @app.get("/api/self-model")
+    async def get_self_model():
+        """Получение текущей само-модели."""
+        if not web_environment.leya:
+            return {"self_model": ""}
+        try:
+            self_model = await web_environment.leya.memory.get_self_model_context()
+            return {"self_model": self_model}
+        except Exception as e:
+            logger.error(f"Ошибка получения self_model: {e}")
+            return {"self_model": "", "error": str(e)}
+
+
+    @app.get("/api/soul")
+    async def get_soul_files():
+        """Получение содержимого файлов души."""
+        if not web_environment.leya:
+            return {}
+        try:
+            if hasattr(web_environment, "soul_manager"):
+                return web_environment.soul_manager.get_all_contents()
+            return {}
+        except Exception as e:
+            logger.error(f"Ошибка получения soul files: {e}")
+            return {}
+
+
+    @app.post("/api/soul/update")
+    async def update_soul_file(request: dict):
+        """Обновление файла души."""
+        if not web_environment.leya:
+            return JSONResponse({"error": "Лея не инициализирована"}, status_code=500)
+        try:
+            filename = request.get("filename")
+            content = request.get("content", "")
+            if not filename:
+                return JSONResponse({"error": "filename не указан"}, status_code=400)
+            if hasattr(web_environment, "soul_manager"):
+                result = web_environment.soul_manager.write_file(filename, content)
+                await web_environment.broadcast_soul_update(
+                    web_environment.soul_manager.get_all_contents()
+                )
+                return {"status": "ok", "result": result}
+            return JSONResponse({"error": "SoulManager не доступен"}, status_code=500)
+        except Exception as e:
+            logger.error(f"Ошибка обновления soul file: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+
+    @app.get("/favicon.ico")
+    async def favicon():
+        """Пустой favicon, чтобы не было 404."""
+        from fastapi.responses import Response
+        return Response(content=b"", media_type="image/x-icon")
 
 
 async def run_server(web_environment):

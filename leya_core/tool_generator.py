@@ -59,7 +59,7 @@ class ToolGenerator:
             content = episode.get("content", "")
 
             # Ищем упоминания инструментов
-            for tool_name in self.tool_registry.tools.keys():
+            for tool_name in self.tool_registry.tools:
                 if tool_name in content:
                     if tool_name not in tool_calls:
                         tool_calls[tool_name] = {"count": 0, "contexts": []}

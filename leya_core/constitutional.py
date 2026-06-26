@@ -19,6 +19,7 @@ leya_core/constitutional.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import subprocess
@@ -535,10 +536,8 @@ class ConstitutionalLayer:
 
         finally:
             # Очистка временного файла
-            try:
+            with contextlib.suppress(Exception):
                 Path(temp_file).unlink()
-            except Exception:
-                pass
 
     def _log_violation(
         self,

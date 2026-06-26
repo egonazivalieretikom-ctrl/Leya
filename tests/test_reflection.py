@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -473,10 +474,8 @@ class TestBackgroundConsolidation:
             await asyncio.wait_for(task, timeout=2.0)
         except asyncio.TimeoutError:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
         # Проверяем, что цикл корректно остановился
         assert not mc._running

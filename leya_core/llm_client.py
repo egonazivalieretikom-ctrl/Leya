@@ -70,9 +70,11 @@ class CircuitBreaker:
     @property
     def state(self) -> CircuitState:
         """Текущее состояние (с автоматическим переходом в half-open)."""
-        if self._state == CircuitState.OPEN:
-            if time.time() - self._last_failure_time >= self.recovery_timeout:
-                self._transition_to(CircuitState.HALF_OPEN)
+        if (
+            self._state == CircuitState.OPEN
+            and time.time() - self._last_failure_time >= self.recovery_timeout
+        ):
+            self._transition_to(CircuitState.HALF_OPEN)
         return self._state
 
     @property
@@ -82,23 +84,22 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         """Записать успешный запрос."""
-        if self._state == CircuitState.HALF_OPEN:
-            self._success_count += 1
-            if self._success_count >= self.success_threshold:
-                self._transition_to(CircuitState.CLOSED)
-        elif self._state == CircuitState.CLOSED:
-            self._failure_count = 0  # Сброс счётчика отказов
+        if self._state == CircuitState.HALF_OPEN or (
+            self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold
+        ):
+            self._transition_to(CircuitState.OPEN)
 
     def record_failure(self) -> None:
         """Записать отказ."""
         self._failure_count += 1
         self._last_failure_time = time.time()
 
-        if self._state == CircuitState.HALF_OPEN:
+        if (
+            self._state == CircuitState.HALF_OPEN
+            or self._state == CircuitState.CLOSED
+            and self._failure_count >= self.failure_threshold
+        ):
             self._transition_to(CircuitState.OPEN)
-        elif self._state == CircuitState.CLOSED:
-            if self._failure_count >= self.failure_threshold:
-                self._transition_to(CircuitState.OPEN)
 
     def _transition_to(self, new_state: CircuitState) -> None:
         """Переход в новое состояние с логированием."""

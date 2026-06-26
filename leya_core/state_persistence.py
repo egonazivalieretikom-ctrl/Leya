@@ -61,11 +61,11 @@ class StatePersistence:
                 os.replace(tmp_path, self.state_file)
             except OSError as exc:
                 # Очистка tmp на случай ошибки
+                import contextlib
+
                 if os.path.exists(tmp_path):
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(tmp_path)
-                    except OSError:
-                        pass
                 raise LeyaPersistenceError(
                     "Не удалось сохранить состояние",
                     context={"path": self.state_file, "error": str(exc)},

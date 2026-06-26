@@ -32,10 +32,8 @@ class TestMemoryConfig:
         assert Path(config.brain_dir).exists()
 
     def test_creates_brain_dir(self, tmp_path):
-        """brain_dir создаётся автоматически."""
         brain_dir = tmp_path / "new_brain"
-        config = MemoryConfig(brain_dir=str(brain_dir))
-
+        MemoryConfig(brain_dir=str(brain_dir))  # Просто вызываем
         assert brain_dir.exists()
 
     def test_invalid_forgetting_threshold(self, tmp_path):
