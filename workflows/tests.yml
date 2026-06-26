@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+
+    - name: Create test directories
+      run: |
+        mkdir -p leya_brain leya_soul
+
+    - name: Run tests with coverage
+      run: |
+        pytest tests/ \
+          --cov=leya_core \
+          --cov=LeyaOS \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-report=term-missing \
+          -v
+
+    - name: Upload coverage to Codecov
+      if: matrix.python-version == '3.11'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Upload coverage HTML
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-html-${{ matrix.python-version }}
+        path: htmlcov/

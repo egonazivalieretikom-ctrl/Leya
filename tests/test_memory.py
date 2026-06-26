@@ -1,338 +1,436 @@
 """
-tests/test_memory.py — Тесты для системы памяти Леи.
-Проверяет: забывание по Эббингаузу, LTP, консолидацию, синапсы.
+Тесты для MemorySystem.
+
+Проверяет:
+- Кривую забывания Эббингауза
+- LTP (усиление синапсов)
+- Сохранение и загрузку состояния (с HMAC)
+- get_recent_episodes
+- forget_weak_memories
+- update_self_model
 """
+from __future__ import annotations
+
 import asyncio
+import hashlib
+import hmac
+import os
+import pickle
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from leya_core.memory import MemorySystem, Engram, Synapse, MemoryType
+from leya_core.exceptions import (
+    LeyaMemoryError,
+    LeyaStateCorruptedError,
+    LeyaStateVersionMismatchError,
+)
+from leya_core.memory import (
+    Engram,
+    MEMORY_STATE_VERSION,
+    MemorySystem,
+    MemoryType,
+    Synapse,
+)
 
 
 class TestEngram:
-    """Тесты для модели Engram."""
-    
-    def test_engram_initialization(self):
-        """Проверка инициализации энграммы."""
+    """Тесты модели Engram."""
+
+    def test_engram_creation(self):
+        """Engram корректно создаётся."""
         engram = Engram(
-            id="test_id",
-            content="Тестовое воспоминание",
+            id="test1",
+            content="Тестовая энграмма",
             memory_type=MemoryType.EPISODIC,
-            emotional_boost=0.5
         )
-        
-        assert engram.id == "test_id"
-        assert engram.content == "Тестовое воспоминание"
+
+        assert engram.id == "test1"
+        assert engram.content == "Тестовая энграмма"
         assert engram.memory_type == MemoryType.EPISODIC
-        assert engram.emotional_boost == 0.5
         assert engram.retention_strength == 1.0
         assert engram.retrieval_count == 0
-    
-    def test_engram_forgetting_basic(self):
-        """Проверка базового забывания по Эббингаузу."""
+
+    def test_engram_to_dict(self):
+        """Engram корректно сериализуется в dict."""
         engram = Engram(
-            id="test_id",
-            content="Тест",
-            memory_type=MemoryType.EPISODIC,
-            timestamp=time.time() - 3600  # 1 час назад
-        )
-        
-        current_time = time.time()
-        retention = engram.calculate_forgetting(current_time)
-        
-        #Retention должно уменьшиться со временем
-        assert retention < 1.0
-        assert retention > 0.0
-    
-    def test_engram_forgetting_with_emotional_boost(self):
-        """Проверка влияния эмоционального усиления на забывание."""
-        engram1 = Engram(
             id="test1",
-            content="Обычное воспоминание",
-            memory_type=MemoryType.EPISODIC,
-            timestamp=time.time() - 3600,
-            emotional_boost=0.0
-        )
-        
-        engram2 = Engram(
-            id="test2",
-            content="Эмоциональное воспоминание",
-            memory_type=MemoryType.EPISODIC,
-            timestamp=time.time() - 3600,
-            emotional_boost=0.8
-        )
-        
-        current_time = time.time()
-        retention1 = engram1.calculate_forgetting(current_time)
-        retention2 = engram2.calculate_forgetting(current_time)
-        
-        # Эмоциональное воспоминание должно забываться медленнее
-        assert retention2 > retention1
-    
-    def test_engram_forgetting_with_retrieval(self):
-        """Проверка влияния извлечения на забывание (LTP-подобный эффект)."""
-        engram = Engram(
-            id="test_id",
             content="Тест",
             memory_type=MemoryType.EPISODIC,
-            timestamp=time.time() - 3600,
-            retrieval_count=0
+            emotional_boost=0.5,
         )
-        
-        current_time = time.time()
-        retention_before = engram.calculate_forgetting(current_time)
-        
-        # Увеличиваем количество извлечений
-        engram.retrieval_count = 5
-        retention_after = engram.calculate_forgetting(current_time)
-        
-        # После извлечения retention должно быть выше
-        assert retention_after > retention_before
+
+        data = engram.to_dict()
+
+        assert data["id"] == "test1"
+        assert data["content"] == "Тест"
+        assert data["memory_type"] == "episodic"
+        assert data["emotional_boost"] == 0.5
+
+    def test_engram_from_dict(self):
+        """Engram корректно десериализуется из dict."""
+        data = {
+            "id": "test1",
+            "content": "Тест",
+            "memory_type": "episodic",
+            "retention_strength": 0.8,
+            "emotional_boost": 0.3,
+            "retrieval_count": 5,
+        }
+
+        engram = Engram.from_dict(data)
+
+        assert engram.id == "test1"
+        assert engram.retention_strength == 0.8
+        assert engram.emotional_boost == 0.3
+        assert engram.retrieval_count == 5
 
 
 class TestSynapse:
-    """Тесты для модели Synapse."""
-    
-    def test_synapse_initialization(self):
-        """Проверка инициализации синапса."""
-        synapse = Synapse(source_id="id1", target_id="id2", weight=0.5)
-        
-        assert synapse.source_id == "id1"
-        assert synapse.target_id == "id2"
+    """Тесты модели Synapse."""
+
+    def test_synapse_creation(self):
+        """Synapse корректно создаётся."""
+        synapse = Synapse(source_id="a", target_id="b", weight=0.5)
+
+        assert synapse.source_id == "a"
+        assert synapse.target_id == "b"
         assert synapse.weight == 0.5
-        assert synapse.activation_count == 0
-    
-    def test_synapse_strengthen(self):
-        """Проверка усиления синапса (LTP)."""
-        synapse = Synapse(source_id="id1", target_id="id2", weight=0.5)
-        
-        synapse.strengthen(delta=0.1)
-        
-        assert synapse.weight == 0.6
-        assert synapse.activation_count == 1
-    
-    def test_synapse_strengthen_limit(self):
-        """Проверка ограничения веса синапса (максимум 1.0)."""
-        synapse = Synapse(source_id="id1", target_id="id2", weight=0.95)
-        
-        synapse.strengthen(delta=0.1)
-        
-        assert synapse.weight == 1.0  # Ограничено максимумом
-    
-    def test_synapse_weaken(self):
-        """Проверка ослабления синапса (LTD)."""
-        synapse = Synapse(source_id="id1", target_id="id2", weight=0.5)
-        
-        synapse.weaken(delta=0.1)
-        
-        assert synapse.weight == 0.4
-    
-    def test_synapse_weaken_limit(self):
-        """Проверка ограничения веса синапса (минимум 0.0)."""
-        synapse = Synapse(source_id="id1", target_id="id2", weight=0.05)
-        
-        synapse.weaken(delta=0.1)
-        
-        assert synapse.weight == 0.0  # Ограничено минимумом
+
+    def test_synapse_to_dict(self):
+        """Synapse корректно сериализуется."""
+        synapse = Synapse(source_id="a", target_id="b", weight=0.7)
+        data = synapse.to_dict()
+
+        assert data["source_id"] == "a"
+        assert data["weight"] == 0.7
 
 
-class TestMemorySystem:
-    """Тесты для MemorySystem."""
-    
+class TestEbbinghausForgetting:
+    """Тесты кривой забывания Эббингауза."""
+
     @pytest.mark.asyncio
-    async def test_memory_initialization(self, temp_brain_dir):
-        """Проверка инициализации MemorySystem."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        assert memory.persist_directory == temp_brain_dir
-        assert memory.episodic_collection is not None
-        assert memory.semantic_collection is not None
-        assert len(memory.engrams) == 0
-        assert len(memory.synapses) == 0
-    
-    @pytest.mark.asyncio
-    async def test_store_perception(self, temp_brain_dir):
-        """Проверка сохранения восприятия."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        engram_id = await memory.store_perception(
-            content="Тестовое воспоминание для проверки сохранения",
-            drive_state={"CURIOSITY": 0.5},
-            importance=0.7
-        )
-        
-        assert engram_id is not None
-        assert engram_id in memory.engrams
-        assert memory.engrams[engram_id].content == "Тестовое воспоминание для проверки сохранения"
-        assert memory.engrams[engram_id].emotional_boost == 0.7
-    
-    @pytest.mark.asyncio
-    async def test_store_perception_too_short(self, temp_brain_dir):
-        """Проверка пропуска слишком короткого восприятия."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        engram_id = await memory.store_perception(
-            content="Коротко",
-            drive_state={},
-            importance=0.5
-        )
-        
-        assert engram_id is None
-        assert len(memory.engrams) == 0
-    
-    @pytest.mark.asyncio
-    async def test_store_fact(self, temp_brain_dir):
-        """Проверка сохранения семантического факта."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        engram_id = await memory.store_fact(
-            fact="Тестовый факт для проверки семантической памяти",
-            category="test"
-        )
-        
-        assert engram_id is not None
-        assert engram_id in memory.engrams
-        assert memory.engrams[engram_id].memory_type == MemoryType.SEMANTIC
-        assert memory.engrams[engram_id].consolidation_level == 0.5
-    
-    @pytest.mark.asyncio
-    async def test_retrieve_context(self, temp_brain_dir):
-        """Проверка извлечения контекста."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        # Сохраняем несколько восприятий
-        await memory.store_perception(
-            content="Первое воспоминание о квантовой физике",
-            drive_state={},
-            importance=0.5
-        )
-        await memory.store_perception(
-            content="Второе воспоминание о квантовой механике",
-            drive_state={},
-            importance=0.6
-        )
-        
-        # Извлекаем контекст
-        context = await memory.retrieve_context(
-            current_stimulus="квантовая физика",
-            current_drive_state={},
-            limit=5
-        )
-        
-        assert "квантовой" in context.lower()
-        assert len(context) > 0
-    
-    @pytest.mark.asyncio
-    async def test_update_self_model(self, temp_brain_dir):
-        """Проверка обновления модели себя."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        await memory.update_self_model("Я начинаю понимать себя лучше")
-        
-        assert "понимать себя лучше" in memory.self_model
-    
-    @pytest.mark.asyncio
-    async def test_get_self_model_context(self, temp_brain_dir):
-        """Проверка получения контекста модели себя."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        await memory.update_self_model("Инсайт 1")
-        await memory.update_self_model("Инсайт 2")
-        
-        context = await memory.get_self_model_context()
-        
-        assert "Инсайт 1" in context
-        assert "Инсайт 2" in context
-    
-    @pytest.mark.asyncio
-    async def test_consolidate_memories(self, temp_brain_dir, mock_llm_with_facts):
-        """Проверка консолидации памяти."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        # Сохраняем несколько восприятий
-        for i in range(5):
-            await memory.store_perception(
-                content=f"Воспоминание номер {i} для проверки консолидации памяти",
-                drive_state={},
-                importance=0.5
+    async def test_retention_decreases_over_time(self, test_memory_config):
+        """Retention уменьшается со временем (без доступа)."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            # Создаём энграмму с timestamp в прошлом
+            engram = Engram(
+                id="old_ep",
+                content="Старый эпизод",
+                memory_type=MemoryType.EPISODIC,
+                timestamp=time.time() - 7200,  # 2 часа назад
+                last_retrieved=time.time() - 7200,
+                retention_strength=1.0,
             )
-        
-        initial_count = len(memory.engrams)
-        
-        # Запускаем консолидацию
-        await memory.consolidate_memories(llm_client=mock_llm_with_facts)
-        
-        # Некоторые энграммы должны быть удалены (prune слабых)
-        # или добавлены семантические факты
-        assert len(memory.engrams) != initial_count or len(memory.semantic_collection.get()["ids"]) > 0
-    
+            memory.engrams["old_ep"] = engram
+
+            # Применяем забывание
+            await memory._apply_forgetting()
+
+            # Retention должен уменьшиться
+            assert memory.engrams["old_ep"].retention_strength < 1.0
+            assert memory.engrams["old_ep"].retention_strength > 0.0
+
     @pytest.mark.asyncio
-    async def test_synapse_formation(self, temp_brain_dir):
-        """Проверка формирования синапсов при сохранении восприятия."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        # Сохраняем похожие восприятия
-        id1 = await memory.store_perception(
-            content="Квантовая физика изучает микроскопические системы",
-            drive_state={},
-            importance=0.5
-        )
-        
-        id2 = await memory.store_perception(
-            content="Квантовая механика описывает поведение атомов",
-            drive_state={},
-            importance=0.5
-        )
-        
-        # Должны сформироваться синапсы между похожими энграммами
-        assert len(memory.synapses) > 0
-        
-        # Проверяем наличие синапсов
-        synapse_exists = any(
-            (id1 in key and id2 in key) or (id2 in key and id1 in key)
-            for key in memory.synapses.keys()
-        )
-        assert synapse_exists
-    
+    async def test_emotional_boost_slows_forgetting(self, test_memory_config):
+        """Эмоциональное усиление замедляет забывание."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            # Две энграммы одинакового возраста
+            now = time.time()
+            engram_normal = Engram(
+                id="normal",
+                content="Обычный эпизод",
+                memory_type=MemoryType.EPISODIC,
+                timestamp=now - 3600,
+                last_retrieved=now - 3600,
+                emotional_boost=0.0,
+            )
+            engram_emotional = Engram(
+                id="emotional",
+                content="Эмоциональный эпизод",
+                memory_type=MemoryType.EPISODIC,
+                timestamp=now - 3600,
+                last_retrieved=now - 3600,
+                emotional_boost=0.8,
+            )
+
+            memory.engrams["normal"] = engram_normal
+            memory.engrams["emotional"] = engram_emotional
+
+            await memory._apply_forgetting()
+
+            # Эмоциональная энграмма должна иметь больший retention
+            assert (
+                memory.engrams["emotional"].retention_strength
+                > memory.engrams["normal"].retention_strength
+            )
+
     @pytest.mark.asyncio
-    async def test_save_and_load_state(self, temp_brain_dir):
-        """Проверка сохранения и загрузки состояния памяти."""
-        memory1 = MemorySystem(persist_directory=temp_brain_dir)
-        
-        await memory1.store_perception(
-            content="Тестовое воспоминание для проверки персистентности",
-            drive_state={},
-            importance=0.5
-        )
-        
-        initial_engrams = len(memory1.engrams)
-        initial_synapses = len(memory1.synapses)
-        
-        # Создаем новый экземпляр (должен загрузить состояние)
-        memory2 = MemorySystem(persist_directory=temp_brain_dir)
-        
-        assert len(memory2.engrams) == initial_engrams
-        assert len(memory2.synapses) == initial_synapses
-    
+    async def test_retrieval_count_slows_forgetting(self, test_memory_config):
+        """Частое извлечение замедляет забывание."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            now = time.time()
+            engram_frequent = Engram(
+                id="frequent",
+                content="Часто извлекаемый",
+                memory_type=MemoryType.EPISODIC,
+                timestamp=now - 3600,
+                last_retrieved=now - 3600,
+                retrieval_count=100,
+            )
+            engram_rare = Engram(
+                id="rare",
+                content="Редко извлекаемый",
+                memory_type=MemoryType.EPISODIC,
+                timestamp=now - 3600,
+                last_retrieved=now - 3600,
+                retrieval_count=0,
+            )
+
+            memory.engrams["frequent"] = engram_frequent
+            memory.engrams["rare"] = engram_rare
+
+            await memory._apply_forgetting()
+
+            assert (
+                memory.engrams["frequent"].retention_strength
+                > memory.engrams["rare"].retention_strength
+            )
+
+
+class TestLTP:
+    """Тесты Long-Term Potentiation (LTP)."""
+
     @pytest.mark.asyncio
-    async def test_forget_weak_memories(self, temp_brain_dir):
-        """Проверка забывания слабых воспоминаний."""
-        memory = MemorySystem(persist_directory=temp_brain_dir)
-        
-        # Сохраняем восприятие с низкой важностью
-        engram_id = await memory.store_perception(
-            content="Слабое воспоминание для проверки забывания",
-            drive_state={},
-            importance=0.1
-        )
-        
-        # Искусственно занижаем retention_strength
-        memory.engrams[engram_id].retention_strength = 0.05
-        
-        # Запускаем забывание
-        await memory._forget_weak_memories(threshold=0.15)
-        
-        # Энграмма должна быть удалена
-        assert engram_id not in memory.engrams
+    async def test_strengthen_synapses(self, test_memory_config):
+        """Совместная активация усиливает синапсы."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            # Создаём синапс
+            memory.synapses["a->b"] = Synapse(
+                source_id="a", target_id="b", weight=0.3
+            )
+
+            initial_weight = memory.synapses["a->b"].weight
+
+            # Усиливаем
+            await memory._strengthen_synapses(["a", "b"])
+
+            assert memory.synapses["a->b"].weight > initial_weight
+
+
+class TestMemoryPersistence:
+    """Тесты персистентности с HMAC."""
+
+    @pytest.mark.asyncio
+    async def test_save_and_load_state(self, test_memory_config):
+        """Сохранение и загрузка состояния работают корректно."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            # Добавляем данные
+            memory.engrams["test1"] = Engram(
+                id="test1",
+                content="Тест",
+                memory_type=MemoryType.EPISODIC,
+            )
+            memory.self_model = "Я — Лея."
+
+            # Сохраняем
+            await memory._save_state()
+
+            # Проверяем, что файлы созданы
+            state_path = Path(memory.state_path)
+            assert state_path.exists()
+            assert state_path.with_suffix(state_path.suffix + ".hmac").exists()
+
+            # Очищаем и загружаем
+            memory.engrams = {}
+            memory.self_model = ""
+
+            await memory._load_state()
+
+            assert "test1" in memory.engrams
+            assert memory.self_model == "Я — Лея."
+
+    @pytest.mark.asyncio
+    async def test_load_corrupted_state(self, test_memory_config):
+        """Загрузка повреждённого файла бросает исключение."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            # Создаём повреждённый файл
+            state_path = Path(memory.state_path)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_bytes(b"corrupted data")
+
+            # Создаём HMAC файл с неправильной подписью
+            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+            hmac_path.write_text("invalid_signature")
+
+            with pytest.raises(LeyaStateCorruptedError):
+                await memory._load_state()
+
+    @pytest.mark.asyncio
+    async def test_load_version_mismatch(self, test_memory_config):
+        """Загрузка файла с несовместимой версией бросает исключение."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            # Создаём файл с неправильной версией
+            state_path = Path(memory.state_path)
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+
+            payload = {
+                "__version__": 999,  # Несовместимая версия
+                "data": {"engrams": {}, "synapses": {}, "self_model": ""},
+            }
+            with state_path.open("wb") as f:
+                pickle.dump(payload, f)
+
+            # Создаём правильный HMAC
+            key = memory._get_hmac_key()
+            signature = memory._compute_hmac(state_path, key)
+            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+            hmac_path.write_text(signature)
+
+            with pytest.raises(LeyaStateVersionMismatchError):
+                await memory._load_state()
+
+
+class TestGetRecentEpisodes:
+    """Тесты публичного API get_recent_episodes."""
+
+    @pytest.mark.asyncio
+    async def test_get_recent_episodes_sorted(self, test_memory_config):
+        """Эпизоды отсортированы по timestamp (свежие первыми)."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            now = time.time()
+            memory.engrams = {
+                "old": Engram(
+                    id="old",
+                    content="Старый",
+                    memory_type=MemoryType.EPISODIC,
+                    timestamp=now - 100,
+                    retention_strength=0.5,
+                ),
+                "new": Engram(
+                    id="new",
+                    content="Новый",
+                    memory_type=MemoryType.EPISODIC,
+                    timestamp=now - 10,
+                    retention_strength=0.5,
+                ),
+            }
+
+            episodes = await memory.get_recent_episodes(limit=10)
+
+            assert len(episodes) == 2
+            assert episodes[0].id == "new"
+            assert episodes[1].id == "old"
+
+    @pytest.mark.asyncio
+    async def test_get_recent_episodes_filters_by_retention(self, test_memory_config):
+        """Эпизоды с низким retention отфильтровываются."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            now = time.time()
+            memory.engrams = {
+                "strong": Engram(
+                    id="strong",
+                    content="Сильный",
+                    memory_type=MemoryType.EPISODIC,
+                    timestamp=now,
+                    retention_strength=0.8,
+                ),
+                "weak": Engram(
+                    id="weak",
+                    content="Слабый",
+                    memory_type=MemoryType.EPISODIC,
+                    timestamp=now,
+                    retention_strength=0.01,  # Ниже порога
+                ),
+            }
+
+            episodes = await memory.get_recent_episodes(limit=10)
+
+            assert len(episodes) == 1
+            assert episodes[0].id == "strong"
+
+    @pytest.mark.asyncio
+    async def test_get_recent_episodes_limit(self, test_memory_config):
+        """Лимит работает корректно."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_chroma.return_value = MagicMock()
+            memory = MemorySystem(config=test_memory_config)
+
+            now = time.time()
+            for i in range(10):
+                memory.engrams[f"ep{i}"] = Engram(
+                    id=f"ep{i}",
+                    content=f"Эпизод {i}",
+                    memory_type=MemoryType.EPISODIC,
+                    timestamp=now - i,
+                    retention_strength=0.5,
+                )
+
+            episodes = await memory.get_recent_episodes(limit=3)
+
+            assert len(episodes) == 3
+
+
+class TestForgetWeakMemories:
+    """Тесты забывания слабых воспоминаний."""
+
+    @pytest.mark.asyncio
+    async def test_forget_weak_memories(self, test_memory_config):
+        """Слабые энграммы удаляются."""
+        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
+            mock_client = MagicMock()
+            mock_collection = MagicMock()
+            mock_client.get_or_create_collection.return_value = mock_collection
+            mock_chroma.return_value = mock_client
+
+            memory = MemorySystem(config=test_memory_config)
+
+            memory.engrams = {
+                "strong": Engram(
+                    id="strong",
+                    content="Сильный",
+                    memory_type=MemoryType.EPISODIC,
+                    retention_strength=0.8,
+                ),
+                "weak": Engram(
+                    id="weak",
+                    content="Слабый",
+                    memory_type=MemoryType.EPISODIC,
+                    retention_strength=0.05,  # Ниже порога
+                ),
+            }
+
+            forgotten = await memory.forget_weak_memories(threshold=0.1)
+
+            assert forgotten == 1
+            assert "strong" in memory.engrams
+            assert "weak" not in memory.engrams

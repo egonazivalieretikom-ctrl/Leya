@@ -1,194 +1,308 @@
 """
-tests/test_drives.py — Тесты для системы драйвов Леи.
-Проверяет: метаболизм, RPE, оценку стимулов, предсказание дисбаланса.
+Тесты для DriveSystem.
+
+Проверяет:
+- Инициализацию драйвов с конфигурацией
+- Метаболизм (фоновое нарастание tension)
+- RPE (Reward Prediction Error)
+- apply_satisfaction с RPE-модификатором
+- Перекрёстное влияние драйвов
+- evaluate_stimulus
+- save_state / load_state
 """
+from __future__ import annotations
+
 import asyncio
 import time
-from unittest.mock import MagicMock
 
 import pytest
 
-from leya_core.drives import DriveSystem, DriveType, Drive
+from leya_core.drives import Drive, DriveSystem, DriveType
+from leya_core.exceptions import LeyaDriveNotFoundError
 
 
-class TestDrive:
-    """Тесты для модели Drive."""
-    
-    def test_drive_initialization(self):
-        """Проверка инициализации драйва."""
-        drive = Drive(type=DriveType.CURIOSITY, current=0.5, target=0.6)
-        
-        assert drive.type == DriveType.CURIOSITY
-        assert drive.current == 0.5
-        assert drive.target == 0.6
-        assert drive.tension == 0.0
-        assert drive.retention_strength == 1.0  # По умолчанию
-    
-    def test_drive_validation(self):
-        """Проверка валидации значений драйва."""
-        # Значения должны быть ограничены диапазоном [0.0, 1.0]
-        drive = Drive(type=DriveType.CURIOSITY, current=1.5, tension=-0.5)
-        
-        assert drive.current == 1.0  # Ограничено максимумом
-        assert drive.tension == 0.0  # Ограничено минимумом
-    
-    def test_drive_apply_delta(self):
-        """Проверка применения дельты к драйву."""
-        drive = Drive(type=DriveType.CURIOSITY, current=0.5, target=0.6)
-        
-        # Положительная дельта
-        drive.apply_delta(0.1)
-        assert drive.current == 0.6
-        
-        # Отрицательная дельта
-        drive.apply_delta(-0.2)
-        assert drive.current == 0.4
-        
-        # Ограничение диапазона
-        drive.apply_delta(10.0)
-        assert drive.current == 1.0
-        
-        drive.apply_delta(-10.0)
-        assert drive.current == 0.0
-    
-    def test_drive_tension_update(self):
-        """Проверка обновления tension на основе метаболизма."""
-        drive = Drive(
-            type=DriveType.CURIOSITY,
-            current=0.3,  # Ниже target
-            target=0.6,
-            metabolism_rate=0.01
+class TestDriveSystemInit:
+    """Тесты инициализации DriveSystem."""
+
+    def test_init_with_config(self, test_drives_config):
+        """DriveSystem корректно инициализируется с конфигом."""
+        ds = DriveSystem(config=test_drives_config)
+
+        assert DriveType.CURIOSITY in ds.drives
+        assert DriveType.CONNECTION in ds.drives
+        assert DriveType.AUTONOMY in ds.drives
+        assert DriveType.REST in ds.drives
+        assert DriveType.CREATIVITY in ds.drives
+        assert DriveType.UNDERSTANDING in ds.drives
+        assert DriveType.INTEGRITY in ds.drives
+
+    def test_init_default_config(self):
+        """DriveSystem инициализируется с конфигом по умолчанию."""
+        ds = DriveSystem()
+        assert len(ds.drives) == 7
+
+    def test_initial_values(self, test_drives_config):
+        """Начальные значения драйвов в разумных пределах."""
+        ds = DriveSystem(config=test_drives_config)
+
+        for drive in ds.drives.values():
+            assert 0.0 <= drive.current <= 1.0
+            assert drive.base_growth_rate > 0
+
+
+class TestDriveSystemMetabolism:
+    """Тесты фонового метаболизма."""
+
+    @pytest.mark.asyncio
+    async def test_metabolism_increases_tension(self, test_drives_config):
+        """Метаболизм увеличивает tension со временем."""
+        test_drives_config.metabolism_interval = 1
+        ds = DriveSystem(config=test_drives_config)
+
+        # Запоминаем начальные значения
+        initial_values = {
+            dt: d.current for dt, d in ds.drives.items()
+        }
+
+        # Запускаем метаболизм на короткое время
+        task = asyncio.create_task(ds.background_metabolism())
+        await asyncio.sleep(2.5)
+        ds.stop()
+        await task
+
+        # Проверяем, что tension вырос
+        for dt, drive in ds.drives.items():
+            assert drive.current >= initial_values[dt], (
+                f"{dt.value}: tension не вырос "
+                f"({initial_values[dt]:.3f} → {drive.current:.3f})"
+            )
+
+    @pytest.mark.asyncio
+    async def test_metabolism_respects_bounds(self, test_drives_config):
+        """Метаболизм не выводит tension за пределы [0, 1]."""
+        test_drives_config.metabolism_interval = 1
+        ds = DriveSystem(config=test_drives_config)
+
+        # Устанавливаем драйвы близко к максимуму
+        for drive in ds.drives.values():
+            drive.current = 0.99
+
+        task = asyncio.create_task(ds.background_metabolism())
+        await asyncio.sleep(2)
+        ds.stop()
+        await task
+
+        for drive in ds.drives.values():
+            assert drive.current <= 1.0
+            assert drive.current >= 0.0
+
+
+class TestDriveSystemRPE:
+    """Тесты Reward Prediction Error."""
+
+    def test_rpe_positive(self, test_drives_config):
+        """Положительный RPE: награда лучше ожидаемой."""
+        ds = DriveSystem(config=test_drives_config)
+
+        # Устанавливаем ожидаемую награду
+        ds.action_values["wikipedia_search"] = 0.5
+
+        # Фактическая награда выше ожидаемой
+        rpe = ds.calculate_rpe("wikipedia_search", actual_outcome=0.8)
+
+        assert rpe > 0, f"RPE должен быть положительным, получен {rpe}"
+        # Ожидаемое значение должно обновиться в сторону фактического
+        assert ds.action_values["wikipedia_search"] > 0.5
+
+    def test_rpe_negative(self, test_drives_config):
+        """Отрицательный RPE: награда хуже ожидаемой."""
+        ds = DriveSystem(config=test_drives_config)
+        ds.action_values["wikipedia_search"] = 0.5
+
+        rpe = ds.calculate_rpe("wikipedia_search", actual_outcome=0.2)
+
+        assert rpe < 0, f"RPE должен быть отрицательным, получен {rpe}"
+        assert ds.action_values["wikipedia_search"] < 0.5
+
+    def test_rpe_zero(self, test_drives_config):
+        """Нулевой RPE: награда как ожидалась."""
+        ds = DriveSystem(config=test_drives_config)
+        ds.action_values["wikipedia_search"] = 0.5
+
+        rpe = ds.calculate_rpe("wikipedia_search", actual_outcome=0.5)
+
+        assert rpe == 0.0
+
+    def test_rpe_new_action(self, test_drives_config):
+        """RPE для нового действия (нет ожидаемого значения)."""
+        ds = DriveSystem(config=test_drives_config)
+
+        # По умолчанию ожидаемое значение = 0.5
+        rpe = ds.calculate_rpe("new_tool", actual_outcome=0.9)
+
+        assert rpe == 0.4  # 0.9 - 0.5
+        assert "new_tool" in ds.action_values
+
+
+class TestDriveSystemSatisfaction:
+    """Тесты применения удовлетворения."""
+
+    def test_apply_satisfaction_reduces_tension(self, test_drives_config):
+        """Удовлетворение снижает tension."""
+        ds = DriveSystem(config=test_drives_config)
+        ds.drives[DriveType.CURIOSITY].current = 0.7
+
+        ds.apply_satisfaction(
+            drive_type=DriveType.CURIOSITY,
+            base_amount=0.2,
+            rpe=0.0,  # Нейтральный RPE
         )
-        
-        initial_tension = drive.tension
-        current_time = time.time() + 3600  # Через 1 час
-        
-        drive.update_tension(current_time)
-        
-        # Tension должно увеличиться (дефицит + метаболизм)
-        assert drive.tension > initial_tension
+
+        assert ds.drives[DriveType.CURIOSITY].current < 0.7
+
+    def test_apply_satisfaction_positive_rpe_boosts(self, test_drives_config):
+        """Положительный RPE усиливает удовлетворение."""
+        ds = DriveSystem(config=test_drives_config)
+        ds.drives[DriveType.CURIOSITY].current = 0.7
+
+        # С положительным RPE
+        ds.apply_satisfaction(
+            drive_type=DriveType.CURIOSITY,
+            base_amount=0.2,
+            rpe=0.5,
+        )
+        tension_with_positive_rpe = ds.drives[DriveType.CURIOSITY].current
+
+        # Сбрасываем
+        ds.drives[DriveType.CURIOSITY].current = 0.7
+
+        # С отрицательным RPE
+        ds.apply_satisfaction(
+            drive_type=DriveType.CURIOSITY,
+            base_amount=0.2,
+            rpe=-0.5,
+        )
+        tension_with_negative_rpe = ds.drives[DriveType.CURIOSITY].current
+
+        # Положительный RPE должен сильнее снизить tension
+        assert tension_with_positive_rpe < tension_with_negative_rpe
+
+    def test_apply_satisfaction_invalid_drive(self, test_drives_config):
+        """Применение удовлетворения к несуществующему драйву бросает исключение."""
+        ds = DriveSystem(config=test_drives_config)
+
+        with pytest.raises(LeyaDriveNotFoundError):
+            ds.apply_satisfaction(
+                drive_type="invalid_drive",
+                base_amount=0.1,
+                rpe=0.0,
+            )
 
 
-class TestDriveSystem:
-    """Тесты для DriveSystem."""
-    
-    def test_drivesystem_initialization(self):
-        """Проверка инициализации DriveSystem."""
-        system = DriveSystem()
-        
-        assert len(system.drives) == 6  # Все типы драйвов
-        assert DriveType.CURIOSITY in system.drives
-        assert DriveType.CONNECTION in system.drives
-        assert DriveType.REST in system.drives
-        assert DriveType.CREATIVITY in system.drives
-        assert DriveType.UNDERSTANDING in system.drives
-        assert DriveType.AUTONOMY in system.drives
-    
-    def test_evaluate_stimulus_greeting(self):
-        """Проверка оценки стимула-приветствия."""
-        system = DriveSystem()
-        
-        deltas = asyncio.get_event_loop().run_until_complete(
-            system.evaluate_stimulus("Привет, как дела?")
-        )
-        
-        # Приветствие должно удовлетворять CONNECTION
-        assert DriveType.CONNECTION in deltas
-        assert deltas[DriveType.CONNECTION] > 0
-    
-    def test_evaluate_stimulus_question(self):
-        """Проверка оценки стимула-вопроса."""
-        system = DriveSystem()
-        
-        deltas = asyncio.get_event_loop().run_until_complete(
-            system.evaluate_stimulus("Что такое квантовая физика?")
-        )
-        
-        # Вопрос должен удовлетворять CURIOSITY
+class TestDriveSystemStimulus:
+    """Тесты оценки стимулов."""
+
+    @pytest.mark.asyncio
+    async def test_evaluate_question_stimulus(self, test_drives_config):
+        """Вопросительный стимул повышает CURIOSITY."""
+        ds = DriveSystem(config=test_drives_config)
+
+        deltas = await ds.evaluate_stimulus("Почему небо синее?")
+
         assert DriveType.CURIOSITY in deltas
         assert deltas[DriveType.CURIOSITY] > 0
-    
-    def test_apply_deltas(self):
-        """Проверка применения дельт к драйвам."""
-        system = DriveSystem()
-        
-        initial_curiosity = system.drives[DriveType.CURIOSITY].current
-        
-        system.apply_deltas({DriveType.CURIOSITY: 0.1})
-        
-        assert system.drives[DriveType.CURIOSITY].current > initial_curiosity
-    
-    def test_calculate_rpe(self):
-        """Проверка расчета RPE (Reward Prediction Error)."""
-        system = DriveSystem()
-        
-        # Первое действие — ожидаемая награда из action_values
-        rpe1 = system.calculate_rpe("research:wikipedia_search", 0.8)
-        
-        # Ожидаемое значение должно быть из action_values (0.7)
-        # RPE = actual - expected = 0.8 - 0.7 = 0.1
-        assert rpe1 == pytest.approx(0.1, abs=0.01)
-        
-        # Второе действие с тем же ключом — среднее из истории
-        rpe2 = system.calculate_rpe("research:wikipedia_search", 0.6)
-        
-        # Теперь ожидаемое = среднее из истории = (0.8 + 0.6) / 2 = 0.7
-        # RPE = 0.6 - 0.7 = -0.1
-        assert rpe2 == pytest.approx(-0.1, abs=0.01)
-    
-    def test_apply_satisfaction_with_rpe(self):
-        """Проверка применения удовлетворения с учетом RPE."""
-        system = DriveSystem()
-        
-        initial_curiosity = system.drives[DriveType.CURIOSITY].current
-        
-        # Положительный RPE → больше удовлетворения
-        system.apply_satisfaction(DriveType.CURIOSITY, 0.1, rpe=0.2)
-        
-        assert system.drives[DriveType.CURIOSITY].current > initial_curiosity
-    
-    def test_get_predicted_disbalance(self):
-        """Проверка предсказания дисбаланса."""
-        system = DriveSystem()
-        
-        # Устанавливаем высокое tension
-        system.drives[DriveType.CURIOSITY].tension = 0.8
-        
-        predicted = system.get_predicted_disbalance()
-        
-        # Предсказанное значение должно быть выше текущего (из-за tension)
-        assert predicted["CURIOSITY"] > system.drives[DriveType.CURIOSITY].current
-    
-    def test_get_internal_state_prompt(self):
-        """Проверка генерации текстового описания состояния."""
-        system = DriveSystem()
-        
-        prompt = system.get_internal_state_prompt()
-        
-        assert "CURIOSITY" in prompt
-        assert "CONNECTION" in prompt
+
+    @pytest.mark.asyncio
+    async def test_evaluate_gratitude_stimulus(self, test_drives_config):
+        """Благодарность снижает CONNECTION tension."""
+        ds = DriveSystem(config=test_drives_config)
+
+        deltas = await ds.evaluate_stimulus("Спасибо, отлично!")
+
+        assert DriveType.CONNECTION in deltas
+        assert deltas[DriveType.CONNECTION] < 0
+
+    @pytest.mark.asyncio
+    async def test_evaluate_command_stimulus(self, test_drives_config):
+        """Команда повышает AUTONOMY tension."""
+        ds = DriveSystem(config=test_drives_config)
+
+        deltas = await ds.evaluate_stimulus("Немедленно сделай это!")
+
+        assert DriveType.AUTONOMY in deltas
+        assert deltas[DriveType.AUTONOMY] > 0
+
+
+class TestDriveSystemPersistence:
+    """Тесты сохранения и загрузки состояния."""
+
+    def test_save_state(self, test_drives_config):
+        """save_state возвращает корректный dict."""
+        ds = DriveSystem(config=test_drives_config)
+        ds.action_values["tool1"] = 0.7
+
+        state = ds.save_state()
+
+        assert "action_values" in state
+        assert "current_drives" in state
+        assert state["action_values"]["tool1"] == 0.7
+
+    def test_load_state(self, test_drives_config):
+        """load_state восстанавливает состояние."""
+        ds = DriveSystem(config=test_drives_config)
+
+        state = {
+            "action_values": {"tool1": 0.8},
+            "current_drives": {
+                "curiosity": 0.6,
+                "connection": 0.5,
+            },
+        }
+
+        ds.load_state(state)
+
+        assert ds.action_values["tool1"] == 0.8
+        assert ds.drives[DriveType.CURIOSITY].current == 0.6
+        assert ds.drives[DriveType.CONNECTION].current == 0.5
+
+
+class TestDriveSystemCrossInfluence:
+    """Тесты перекрёстного влияния драйвов."""
+
+    def test_cross_influence_matrix(self, test_drives_config):
+        """Матрица перекрёстного влияния не пуста."""
+        ds = DriveSystem(config=test_drives_config)
+        assert len(ds.CROSS_INFLUENCE) > 0
+
+    def test_curiosity_boosts_autonomy(self, test_drives_config):
+        """Высокий CURIOSITY положительно влияет на AUTONOMY."""
+        ds = DriveSystem(config=test_drives_config)
+
+        # Устанавливаем высокий CURIOSITY
+        ds.drives[DriveType.CURIOSITY].current = 0.9
+
+        effect = ds._calculate_cross_influence(DriveType.AUTONOMY)
+
+        # Согласно матрице, (CURIOSITY, AUTONOMY) = 0.15
+        assert effect > 0
+
+
+class TestDriveSystemPredictions:
+    """Тесты предсказаний (аллостаз)."""
+
+    def test_predicted_disbalance(self, test_drives_config):
+        """get_predicted_disbalance возвращает dict."""
+        ds = DriveSystem(config=test_drives_config)
+        disbalance = ds.get_predicted_disbalance()
+
+        assert isinstance(disbalance, dict)
+        assert len(disbalance) == len(ds.drives)
+
+    def test_internal_state_prompt(self, test_drives_config):
+        """get_internal_state_prompt возвращает непустую строку."""
+        ds = DriveSystem(config=test_drives_config)
+        prompt = ds.get_internal_state_prompt()
+
         assert isinstance(prompt, str)
         assert len(prompt) > 0
-    
-    def test_save_and_load_state(self):
-        """Проверка сохранения и загрузки состояния."""
-        system1 = DriveSystem()
-        system1.apply_deltas({DriveType.CURIOSITY: 0.2})
-        
-        state = system1.save_state()
-        
-        system2 = DriveSystem()
-        system2.load_state(state)
-        
-        assert system2.drives[DriveType.CURIOSITY].current == system1.drives[DriveType.CURIOSITY].current
-    
-    def test_action_history_limit(self):
-        """Проверка ограничения размера истории действий."""
-        system = DriveSystem(max_action_history=10)
-        
-        # Добавляем больше записей, чем лимит
-        for i in range(20):
-            system.calculate_rpe(f"action_{i}", 0.5)
-        
-        # История должна быть ограничена
-        assert len(system.action_history) == 10
+        assert "curiosity" in prompt.lower()

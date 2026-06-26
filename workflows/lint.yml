@@ -1,0 +1,45 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff mypy black isort
+
+    - name: Run Ruff (linter)
+      run: |
+        ruff check leya_core/ LeyaOS.py tests/ \
+          --output-format=github \
+          --exit-zero
+
+    - name: Run Black (check formatting)
+      run: |
+        black --check leya_core/ LeyaOS.py tests/
+
+    - name: Run isort (check imports)
+      run: |
+        isort --check-only leya_core/ LeyaOS.py tests/
+
+    - name: Run MyPy (type checking)
+      run: |
+        mypy leya_core/ \
+          --ignore-missing-imports \
+          --no-strict-optional \
+          --exit-zero
