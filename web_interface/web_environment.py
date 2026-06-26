@@ -50,15 +50,23 @@ class WebEnvironment(Environment):
         self.connected_clients.discard(websocket)
         logger.info(f"WebEnvironment: Клиент отключен. Всего: {len(self.connected_clients)}")
 
+    # Расположение: web_interface/web_environment.py, заменить метод broadcast полностью
+
     async def broadcast(self, message: Dict[str, Any]) -> None:
-        """Отправка сообщения всем подключенным клиентам."""
-        # Валидация сообщения
+        """
+        Отправка сообщения всем подключенным WebSocket клиентам.
+    
+        Интегрируется с LeyaUI на фронтенде.
+        """
         if not isinstance(message, dict):
-            raise LeyaBroadcastError("Сообщение должно быть словарём", context={"type": type(message).__name__})
+            raise LeyaBroadcastError(
+                "Сообщение должно быть словарём",
+                context={"type": type(message).__name__},
+            )
 
         # Добавление timestamp
         message["timestamp"] = datetime.now().timestamp()
-        
+    
         # Сохранение в историю
         self.message_history.append(message)
         if len(self.message_history) > self.max_history:

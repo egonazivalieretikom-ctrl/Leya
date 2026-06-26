@@ -186,7 +186,7 @@ class TestExtractFacts:
     """Тесты извлечения фактов через LLM."""
 
     @pytest.mark.asyncio
-    async def test_extract_key_facts(self, test_homeostasis_config, mock_llm_client):
+    async def test_extract_key_facts(self, test_homeostasis_config):
         """Извлечение ключевых фактов работает."""
         he = HomeostasisEngine(config=test_homeostasis_config)
 
@@ -196,9 +196,16 @@ class TestExtractFacts:
                 "facts": ["Факт 1", "Факт 2", "Факт 3"],
             })
 
+        # Текст должен быть >= 50 символов (проверка в extract_key_facts)
+        long_text = (
+            "Сознание — это субъективный опыт восприятия окружающего мира и себя. "
+            "Оно включает в себя ощущения, мысли, эмоции и самосознание. "
+            "Изучение сознания является одной из центральных задач нейробиологии и философии."
+        )
+
         facts = await he.extract_key_facts(
             topic="сознание",
-            article_text="Длинная статья о сознании...",
+            article_text=long_text,
             llm_client=mock_llm,
         )
 
@@ -210,10 +217,14 @@ class TestExtractFacts:
         """Короткий текст не обрабатывается."""
         he = HomeostasisEngine(config=test_homeostasis_config)
 
+        # Локальный mock (не используем fixture, т.к. он не нужен для короткого текста)
+        async def mock_llm(prompt, require_json=False):
+            return json.dumps({"facts": []})
+
         facts = await he.extract_key_facts(
             topic="тема",
-            article_text="Коротко",
-            llm_client=mock_llm_client,
+            article_text="Коротко",  # < 50 символов
+            llm_client=mock_llm,
         )
 
         assert facts == []

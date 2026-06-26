@@ -162,10 +162,29 @@ class MemorySystem:
     - Эмоциональное усиление: замедление забывания для значимых событий
     """
 
-    def __init__(self, config: LeyaConfig) -> None:
-        self.config = config
-        self.memory_config: MemoryConfig = config.memory
-        
+    def __init__(self, config) -> None:
+        """
+        Инициализация MemorySystem.
+    
+        Args:
+            config: Может быть либо LeyaConfig (тогда извлекается config.memory),
+                    либо MemoryConfig напрямую (для тестов и упрощённого использования).
+        """
+        # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
+        from .config import LeyaConfig, MemoryConfig
+    
+        if isinstance(config, LeyaConfig):
+            self.config = config
+            self.memory_config = config.memory
+        elif isinstance(config, MemoryConfig):
+            # Для тестов и прямого использования
+            self.config = None
+            self.memory_config = config
+        else:
+            raise TypeError(
+                f"config должен быть LeyaConfig или MemoryConfig, получено {type(config)}"
+            )
+    
         # Инициализация ChromaDB
         try:
             self.chroma_client = chromadb.PersistentClient(
@@ -190,7 +209,7 @@ class MemorySystem:
         self.engrams: Dict[str, Engram] = {}
         self.synapses: Dict[str, Synapse] = {}  # key: "source_id->target_id"
         self.self_model: str = ""
-        
+    
         # Путь к файлу состояния
         self.state_path = Path(self.memory_config.brain_dir) / "memory_state.pkl"
 

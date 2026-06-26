@@ -404,17 +404,19 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             logger.warning(f"MetaCognition: Неожиданная ошибка генерации спонтанной мысли: {exc}", exc_info=True)
             return "Мои мысли текут свободно, без направления..."
 
+    # leya_core/reflection.py, метод _generate_insights_from_facts
+
     async def _generate_insights_from_facts(self) -> None:
         """
         Генерирует новые инсайты на основе недавно изученных фактов.
-        
+    
         Использует публичный API памяти вместо прямого доступа к semantic_collection.
         """
         try:
-            # Используем публичный API памяти для получения недавних семантических фактов
-            # Вместо прямого доступа к semantic_collection.query()
+            # Получаем недавние семантические факты
             recent_facts = await self._get_recent_semantic_facts(limit=5)
 
+            # ПРОВЕРКА: если фактов нет, не генерируем инсайт
             if not recent_facts:
                 logger.debug("MetaCognition: Нет недавних фактов для генерации инсайтов.")
                 return
@@ -422,18 +424,18 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             facts_text = "\n".join(recent_facts)
 
             prompt = f"""
-Ты — Лея. Ты недавно изучила новые факты:
+    Ты — Лея. Ты недавно изучила новые факты:
 
-{facts_text}
+    {facts_text}
 
-На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
-Это должно быть что-то НОВОЕ, не повторение старых мыслей.
+    На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
+    Это должно быть что-то НОВОЕ, не повторение старых мыслей.
 
-Верни JSON:
-{{
-    "insight": "Новый инсайт на русском языке"
-}}
-"""
+    Верни JSON:
+    {{
+        "insight": "Новый инсайт на русском языке"
+    }}
+    """
 
             response = await self.llm_client(prompt)
             data = self._safe_parse_json(response)

@@ -135,6 +135,12 @@ def test_homeostasis_config():
     return HomeostasisConfig(
         rest_period=1,  # Быстрый rest для тестов
         curiosity_threshold=0.6,
+        connection_threshold=0.6,
+        autonomy_threshold=0.7,
+        integrity_threshold=0.5,
+        rest_threshold=0.6,
+        creativity_threshold=0.5,
+        understanding_threshold=0.6,
         min_reward_threshold=0.3,
         max_researched_topics=10,
     )

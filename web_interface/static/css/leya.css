@@ -1,0 +1,158 @@
+/* LeyaOS — Advanced UI Styles */
+
+/* Анимация пульсации для статуса */
+@keyframes pulse-glow {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba(0, 212, 255, 0.5);
+    }
+
+    50% {
+        box-shadow: 0 0 20px rgba(0, 212, 255, 0.8);
+    }
+}
+
+.pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Скроллбар */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0a1929;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #00d4ff33;
+    border-radius: 4px;
+}
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: #00d4ff66;
+    }
+
+/* Сообщения чата */
+.message {
+    max-width: 80%;
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.message-user {
+    background: linear-gradient(135deg, #00d4ff22, #00d4ff11);
+    border: 1px solid #00d4ff44;
+    margin-left: auto;
+}
+
+.message-leya {
+    background: linear-gradient(135deg, #ffb34722, #ffb34711);
+    border: 1px solid #ffb34744;
+}
+
+/* Карточки мыслей */
+.thought-card {
+    background: #0a1929;
+    border: 1px solid #00d4ff22;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    transition: all 0.3s ease;
+}
+
+    .thought-card:hover {
+        border-color: #00d4ff66;
+        transform: translateX(-2px);
+    }
+
+.thought-spontaneous {
+    border-left: 3px solid #00d4ff;
+}
+
+.thought-reflection {
+    border-left: 3px solid #ffb347;
+}
+
+.thought-workspace {
+    border-left: 3px solid #a855f7;
+}
+
+.thought-internal {
+    border-left: 3px solid #10b981;
+}
+
+/* Драйвы */
+.drive-bar {
+    height: 8px;
+    background: #050d18;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+
+.drive-bar-fill {
+    height: 100%;
+    transition: width 0.5s ease;
+    border-radius: 4px;
+}
+
+    .drive-bar-fill.low {
+        background: linear-gradient(90deg, #10b981, #10b98188);
+    }
+
+    .drive-bar-fill.medium {
+        background: linear-gradient(90deg, #ffb347, #ffb34788);
+    }
+
+    .drive-bar-fill.high {
+        background: linear-gradient(90deg, #ef4444, #ef444488);
+    }
+
+/* Анимация появления */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fade-in {
+    animation: fadeIn 0.3s ease-in;
+}
+
+/* Нейронный фон (опционально) */
+.neural-bg {
+    background-image: radial-gradient(circle at 20% 50%, rgba(0, 212, 255, 0.05) 0%, transparent 50%), radial-gradient(circle at 80% 80%, rgba(255, 179, 71, 0.05) 0%, transparent 50%);
+}
+
+/* Tooltip */
+.tooltip {
+    position: relative;
+}
+
+    .tooltip::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #0a1929;
+        border: 1px solid #00d4ff44;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+    }
+
+    .tooltip:hover::after {
+        opacity: 1;
+    }

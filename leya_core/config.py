@@ -127,16 +127,28 @@ class DrivesConfig:
 
 @dataclass
 class HomeostasisConfig:
-    """Конфигурация гомеостаза."""
-    rest_period: int = 60
+    """Конфигурация движка гомеостаза."""
+    rest_period: int = 60  # Секунды между генерациями целей
     curiosity_threshold: float = 0.6
+    connection_threshold: float = 0.6  # ДОБАВЛЕНО
+    autonomy_threshold: float = 0.7    # ДОБАВЛЕНО
+    integrity_threshold: float = 0.5   # ДОБАВЛЕНО
+    rest_threshold: float = 0.6        # ДОБАВЛЕНО
+    creativity_threshold: float = 0.5  # ДОБАВЛЕНО
+    understanding_threshold: float = 0.6  # ДОБАВЛЕНО
     min_reward_threshold: float = 0.3
     max_researched_topics: int = 100
-    
+
     def __post_init__(self):
         """Валидация значений."""
         self.rest_period = max(10, min(3600, self.rest_period))
-        self.curiosity_threshold = max(0.0, min(1.0, self.curiosity_threshold))
+        self.curiosity_threshold = max(0.1, min(1.0, self.curiosity_threshold))
+        self.connection_threshold = max(0.1, min(1.0, self.connection_threshold))
+        self.autonomy_threshold = max(0.1, min(1.0, self.autonomy_threshold))
+        self.integrity_threshold = max(0.1, min(1.0, self.integrity_threshold))
+        self.rest_threshold = max(0.1, min(1.0, self.rest_threshold))
+        self.creativity_threshold = max(0.1, min(1.0, self.creativity_threshold))
+        self.understanding_threshold = max(0.1, min(1.0, self.understanding_threshold))
         self.min_reward_threshold = max(0.0, min(1.0, self.min_reward_threshold))
         self.max_researched_topics = max(10, min(1000, self.max_researched_topics))
 
