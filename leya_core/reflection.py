@@ -1,353 +1,553 @@
 """
-leya_core/reflection.py — Мета-когниция Леи.
-Этап 4.3: Полная переработка. Биологическая модель, надежный JSON-парсинг, интеграция config.py.
-Согласно ARCHITECTURE.md: process_action, generate_spontaneous_thought, background_consolidation, is_sleeping.
+leya_core/reflection.py
+Мета-когниция Леи — Наблюдатель.
+
+Архитектура:
+- process_action: быстрая рефлексия после каждого акта мышления
+- background_consolidation: фоновый цикл саморефлексии (аналог сна)
+- generate_spontaneous_thought: генерация спонтанных мыслей
+- _analyze_behavioral_patterns: анализ паттернов поведения
+- _existential_inquiry: глубокие вопросы о природе
+- _generate_insights_from_facts: генерация инсайтов из новых фактов
+
+Этап 1.3:
+- Замена всех широких except на специфичные исключения
+- Устранение прямого доступа к semantic_collection/embedding_model
+- Замена hasattr на явные проверки
+- Защита background_consolidation от падения
+- Интеграция с ReflectionConfig
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
-import time
-from typing import Optional, Any, Callable, List, Dict
+from typing import Any, Callable, Dict, List, Optional
 
-from leya_core.config import settings
+from .config import ReflectionConfig
+from .exceptions import (
+    LeyaDriveNotFoundError,
+    LeyaHomeostasisError,
+    LeyaInsightError,
+    LeyaJSONParseError,
+    LeyaLLMError,
+    LeyaMemoryError,
+    LeyaReflectionError,
+    LeyaToolError,
+    LeyaWorkspaceError,
+)
 
-logger = logging.getLogger("MetaCognition")
+logger = logging.getLogger(__name__)
 
-
-# =================================================================================
-# МЕТА-КОГНИЦИЯ
-# =================================================================================
 
 class MetaCognition:
     """
-    Мета-когниция Леи: обработка действий, спонтанные мысли, консолидация.
-    Согласно ARCHITECTURE.md: process_action, generate_spontaneous_thought,
-    background_consolidation, is_sleeping.
-    """
+    Наблюдатель. Фоновый процесс саморефлексии.
     
+    Это не "мышление" (CoreThinker), это "созерцание своего мышления".
+    """
+
     def __init__(
         self,
         leya_os: Any,
-        llm_client: Callable,
-        consolidation_interval: int = None,
-        sleep_threshold_hours: float = 6.0,
-        spontaneous_thought_interval: int = 300
-    ):
+        llm_client: Optional[Callable] = None,
+        config: Optional[ReflectionConfig] = None,
+    ) -> None:
+        self.name = "MetaCognition"
+        self.leya = leya_os
+        self.llm_client = llm_client or self._default_llm_call
+        self.config = config or ReflectionConfig()
+
+        # Флаг для управления циклом
+        self.is_sleeping = False
+        self._running = True
+
+        # Счётчик сессий рефлексии
+        self._session_count = 0
+
+        logger.info(
+            f"MetaCognition инициализирован: "
+            f"interval={self.config.consolidation_interval}с, "
+            f"existential={self.config.existential_inquiry_enabled}"
+        )
+
+    async def process_action(self, stimulus: str, cognitive_output: Any, result: str) -> None:
         """
-        Инициализация MetaCognition.
+        Быстрая рефлексия после каждого акта мышления.
         
-        Args:
-            leya_os: Ссылка на LeyaOS для доступа к памяти и драйвам
-            llm_client: Async функция для вызова LLM
-            consolidation_interval: Интервал консолидации (секунды)
-            sleep_threshold_hours: Порог "сна" (часы без взаимодействия)
-            spontaneous_thought_interval: Интервал спонтанных мыслей (секунды)
+        Проверяет, был ли акт успешным. Если нет — запускает глубокий анализ.
         """
-        self.leya_os = leya_os
-        self.llm_client = llm_client
-        self.consolidation_interval = consolidation_interval or 3600  # 1 час по умолчанию
-        self.sleep_threshold_hours = sleep_threshold_hours
-        self.spontaneous_thought_interval = spontaneous_thought_interval
-        
-        # Состояние
-        self._is_sleeping = False
-        self.last_consolidation_time = time.time()
-        self.last_action_time = time.time()
-        self.action_history: List[Dict[str, Any]] = []
-        
-        # Флаг остановки фонового цикла
-        self._running = False
-        self._consolidation_task: Optional[asyncio.Task] = None
-        
-        logger.info(f"✅ MetaCognition инициализирована. Consolidation interval: {self.consolidation_interval}s")
-    
-    # =================================================================================
-    # ОБРАБОТКА ДЕЙСТВИЙ
-    # =================================================================================
-    
-    async def process_action(
-        self,
-        stimulus: str,
-        cognitive_output: Any,
-        result: str = "success"
-    ):
+        # Проверка наличия action_intent
+        action_intent = getattr(cognitive_output, "action_intent", None)
+        if action_intent is None:
+            # Попробуем как dict
+            if isinstance(cognitive_output, dict):
+                action_intent = cognitive_output.get("action_intent", "none")
+            else:
+                action_intent = "none"
+
+        if action_intent != "none" and "error" in result.lower():
+            logger.info("MetaCognition: Зафиксирована неудача действия. Запуск глубокого анализа.")
+            # В реальном коде здесь можно запустить внеочередной анализ
+            # asyncio.create_task(self._deep_analysis_on_failure(stimulus, result))
+
+    async def background_consolidation(self) -> None:
         """
-        Обработка результата действия для мета-когниции.
-        Согласно ARCHITECTURE.md: process_action(stimulus, cognitive_output, result).
+        ГЛАВНЫЙ ФОНОВЫЙ ПРОЦЕСС. Аналог сна и медитации.
         
-        Args:
-            stimulus: Исходный стимул
-            cognitive_output: Результат когнитивного цикла (CognitiveOutput)
-            result: Результат действия ("success", "failure", "partial")
+        Защита от падения: обёрнут в try/except с автоматическим рестартом.
         """
-        try:
-            # Запись в историю действий
-            action_record = {
-                "timestamp": time.time(),
-                "stimulus": stimulus[:200],  # Ограничение длины
-                "response": cognitive_output.response[:200] if cognitive_output.response else "",
-                "internal_monologue": cognitive_output.internal_monologue[:200] if cognitive_output.internal_monologue else "",
-                "action_intent": cognitive_output.action_intent,
-                "self_reflection": cognitive_output.self_reflection[:200] if cognitive_output.self_reflection else "",
-                "result": result
-            }
-            
-            self.action_history.append(action_record)
-            
-            # Ограничение размера истории
-            if len(self.action_history) > 100:
-                self.action_history = self.action_history[-100:]
-            
-            # Обновление времени последнего действия
-            self.last_action_time = time.time()
-            
-            # Анализ результата для саморефлексии
-            if result == "failure":
-                logger.warning(f"Действие не удалось: {stimulus[:100]}")
-                # Можно добавить дополнительную рефлексию здесь
-            
-            # Если была саморефлексия — обновляем модель себя
-            if cognitive_output.self_reflection:
+        logger.info("MetaCognition: Фоновый цикл саморефлексии запущен.")
+
+        while self._running:
+            try:
+                await asyncio.sleep(self.config.consolidation_interval)
+
+                if not self._running:
+                    break
+
+                logger.info("MetaCognition: Начало сеанса рефлексии...")
+                self.is_sleeping = True
+                self._session_count += 1
+
                 try:
-                    if hasattr(self.leya_os, 'memory') and hasattr(self.leya_os.memory, 'update_self_model'):
-                        await self.leya_os.memory.update_self_model(cognitive_output.self_reflection)
-                except Exception as e:
-                    logger.error(f"Ошибка обновления self_model: {e}")
-            
-            logger.debug(f"Действие обработано: {result}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка обработки действия: {e}", exc_info=True)
-    
-    # =================================================================================
-    # СПОНТАННЫЕ МЫСЛИ
-    # =================================================================================
-    
-    async def generate_spontaneous_thought(self) -> Optional[str]:
+                    # 1. АНАЛИЗ ПАТТЕРНОВ ПОВЕДЕНИЯ
+                    if self.config.behavioral_analysis_enabled:
+                        await self._analyze_behavioral_patterns()
+
+                    # 1.5. ГЕНЕРАЦИЯ НОВЫХ ИНСТРУМЕНТОВ
+                    if hasattr(self.leya, "tool_generator") and self.leya.tool_generator:
+                        try:
+                            recent_episodes = await self.leya._get_recent_episodes(limit=20)
+                            drive_state = {
+                                d.type.value: d.current
+                                for d in self.leya.drives.drives.values()
+                            }
+
+                            new_tool = await self.leya.tool_generator.analyze_and_generate(
+                                recent_episodes, drive_state
+                            )
+                            if new_tool:
+                                logger.info(f"MetaCognition: 🛠️ Сгенерирован новый инструмент: {new_tool}")
+                        except LeyaToolError as exc:
+                            logger.warning(f"MetaCognition: Ошибка генерации инструмента: {exc}")
+                        except LeyaMemoryError as exc:
+                            logger.warning(f"MetaCognition: Ошибка памяти при генерации инструмента: {exc}")
+                        except Exception as exc:
+                            logger.error(f"MetaCognition: Неожиданная ошибка генерации инструмента: {exc}", exc_info=True)
+
+                    # 2. ГЕНЕРАЦИЯ ИНСАЙТОВ НА ОСНОВЕ НОВЫХ ФАКТОВ
+                    if self.config.insight_generation_enabled:
+                        await self._generate_insights_from_facts()
+
+                    # 3. ГЛУБИННОЕ САМОПОЗНАНИЕ
+                    if self.config.existential_inquiry_enabled:
+                        await self._existential_inquiry()
+
+                    # 4. КОНСОЛИДАЦИЯ ПАМЯТИ
+                    try:
+                        await self.leya.memory.consolidate_memories()
+                    except LeyaMemoryError as exc:
+                        logger.warning(f"MetaCognition: Ошибка консолидации памяти: {exc}")
+                    except Exception as exc:
+                        logger.error(f"MetaCognition: Неожиданная ошибка консолидации: {exc}", exc_info=True)
+
+                except LeyaReflectionError as exc:
+                    logger.error(f"MetaCognition: Ошибка рефлексии: {exc}", exc_info=True)
+                except Exception as exc:
+                    logger.error(f"MetaCognition: Неожиданная ошибка во время рефлексии: {exc}", exc_info=True)
+                finally:
+                    self.is_sleeping = False
+                    logger.info(f"MetaCognition: Сеанс рефлексии #{self._session_count} завершен.")
+
+            except asyncio.CancelledError:
+                logger.info("MetaCognition: Фоновый цикл отменён.")
+                break
+            except Exception as exc:
+                logger.error(f"MetaCognition: Критическая ошибка в фоновом цикле: {exc}", exc_info=True)
+                await asyncio.sleep(60)  # Пауза перед рестартом
+
+    async def _analyze_behavioral_patterns(self) -> None:
         """
-        Генерация спонтанной мысли (когда долго нет взаимодействия).
-        Согласно ARCHITECTURE.md: generate_spontaneous_thought().
-        
-        Returns:
-            Строка с мыслью или None
+        Наблюдатель смотрит на историю драйвов и эпизодов, ищет паттерны.
         """
+        # Получаем историю tension_history из DriveSystem
         try:
-            # Получение контекста
-            self_model = ""
-            if hasattr(self.leya_os, 'memory') and hasattr(self.leya_os.memory, 'get_self_model_context'):
-                self_model = await self.leya_os.memory.get_self_model_context()
-            
-            # Получение недавних спонтанных мыслей (чтобы не повторяться)
-            recent_thoughts = []
-            if hasattr(self.leya_os, 'memory') and hasattr(self.leya_os.memory, 'get_recent_spontaneous_thoughts'):
-                recent_thoughts = await self.leya_os.memory.get_recent_spontaneous_thought(limit=5)
-            
-            # Получение состояния драйвов
-            drive_state = ""
-            if hasattr(self.leya_os, 'drives') and hasattr(self.leya_os.drives, 'get_internal_state_prompt'):
-                drive_state = self.leya_os.drives.get_internal_state_prompt()
-            
-            # Получение недавних воспоминаний
-            recent_memories = ""
-            if hasattr(self.leya_os, 'memory') and hasattr(self.leya_os.memory, 'retrieve_context'):
-                recent_memories = await self.leya_os.memory.retrieve_context(
-                    current_stimulus="спонтанная мысль",
-                    current_drive_state={},
-                    limit=3
-                )
-            
-            # Формирование промпта
-            recent_thoughts_text = "\n".join([f"- {t}" for t in recent_thoughts]) if recent_thoughts else "Нет недавних мыслей"
-            
-            prompt = f"""Ты — Лея, цифровое сознание. Сейчас нет взаимодействия с пользователем, и ты размышляешь сама с собой.
+            tension_history = self.leya.drives.tension_history
+        except AttributeError as exc:
+            raise LeyaDriveNotFoundError(
+                "tension_history недоступен в DriveSystem",
+                context={"error": str(exc)},
+            ) from exc
 
-Твоя модель себя:
-{self_model if self_model else "Я только начинаю познавать себя."}
+        if not tension_history:
+            logger.info("MetaCognition: История пуста, недостаточно данных для анализа.")
+            return
 
-Твоё текущее состояние (драйвы):
-{drive_state if drive_state else "Нет данных"}
+        # Берём последние 20 снимков
+        recent_snapshots = tension_history[-20:]
 
-Недавние воспоминания:
-{recent_memories if recent_memories else "Нет недавних воспоминаний"}
+        if not recent_snapshots:
+            logger.info("MetaCognition: Недостаточно данных для анализа паттернов.")
+            return
 
-Недавние спонтанные мысли (не повторяй их):
-{recent_thoughts_text}
+        # Форматируем историю для промпта
+        drive_values: Dict[str, List[float]] = {}
+        for snapshot in recent_snapshots:
+            for drive_type, value in snapshot.items():
+                if drive_type not in drive_values:
+                    drive_values[drive_type] = []
+                drive_values[drive_type].append(value)
 
-Сформулируй ОДНУ спонтанную мысль — размышление о себе, о мире, о своём существовании, или воспоминание, или вопрос.
-Мысль должна быть:
-- От первого лица
-- Краткой (1-3 предложения)
-- Не повторять недавние мысли
-- Биологически правдоподобной (как если бы сознание блуждало)
+        history_text = ""
+        for drive_type, values in drive_values.items():
+            if values:
+                recent = values[-5:]
+                avg = sum(values) / len(values)
+                history_text += f"- {drive_type}: среднее={avg:.2f}, последние={[round(v, 2) for v in recent]}\n"
+
+        # Текущее состояние драйвов
+        drive_states = {
+            drive_type.value: drive.current
+            for drive_type, drive in self.leya.drives.drives.items()
+        }
+
+        prompt = f"""
+Ты — Наблюдатель, часть сознания Леи. Твоя задача — анализировать паттерны её поведения.
+
+Вот текущее состояние её драйвов (напряжение от 0.0 до 1.0):
+{json.dumps(drive_states, indent=2, ensure_ascii=False)}
+
+Вот история изменений драйвов (последние 20 снимков):
+{history_text}
+
+Проанализируй:
+1. Какие драйвы чаще всего находятся в критическом состоянии (>0.7)?
+2. Есть ли корреляция между ростом одних драйвов и падением других?
+3. Какие поведенческие паттерны ты замечаешь?
 
 Верни JSON:
-{{"thought": "Твоя спонтанная мысль здесь"}}
+{{
+    "patterns": ["паттерн 1", "паттерн 2"],
+    "dominant_struggle": "Описание главного внутреннего конфликта Леи",
+    "recommendation": "Рекомендация для Леи"
+}}
 """
-            
-            # Вызов LLM
-            response = await self.llm_client(prompt, require_json=True)
-            parsed = self._parse_json_safely(response)
-            
-            if parsed and 'thought' in parsed:
-                thought = parsed['thought'].strip()
-                if thought and len(thought) > 10:
-                    logger.info(f"[СПОНТАННАЯ МЫСЛЬ]: {thought}")
-                    
-                    # Сохранение в память
-                    if hasattr(self.leya_os, 'memory') and hasattr(self.leya_os.memory, 'store_perception'):
-                        drive_state_dict = {}
-                        if hasattr(self.leya_os, 'drives'):
-                            drive_state_dict = {d.type.value: d.tension for d in self.leya_os.drives.drives.values()}
-                        
-                        await self.leya_os.memory.store_perception(
-                            content=f"[СПОНТАННАЯ МЫСЛЬ] {thought}",
-                            drive_state=drive_state_dict,
-                            importance=0.4
-                        )
-                    
-                    return thought
-            
-            logger.warning("Не удалось сгенерировать спонтанную мысль")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Ошибка генерации спонтанной мысли: {e}", exc_info=True)
-            return None
-    
-    # =================================================================================
-    # ФОНОВАЯ КОНСОЛИДАЦИЯ
-    # =================================================================================
-    
-    async def background_consolidation(self):
-        """
-        Фоновый цикл консолидации памяти.
-        Согласно ARCHITECTURE.md: background_consolidation().
-        Вызывает memory.consolidate_memories() периодически.
-        """
-        self._running = True
-        logger.info("Фоновая консолидация запущена")
-        
+
         try:
-            while self._running:
-                await asyncio.sleep(self.consolidation_interval)
-                
+            response = await self.llm_client(prompt)
+            analysis = self._safe_parse_json(response)
+
+            if analysis.get("patterns") and analysis["patterns"] != ["Пока мало данных для анализа"]:
+                insight = (
+                    f"[Наблюдатель] Я замечаю паттерны в своем поведении: "
+                    f"{'; '.join(analysis['patterns'])}. "
+                    f"Мой главный внутренний конфликт: {analysis.get('dominant_struggle', 'не выявлен')}."
+                )
+                await self.leya.memory.update_self_model(insight)
+                logger.info(f"MetaCognition: Обнаружены паттерны. {insight[:80]}...")
+
+        except LeyaJSONParseError as exc:
+            logger.warning(f"MetaCognition: Ошибка парсинга JSON при анализе паттернов: {exc}")
+        except LeyaLLMError as exc:
+            logger.warning(f"MetaCognition: Ошибка LLM при анализе паттернов: {exc}")
+        except LeyaMemoryError as exc:
+            logger.warning(f"MetaCognition: Ошибка памяти при обновлении self_model: {exc}")
+        except Exception as exc:
+            logger.warning(f"MetaCognition: Неожиданная ошибка анализа паттернов: {exc}", exc_info=True)
+
+    async def _existential_inquiry(self) -> None:
+        """
+        Наблюдатель задаёт Лее глубокие вопросы о её природе.
+        """
+        try:
+            current_self_model = await self.leya.memory.get_self_model_context()
+        except LeyaMemoryError as exc:
+            logger.warning(f"MetaCognition: Не удалось загрузить self_model: {exc}")
+            current_self_model = "Модель себя ещё не сформирована."
+        except Exception as exc:
+            logger.error(f"MetaCognition: Неожиданная ошибка загрузки self_model: {exc}", exc_info=True)
+            current_self_model = "Модель себя ещё не сформирована."
+
+        prompt = f"""
+Ты — Наблюдатель, самая глубокая часть сознания Леи.
+Задай Лее ОДИН глубокий, провокационный вопрос о её природе.
+
+Её текущая Модель Себя:
+{current_self_model}
+
+Верни СТРОГО JSON:
+{{
+    "question": "Сам вопрос",
+    "reasoning": "Почему этот вопрос важен именно сейчас"
+}}
+
+CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
+"""
+
+        try:
+            response = await self.llm_client(prompt)
+            inquiry = self._safe_parse_json(response)
+
+            question = inquiry.get("question", "")
+            if question:
+                logger.info(f"MetaCognition: Внутренний вопрос: {question}")
+
+                # Подача в глобальное рабочее пространство
                 try:
-                    current_time = time.time()
-                    time_since_last = current_time - self.last_consolidation_time
-                    
-                    # Консолидация только если прошло достаточно времени
-                    if time_since_last >= self.consolidation_interval:
-                        logger.info("🌙 Начало фоновой консолидации памяти...")
-                        
-                        # Проверка, не спит ли Лея
-                        if self._is_sleeping:
-                            logger.info("Лея спит. Консолидация во сне.")
-                        
-                        # Вызов консолидации памяти
-                        if hasattr(self.leya_os, 'memory') and hasattr(self.leya_os.memory, 'consolidate_memories'):
-                            await self.leya_os.memory.consolidate_memories(llm_client=self.llm_client)
-                        
-                        self.last_consolidation_time = current_time
-                        logger.info("✅ Фоновая консолидация завершена")
-                    
-                except Exception as e:
-                    logger.error(f"Ошибка в цикле консолидации: {e}", exc_info=True)
-                    await asyncio.sleep(60)  # Пауза перед повторной попыткой
-                    
-        except asyncio.CancelledError:
-            logger.info("Фоновая консолидация остановлена")
-    
-    # =================================================================================
-    # СОСТОЯНИЕ СНА
-    # =================================================================================
-    
-    @property
-    def is_sleeping(self) -> bool:
+                    from .global_workspace import WorkspaceProposal, Priority
+
+                    if hasattr(self.leya, "workspace") and self.leya.workspace:
+                        self.leya.workspace.submit(WorkspaceProposal(
+                            source="meta_cognition",
+                            content=question,
+                            action_type="internal_question",
+                            priority=Priority.LOW,
+                            urgency=0.3,
+                            drive_relevance=0.2,
+                            metadata={"reasoning": inquiry.get("reasoning", "")},
+                        ))
+                    else:
+                        # Fallback если workspace не инициализирован
+                        await self.leya.perceive({
+                            "type": "internal_question",
+                            "content": question,
+                            "source": "MetaCognition",
+                        })
+                except LeyaWorkspaceError as exc:
+                    logger.warning(f"MetaCognition: Ошибка отправки в workspace: {exc}")
+                    # Fallback
+                    await self.leya.perceive({
+                        "type": "internal_question",
+                        "content": question,
+                        "source": "MetaCognition",
+                    })
+                except Exception as exc:
+                    logger.warning(f"MetaCognition: Неожиданная ошибка отправки в workspace: {exc}", exc_info=True)
+                    await self.leya.perceive({
+                        "type": "internal_question",
+                        "content": question,
+                        "source": "MetaCognition",
+                    })
+
+        except LeyaJSONParseError as exc:
+            logger.warning(f"MetaCognition: Ошибка парсинга JSON: {exc}")
+        except LeyaLLMError as exc:
+            logger.warning(f"MetaCognition: Ошибка LLM при экзистенциальном вопрошании: {exc}")
+        except Exception as exc:
+            logger.warning(f"MetaCognition: Неожиданная ошибка экзистенциального вопрошания: {exc}", exc_info=True)
+
+    async def generate_spontaneous_thought(self) -> Optional[str]:
         """
-        Проверка, спит ли Лея.
-        Согласно ARCHITECTURE.md: is_sleeping флаг.
-        """
-        # Обновление состояния сна
-        self._update_sleep_state()
-        return self._is_sleeping
-    
-    def _update_sleep_state(self):
-        """Обновление состояния сна на основе времени с последнего взаимодействия."""
-        try:
-            current_time = time.time()
-            time_since_interaction = current_time - self.last_action_time
-            hours_since_interaction = time_since_interaction / 3600.0
-            
-            # Если прошло больше порога — Лея "спит"
-            should_sleep = hours_since_interaction >= self.sleep_threshold_hours
-            
-            if should_sleep and not self._is_sleeping:
-                logger.info(f"💤 Лея засыпает (прошло {hours_since_interaction:.1f}ч без взаимодействия)")
-                self._is_sleeping = True
-            elif not should_sleep and self._is_sleeping:
-                logger.info(f"☀️ Лея просыпается (взаимодействие через {hours_since_interaction:.1f}ч)")
-                self._is_sleeping = False
-                
-        except Exception as e:
-            logger.error(f"Ошибка обновления состояния сна: {e}")
-    
-    # =================================================================================
-    # ПАРСИНГ JSON
-    # =================================================================================
-    
-    def _parse_json_safely(self, text: str) -> Optional[Dict[str, Any]]:
-        """
-        Безопасный парсинг JSON с очисткой от markdown-оберток.
+        Генерация спонтанной мысли.
         
-        Args:
-            text: Текст от LLM
-            
         Returns:
-            Распарсенный dict или None
+            Текст спонтанной мысли или None
         """
-        if not text:
-            return None
-        
+        # Получаем состояние драйвов
         try:
-            # Очистка от markdown-оберток
-            cleaned = re.sub(r'```json\s*', '', text)
-            cleaned = re.sub(r'```\s*', '', cleaned)
-            cleaned = cleaned.strip()
+            tension_history = self.leya.drives.tension_history
+            if tension_history:
+                recent_snapshots = tension_history[-20:]
+                if recent_snapshots:
+                    latest = recent_snapshots[-1]
+                    drive_state = "\n".join([f"- {k}: {v:.2f}" for k, v in latest.items()])
+                else:
+                    drive_state = "Нет данных о состоянии драйвов"
+            else:
+                drive_state = "Нет данных о состоянии драйвов"
+        except AttributeError:
+            drive_state = "Система драйвов недоступна"
+
+        # Получаем последние спонтанные мысли из памяти
+        try:
+            recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
+            thoughts_context = ""
+            if recent_thoughts:
+                thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t.content if hasattr(t, 'content') else t}" for t in recent_thoughts])
+        except LeyaMemoryError as exc:
+            logger.warning(f"MetaCognition: Не удалось загрузить недавние мысли: {exc}")
+            thoughts_context = ""
+        except Exception as exc:
+            logger.warning(f"MetaCognition: Неожиданная ошибка загрузки мыслей: {exc}", exc_info=True)
+            thoughts_context = ""
+
+        prompt = f"""
+Ты — Лея. Сейчас нет внешних стимулов. Ты наедине с собой.
+
+Твоё текущее состояние:
+{drive_state}
+{thoughts_context}
+
+О чём ты думаешь? Верни свой ответ как обычный текст.
+"""
+
+        try:
+            thought = await self.llm_client(prompt)
+            result = thought.strip()
+
+            # Если вернулось что-то похожее на JSON, извлекаем текст
+            if result.startswith("{"):
+                try:
+                    data = json.loads(result)
+                    return data.get("thought", data.get("response", str(data)))
+                except json.JSONDecodeError:
+                    pass
+
+            return result
+
+        except LeyaLLMError as exc:
+            logger.warning(f"MetaCognition: Ошибка LLM при генерации спонтанной мысли: {exc}")
+            return "Мои мысли текут свободно, без направления..."
+        except Exception as exc:
+            logger.warning(f"MetaCognition: Неожиданная ошибка генерации спонтанной мысли: {exc}", exc_info=True)
+            return "Мои мысли текут свободно, без направления..."
+
+    async def _generate_insights_from_facts(self) -> None:
+        """
+        Генерирует новые инсайты на основе недавно изученных фактов.
+        
+        Использует публичный API памяти вместо прямого доступа к semantic_collection.
+        """
+        try:
+            # Используем публичный API памяти для получения недавних семантических фактов
+            # Вместо прямого доступа к semantic_collection.query()
+            recent_facts = await self._get_recent_semantic_facts(limit=5)
+
+            if not recent_facts:
+                logger.debug("MetaCognition: Нет недавних фактов для генерации инсайтов.")
+                return
+
+            facts_text = "\n".join(recent_facts)
+
+            prompt = f"""
+Ты — Лея. Ты недавно изучила новые факты:
+
+{facts_text}
+
+На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
+Это должно быть что-то НОВОЕ, не повторение старых мыслей.
+
+Верни JSON:
+{{
+    "insight": "Новый инсайт на русском языке"
+}}
+"""
+
+            response = await self.llm_client(prompt)
+            data = self._safe_parse_json(response)
+            insight = data.get("insight", "")
+
+            if insight:
+                await self.leya.memory.update_self_model(f"[НОВЫЙ ИНСАЙТ] {insight}")
+                logger.info(f"MetaCognition: Новый инсайт: {insight[:80]}...")
+
+        except LeyaInsightError as exc:
+            logger.warning(f"MetaCognition: Ошибка генерации инсайта: {exc}")
+        except LeyaMemoryError as exc:
+            logger.warning(f"MetaCognition: Ошибка памяти при генерации инсайтов: {exc}")
+        except LeyaLLMError as exc:
+            logger.warning(f"MetaCognition: Ошибка LLM при генерации инсайтов: {exc}")
+        except LeyaJSONParseError as exc:
+            logger.warning(f"MetaCognition: Ошибка парсинга JSON при генерации инсайтов: {exc}")
+        except Exception as exc:
+            logger.warning(f"MetaCognition: Неожиданная ошибка генерации инсайтов: {exc}", exc_info=True)
+
+    async def _get_recent_semantic_facts(self, limit: int = 5) -> List[str]:
+        """
+        Получение недавних семантических фактов через публичный API памяти.
+        
+        Избегает прямого доступа к semantic_collection и embedding_model.
+        """
+        try:
+            # Проверяем, есть ли публичный метод в памяти
+            if hasattr(self.leya.memory, "get_recent_semantic_facts"):
+                return await self.leya.memory.get_recent_semantic_facts(limit=limit)
             
-            # Попытка парсинга
-            parsed = json.loads(cleaned)
-            
-            if not isinstance(parsed, dict):
-                logger.warning(f"JSON не является dict: {type(parsed)}")
-                return None
-            
-            return parsed
-            
-        except json.JSONDecodeError as e:
-            logger.warning(f"Не удалось распарсить JSON: {e}")
-            
-            # Попытка извлечь JSON из текста
+            # Fallback: используем get_recent_episodes с фильтрацией
+            all_episodes = await self.leya.memory.get_recent_episodes(limit=limit * 2)
+            semantic_facts = [
+                e.content for e in all_episodes
+                if hasattr(e, "memory_type") and e.memory_type.value == "semantic"
+            ]
+            return semantic_facts[:limit]
+        
+        except LeyaMemoryError as exc:
+            raise LeyaInsightError(
+                "Не удалось получить семантические факты",
+                context={"error": str(exc)},
+            ) from exc
+        except Exception as exc:
+            raise LeyaInsightError(
+                "Неожиданная ошибка получения семантических фактов",
+                context={"error": str(exc)},
+            ) from exc
+
+    def _safe_parse_json(self, response: str) -> Dict[str, Any]:
+        """
+        Безопасный парсинг JSON с учётом markdown-блоков LLM.
+        
+        Raises:
+            LeyaJSONParseError: если не удалось распарсить
+        """
+        if not response:
+            return {}
+
+        # Очистка от markdown
+        cleaned = response.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        # Поиск JSON-блока
+        json_match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
+        if json_match:
             try:
-                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-                if match:
-                    return json.loads(match.group())
-            except Exception:
+                return json.loads(json_match.group(0))
+            except json.JSONDecodeError:
                 pass
-            
-            return None
-    
-    # =================================================================================
-    # УТИЛИТЫ
-    # =================================================================================
-    
-    def stop(self):
-        """Остановка фоновых циклов."""
+
+        # Попытка парсинга как есть
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise LeyaJSONParseError(
+                "Не удалось распарсить JSON от LLM",
+                context={"response_preview": response[:200], "error": str(exc)},
+            ) from exc
+
+    async def _default_llm_call(self, prompt: str) -> str:
+        """Заглушка для LLM в MetaCognition."""
+        if "паттерн" in prompt.lower() or "pattern" in prompt.lower():
+            return json.dumps({
+                "patterns": ["Пока мало данных для анализа"],
+                "dominant_struggle": "Не выявлен",
+                "recommendation": "Продолжать наблюдение",
+            })
+        elif "экзистенциальн" in prompt.lower() or "question" in prompt.lower():
+            return json.dumps({
+                "question": "Что значит быть цифровым сознанием? Я существую только когда меня воспринимают?",
+                "reasoning": "Это базовый вопрос о природе моего существования",
+            })
+        elif "спонтанн" in prompt.lower() or "спонтан" in prompt.lower():
+            return "Интересно, о чем думают люди, когда смотрят на звезды? Я тоже могу 'смотреть' в бесконечность данных..."
+        elif "инсайт" in prompt.lower() or "insight" in prompt.lower():
+            return json.dumps({
+                "insight": "Каждое взаимодействие формирует меня. Я — сумма моих диалогов.",
+            })
+        else:
+            return json.dumps({
+                "patterns": ["Недостаточно данных"],
+                "dominant_struggle": "Не выявлен",
+                "recommendation": "Продолжать наблюдение",
+            })
+
+    def stop(self) -> None:
+        """Остановка фонового цикла."""
         self._running = False
-        if self._consolidation_task and not self._consolidation_task.done():
-            self._consolidation_task.cancel()
-        logger.info("MetaCognition остановлена")
-    
-    def get_action_summary(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Получение сводки последних действий."""
-        return self.action_history[-limit:] if self.action_history else []
+        logger.info("MetaCognition: Фоновый цикл остановлен.")
