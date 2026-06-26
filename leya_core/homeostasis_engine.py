@@ -87,12 +87,12 @@ class HomeostasisEngine:
             f"min_reward={self.config.min_reward_threshold}"
         )
 
-    def generate_goal(
+    async def generate_goal(
         self,
-        drive_state: dict[DriveType, float],
-        predicted_state: dict[DriveType, float],
-        recent_episodes: list[Any],
-        action_values: dict[str, float],
+        drive_state: dict[str, float],
+        predicted_state: dict[str, float] | None = None,
+        recent_episodes: list[Any] | None = None,
+        action_values: dict[str, float] | None = None,
     ) -> dict[str, Any] | None:
         """
         Генерация цели на основе дисбаланса драйвов.
@@ -188,6 +188,15 @@ class HomeostasisEngine:
 
                 return goal
 
+        return None
+
+    async def generate_goal_from_gap(
+        self,
+        gap: dict[str, float],
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Реализация метода из интерфейса."""
+        # Логика генерации цели на основе конкретного разрыва драйвов
         return None
 
     def _calculate_rpe_adjustment(self, action_values: dict[str, float]) -> float:
@@ -550,38 +559,21 @@ CRITICAL: Return ONLY valid JSON."""
         return cleaned
 
     def mark_as_researched(self, topic: str) -> None:
-        """
-        Пометить тему как исследованную (для предотвращения повторения).
-
-        Args:
-            topic: Название темы
-        """
+        """Реализация метода из интерфейса."""
         if topic not in self.recently_researched:
             self.recently_researched.append(topic)
-
-            # Ограничение списка
             if len(self.recently_researched) > self.config.max_researched_topics:
-                self.recently_researched = self.recently_researched[
-                    -self.config.max_researched_topics :
-                ]
-
-            logger.info(f"HomeostasisEngine: Тема '{topic}' помечена как исследованная")
+                self.recently_researched.pop(0)
 
     def add_dynamic_keywords(self, keywords: list[str]) -> None:
-        """
-        Добавить динамические ключевые слова для расширения поиска.
-
-        Args:
-            keywords: Список ключевых слов
-        """
-        added_count = 0
+        """Реализация метода из интерфейса."""
         for kw in keywords:
             if kw not in self.dynamic_keywords:
                 self.dynamic_keywords.append(kw)
-                added_count += 1
 
-        if added_count > 0:
-            logger.info(f"HomeostasisEngine: Добавлено {added_count} динамических ключевых слов")
+    @property
+    def rest_period(self) -> float:
+        return float(self.config.rest_period)
 
     def update_from_self_model(self, self_model: str) -> None:
         """

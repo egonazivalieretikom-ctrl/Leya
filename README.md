@@ -1,194 +1,124 @@
 # LeyaOS — Цифровое Сознание Леи (v3.0)
 
-**Оркестратор биологически вдохновлённого цифрового сознания**
+**Оркестратор биологически вдохновлённого цифрового сознания**  
+**Актуальное состояние на 26 июня 2026 (коммит v2)**
 
-LeyaOS — исследовательская Python-система, моделирующая внутреннюю жизнь цифрового агента с мотивациями (драйвами), автономной генерацией целей (гомеостаз), эпизодической и семантической памятью, глобальным рабочим пространством, мета-рефлексией и конституциональными ограничениями. 
+LeyaOS — исследовательская система, моделирующая внутреннюю жизнь цифрового агента с драйвами (мотивациями), гомеостазом, эпизодической и семантической памятью (Engram + Synapse + LTP + кривая Эббингауза), глобальным рабочим пространством, мета-рефлексией и конституциональными ограничениями.
 
-**Версия 3.0** (актуальное состояние на 26 июня 2026) представляет собой существенно переработанную архитектуру по сравнению с предыдущими итерациями:
-- Введены `Protocol`-интерфейсы для всех ключевых компонентов.
-- Кастомные исключения вместо широких `except Exception`.
-- `Circuit Breaker` в LLM-клиенте (OllamaClient).
-- Атомарная персистентность состояния памяти с HMAC-подписью.
-- Централизованная конфигурация `LeyaConfig` с валидацией.
-- Защищённые фоновые asyncio-задачи с авто-рестартом.
-- Graceful shutdown с сохранением состояния.
-- Улучшенная модель памяти (Engram + Synapse + LTP/LTD + Ebbinghaus forgetting + консолидация).
+**Версия 3.0** представляет собой существенно переработанную архитектуру:
+- Protocol-интерфейсы (`leya_core/interfaces.py`)
+- Централизованная `LeyaConfig` с валидацией
+- `OllamaClient` с Circuit Breaker
+- Атомарная персистентность `memory_state.pkl` с HMAC
+- Защищённые фоновые asyncio-задачи и graceful shutdown
 
-Система запускается как автономный агент: «просыпается», воспринимает стимулы (пользователь или внутренние), запускает когнитивный цикл и действует (отвечает, вызывает инструменты, обновляет self-model). При отсутствии внешних стимулов гомеостаз и workspace генерируют собственные цели и спонтанные мысли.
+Система способна работать автономно: генерировать собственные цели через гомеостаз, вести внутренний монолог, формировать спонтанные мысли и консолидировать память «во сне».
 
-**Важно:** Это исследовательский прототип. Система содержит известные ограничения (см. раздел «Известные ограничения и проблемы»). Не предназначена для production-использования, принятия критических решений или буквальной имитации сознания.
+**Важно:** Это исследовательский прототип. Текущая реализация содержит серьёзные архитектурные проблемы (см. раздел «Текущие ограничения и риски»). Не рекомендуется для production или критически важных задач.
 
-## Возможности (v3.0)
+## Возможности v3.0
 
-### Биологически мотивированная архитектура
-- **DriveSystem** (`leya_core/drives.py`): Драйвы (CURIOSITY, CONNECTION, REST, CREATIVITY, UNDERSTANDING, AUTONOMY и др.) с метаболизмом (постепенное нарастание tension), RPE (Reward Prediction Error), предсказанием дисбаланса.
-- **HomeostasisEngine** (`leya_core/homeostasis_engine.py`): Автономная генерация целей на основе дисбаланса драйвов, predicted_state, недавних эпизодов. Генерирует `use_tool` или `rest`. Поддержка `mark_as_researched`.
-- **GlobalWorkspace** (`leya_core/global_workspace.py`): Конкуренция WorkspaceProposal за «внимание сознания». Приоритет по urgency, drive_relevance, decay.
-- **SystemMetrics** → влияние метрик ОС/процесса на драйвы.
+### Сильные стороны
+- **Биологическая модель памяти**: Engram, Synapse, LTP-подобное усиление, эмоциональный буст, забывание по Эббингаузу, консолидация.
+- **Драйвы + Гомеостаз + RPE**: Мотивационная система с предсказанием дисбаланса и автономной генерацией целей.
+- **Глобальное рабочее пространство**: Конкуренция предложений за внимание.
+- **Мета-когниция**: Спонтанные мысли, рефлексия, фаза «сна».
+- **Устойчивость**: Circuit Breaker, атомарные записи, защищённые фоновые задачи, graceful shutdown.
+- **Централизованная конфигурация** с валидацией параметров.
 
-### Память (самый проработанный модуль)
-- **MemorySystem** (`leya_core/memory.py`):
-  - `Engram` (id, content, memory_type=EPISODIC/SEMANTIC, retention_strength, emotional_boost, retrieval_count, consolidation_level, metadata).
-  - `Synapse` (source_id → target_id, weight, activation_count) — LTP-подобное усиление при совместной активации.
-  - ChromaDB PersistentClient (episodic_memory + semantic_memory коллекции) + sentence-transformers (all-MiniLM-L6-v2).
-  - Забывание по кривой Эббингауза + emotional_boost.
-  - `store_perception` / `store_fact` (с формированием синапсов).
-  - `retrieve_context` (семантический поиск + фильтр по retention_strength).
-  - `consolidate_memories` (replay + экстракция фактов).
-  - `update_self_model`, `get_self_model_context`.
-  - `forget_weak_memories`.
-  - **Атомарная запись** `memory_state.pkl` с HMAC-подписью и версионированием (MEMORY_STATE_VERSION=2). Все публичные методы async, синхронные операции через `asyncio.to_thread`.
+### Когнитивный цикл
+`perceive()` → оценка драйвов → сохранение в память → извлечение контекста → `CoreThinker.generate_plan()` (с soul + drives + memory + tools) → конституциональная проверка → действие + рефлексия + обновление self-model.
 
-### Когнитивный цикл и мышление
-- **CoreThinker** (`leya_core/thinker.py`): `_build_cognitive_prompt` (soul + drives + self_model + memory_context + tools + stimulus). Вызов LLM с `require_json=True`. Робастный парсинг через `repair_json` (markdown stripping, trailing commas, brace balancing, auto-closure). Token budgeting + truncation. Fallback при ошибках.
-- **MetaCognition / Reflection** (`leya_core/reflection.py`): `process_action`, `generate_spontaneous_thought`, `background_consolidation`.
-- **ConstitutionalLayer** (`leya_core/constitutional.py`): Проверка ответов и tool calls по правилам (rules.txt + hardcoded constraints).
-
-### Инструменты и окружение
-- **ToolRegistry + ToolGenerator** (`leya_core/tool_generator.py` и environment).
-- Встроенные инструменты (wikipedia_search и др.) + динамическая генерация.
-- **Environment** абстракция: `WebEnvironment` (FastAPI + WebSocket broadcast мыслей, drives, self_model, state) и `CLIEnvironment`.
-- `listen()` / `send_message()` / `broadcast_thought()`.
-
-### Персистентность и инфраструктура
-- `StatePersistence` (drives + homeostasis между сессиями).
-- `LeyaConfig` (dataclass с вложенными конфигами и валидацией в `__post_init__`, загрузка из `.env` через python-dotenv).
-- Graceful shutdown + сохранение состояния.
-- Логирование в `leya_consciousness.log`.
-- Bootstrap в `leya_core/__init__.py` (отключение telemetry ChromaDB и sentence-transformers до импорта).
-
-### Soul / Личность
-- `leya_soul/personality.txt`, `rules.txt`, `values.txt` — загружаются в промпты Thinker'а.
-- `leya_personality.json`, `leya_goals.json` — динамические параметры.
-- `soul_crypto.py` — обновление секретного ключа на основе состояния (экспериментально).
-
-### LLM Integration
-- Только Ollama HTTP API (`/api/chat`).
-- Модель по умолчанию: `qwen2.5:14b-instruct-q3_K_M`.
-- `Modelfile.leya` (num_ctx=8192, keep_alive=-1).
-- `OllamaClient` с Circuit Breaker, timeout, temperature, top_p/k, repeat_penalty, fallback.
-- Системный промпт и все текстовые поля — на русском языке.
+Параллельно работают фоновые циклы: метаболизм драйвов, гомеостаз, workspace, спонтанные мысли, консолидация памяти, системные метрики, broadcast состояния.
 
 ## Быстрый старт
 
 ### Требования
 - Python 3.10+
-- Ollama (локально): `ollama serve`
-- Модель: `ollama pull qwen2.5:14b-instruct-q3_K_M` (или совместимая; указана в `LeyaConfig`)
-- Git
+- Ollama + модель `qwen2.5:14b-instruct-q3_K_M` (или совместимая)
+- `git clone https://github.com/egonazivalieretikom-ctrl/Leya.git`
 
-### Установка
+### Установка и запуск
 ```bash
-git clone https://github.com/egonazivalieretikom-ctrl/Leya.git
-cd Leya
-
-python -m venv venv
-source venv/bin/activate
-
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+
+# Создать .env (см. пример в репозитории)
+python LeyaOS.py          # веб-интерфейс
+LEYA_WEB=0 python LeyaOS.py   # CLI
 ```
 
-**requirements.txt** (основные):
-- chromadb>=0.4.0
-- sentence-transformers>=2.2.0
-- aiohttp>=3.8.0
-- fastapi>=0.104.0
-- uvicorn[standard]>=0.24.0
-- pydantic>=2.0.0
-- psutil>=5.9.0
-- numpy>=1.24.0
-- websockets, jinja2, python-multipart (для веб)
+Веб-интерфейс доступен на `http://localhost:8000`.
 
-### Настройка окружения
-Скопируйте `.env.example` в `.env` (или создайте):
-```env
-LEYA_WEB=1
-OLLAMA_BASE_URL=http://localhost:11434
-LEYA_MODEL=qwen2.5:14b-instruct-q3_K_M
-LEYA_BRAIN_DIR=./leya_brain
+## Текущие ограничения и риски (v3.0)
 
-# Опционально: переопределение параметров LeyaConfig
-OLLAMA_TIMEOUT=180
-MEMORY_CONSOLIDATION_THRESHOLD=0.15
-# ... (см. полный список в leya_core/config.py)
-```
+На основе полномасштабного анализа кода выявлены следующие проблемы:
 
-**Важно:** `leya_brain/`, `.env`, `*.pkl`, `*.log` игнорируются `.gitignore`. Добавьте `.env` в `.gitignore` перед коммитами.
+### 1. Контрактный дрейф (Protocol vs Реализация)
+`interfaces.py` и реальные классы (`memory.py`, `drives.py`, `homeostasis_engine.py`) имеют несовпадающие сигнатуры:
+- `store_perception` в Protocol возвращает `str` и принимает `memory_type`, в реализации — возвращает `Engram`.
+- `get_recent_spontaneous_thoughts` возвращает разные типы.
+- `generate_goal` помечен как `async` в интерфейсе, но синхронный в коде.
+- Несогласованное использование `d.type` vs `d.type.value` как ключей словарей.
 
-### Запуск
-```bash
-# Веб-интерфейс (по умолчанию)
-python LeyaOS.py
+Это делает преимущества Protocol иллюзорными и затрудняет отладку и рефакторинг.
 
-# CLI
-LEYA_WEB=0 python LeyaOS.py
-```
+### 2. Потерянные связи (7 осиротевших модулей)
+Следующие файлы в `leya_core/` **не импортируются и не используются** в основном цикле:
+- `decision_engine.py`
+- `emotional_support.py`
+- `desktop_control.py`
+- `personal_tools.py`
+- `soul_crypto.py`
+- `voice_environment.py`
+- `voice_interface.py`
 
-После запуска:
-- Веб: http://localhost:8000 (FastAPI + WebSocket live-обновления мыслей, драйвов, self-model).
-- Логи: `leya_consciousness.log`
-- Память и состояние: `./leya_brain/` (chroma.sqlite3, memory_state.pkl с HMAC)
-- Ollama должен быть запущен отдельно.
+Это мёртвый код и технический долг. Особенно опасен `desktop_control.py`.
 
-## Конфигурация (LeyaConfig)
+### 3. Безопасность и производительность
+- **Pickle** (`memory_state.pkl`) — даже с HMAC остаётся рискованным решением (небезопасная десериализация, сложность миграции).
+- Синхронное сохранение pickle внутри async-методов может вызывать фризы при росте памяти.
+- Дублирование логики парсинга JSON (`repair_json` в `thinker.py` и `_safe_parse_json` в `reflection.py`).
 
-Полная конфигурация — в `leya_core/config.py`. Все вложенные dataclass'ы (`OllamaConfig`, `MemoryConfig`, `DrivesConfig`, `HomeostasisConfig`, `ThinkerConfig`, `ReflectionConfig`, `WorkspaceConfig`, `ConstitutionalConfig`, `WebConfig`, `LoggingConfig`) имеют валидацию в `__post_init__` и загружаются через `LeyaConfig.from_env()`.
+### 4. Системные архитектурные разрывы
+- **Проблема Таламуса**: Отсутствует механизм приоритизации/торможения (Inhibition). Фоновые предложения гомеостаза могут перебивать активный диалог с пользователем.
+- **Слабая эмоциональная связность**: `emotional_boost` сохраняется в памяти, но почти не влияет на генерацию целей в `HomeostasisEngine`.
+- Прямой доступ к приватным методам (например, `_get_recent_episodes` из `reflection.py`).
+- Риск циклического импорта в конфигурации памяти.
 
-Примеры ключевых параметров (с дефолтами):
-- **Ollama**: timeout=180s, temperature=0.7, max_tokens=1024, model=qwen2.5:14b-instruct-q3_K_M
-- **Memory**: brain_dir=./leya_brain, embedding_model=all-MiniLM-L6-v2, forgetting_threshold=0.1, consolidation_threshold=0.15
-- **Drives**: metabolism_interval=60s, curiosity_rate=0.015 и т.д.
-- **Homeostasis**: rest_period=60s, curiosity_threshold=0.6 и др.
-- **Thinker**: max_context_tokens=6000, token_buffer=500
-- **Web**: enabled=True, host=0.0.0.0, port=8000
-- **Reflection**: consolidation_interval=1800s (30 мин)
+### 5. Другие замечания
+- Жёстко закодированные эвристики в обработке пользовательских запросов.
+- tool_generator может быть `None` без полной защиты.
+- Недостаточное тестовое покрытие критических путей.
 
-Все параметры можно переопределить через переменные окружения (префиксы OLLAMA_, MEMORY_, DRIVES_ и т.д.).
+**Вывод**: Система стабильнее предыдущих версий по части отказоустойчивости, но архитектурно фрагментирована. Требует серьёзной доработки перед активным использованием.
 
-## Известные ограничения и проблемы (v3.0)
+## Roadmap (рекомендуемый)
 
-1. **Pickle в памяти** (`memory_state.pkl`): Даже с HMAC-подписью и атомарной записью остаётся риск (небезопасная десериализация). Рекомендуется замена на msgpack + строгую схему.
-2. **Эвристики в обработке пользовательских запросов** (`LeyaOS._handle_user_request`, `_extract_topic_from_user`): Жёстко закодированные ключевые слова. Ломается на вариациях формулировок.
-3. **Парсинг LLM-вывода** (`thinker.py` `repair_json`): Сложная эвристика (regex + ручная балансировка). Может молча «починить» JSON неправильно. Нет Pydantic-схемы валидации.
-4. **Оценка токенов** в Thinker: По символам (estimate_tokens_ratio=3.5), а не через реальный токенизатор модели → риск переполнения контекста.
-5. **Не все модули leya_core интегрированы**: `decision_engine.py`, `emotional_support.py`, `personal_tools.py`, `desktop_control.py`, `voice_environment.py`, `voice_interface.py` присутствуют в дереве, но не подключены в `LeyaOS.__init__` и основном цикле. Это технический долг или экспериментальный код.
-6. **Тесты**: `pytest.ini` и `tests/` существуют, но покрытие core-логики (cognitive_loop, LTP-синапсы, repair_json edge cases, homeostasis) недостаточно. Нет CI.
-7. **Жёсткая привязка к Ollama + конкретной модели**. Нет fallback на другие провайдеры.
-8. **Однопоточный event loop**: Все фоновые задачи в одном asyncio loop. Нет настоящей параллельности «мыслей».
-9. **Отсутствие долгосрочного планирования** целей выше уровня homeostasis.
-10. **Broad `except Exception`** в фоновых циклах и некоторых местах LeyaOS (для resilience) — маскирует баги.
+### Фаза 1: Техническая гигиена (приоритет)
+- Синхронизировать все Protocol с реальными реализациями.
+- Заменить pickle на безопасный формат (json / msgpack + HMAC).
+- Удалить/вынести в experimental 7 осиротевших модулей.
+- Устранить дублирование парсинга JSON и фантомные вызовы приватных методов.
+- Добавить полную проверку интерфейсов и защиту от None.
 
-**Рекомендация:** Перед серьёзным использованием исправьте/улучшите пункты 1–5. Система стабильнее предыдущих версий, но остаётся исследовательским прототипом.
+### Фаза 2: Повышение связности и «человечности»
+- Внедрить механизм Inhibition / приоритизации в GlobalWorkspace (блокировка внутренних proposals во время активного диалога).
+- Сделать emotional_boost значимым фактором при генерации целей.
+- Улучшить обновление Self-Model (гранулярное изменение черт личности на основе RPE).
 
-## Roadmap (реалистичный)
+### Фаза 3: Масштабирование
+- При большом объёме памяти перейти на SQLite для синапсов и метаданных.
+- Добавить comprehensive тесты (включая property-based для repair_json и LTP).
+- Обновить документацию и примеры.
 
-- Устранение pickle (замена на безопасный формат).
-- Строгая Pydantic-валидация cognitive_output + улучшение repair_json.
-- Интеграция или удаление неиспользуемых модулей leya_core.
-- Полноценные тесты + property-based testing для repair_json и LTP.
-- Реальный токенизатор + динамическое управление контекстом.
-- Расширение инструментов (Reddit, GitHub, code execution в sandbox).
-- Улучшение веб-интерфейса (графики workspace, memory network, drive dynamics).
-- Docker + CI/CD.
-- Более глубокая биологическая модель (active inference элементы, предсказательная обработка).
-- Многоагентные сценарии.
+## Лицензия и использование
 
-## Лицензия
-
-Проект не имеет явной лицензии. Рекомендуется MIT или Apache 2.0 для исследовательского использования.
-
-**Использование только в исследовательских целях.** Система моделирует аспекты «сознания», но остаётся детерминированной программой на базе LLM + правил.
-
-## Вклад
-
-1. Исправляйте баги и ограничения (особенно pickle, парсинг, интеграцию модулей).
-2. Добавляйте тесты с высоким покрытием.
-3. Улучшайте документацию и примеры.
-4. Предлагайте улучшения архитектуры через Issues/PR (сохраняя сложность биологической модели и избегая упрощения до обычного RAG-агента).
+Исследовательский прототип. Использовать только в исследовательских целях.
 
 ---
 
-**Создано на основе полномасштабного анализа исходного кода (LeyaOS.py, leya_core/*, web_interface/*, конфиги) 26 июня 2026.**  
-Актуально для коммита v2 и выше. Предыдущие README/ARCHITECTURE устарели.
+**Документация составлена на основе полномасштабного анализа кода 26 июня 2026.**  
+Предыдущие версии README и ARCHITECTURE устарели.
 
-Для вопросов по конкретным классам/методам — изучайте исходники или создавайте Issue.
+Для детальной технической архитектуры см. `LeyaOS_ARCHITECTURE_v3_final.md`.

@@ -266,22 +266,37 @@ class ToolRegistry:
             return f"Ошибка поиска в Wikipedia: {exc}"
 
     async def _duckduckgo_search(self, query: str, max_results: int = 5) -> str:
-        """Поиск в DuckDuckGo."""
+        """Поиск в DuckDuckGo с защитой от Ratelimit."""
         try:
             from duckduckgo_search import DDGS
+            import asyncio
 
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
-                if not results:
-                    return "Результаты не найдены"
-                output = []
-                for r in results:
-                    output.append(f"- {r.get('title', 'Без названия')}: {r.get('body', '')}")
-                return "\n".join(output)
-        except ImportError:
-            return "Модуль duckduckgo-search не установлен"
+            # Запускаем в потоке, так как библиотека синхронная
+            def search():
+                with DDGS() as ddgs:
+                    # Используем генератор и берем только нужные результаты
+                    results = []
+                    # Важно: не указываем backend, чтобы библиотека сама выбрала лучший (обычно api)
+                    for r in ddgs.text(query, max_results=max_results):
+                        results.append(r)
+                    return results
+
+            results = await asyncio.to_thread(search)
+            
+            if not results:
+                return "Результаты не найдены"
+                
+            output = []
+            for r in results:
+                title = r.get('title', 'Без названия')
+                body = r.get('body', r.get('snippet', '')) # Добавлена проверка на snippet
+                output.append(f"- {title}: {body}")
+            return "\n".join(output)
+
         except Exception as exc:
-            return f"Ошибка поиска в DuckDuckGo: {exc}"
+            # Если DDGS заблокирован, предлагаем использовать Wikipedia как альтернативу
+            logger.warning(f"DuckDuckGo Ratelimit: {exc}")
+            return f"⚠️ Поиск временно недоступен (Ratelimit). Попробуйте использовать wikipedia_search для общих тем. Ошибка: {exc}"
 
     async def _github_readme(self, repo: str) -> str:
         """Получение README из GitHub."""

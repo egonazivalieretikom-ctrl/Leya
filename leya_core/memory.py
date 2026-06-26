@@ -332,9 +332,9 @@ class MemorySystem:
     async def retrieve_context(
         self,
         query: str,
-        top_k: int = 5,
+        max_results: int = 5,
         min_retention: float = 0.1,
-    ) -> list[Engram]:
+    ) -> list[dict[str, Any]]:
         """
         Извлечь релевантный контекст из памяти.
 
@@ -355,12 +355,12 @@ class MemorySystem:
             episodic_results = await asyncio.to_thread(
                 self.episodic_collection.query,
                 query_embeddings=[query_embedding],
-                n_results=top_k * 2,  # Берём с запасом для фильтрации
+                n_results=max_results * 2,  # Берём с запасом для фильтрации
             )
             semantic_results = await asyncio.to_thread(
                 self.semantic_collection.query,
                 query_embeddings=[query_embedding],
-                n_results=top_k,
+                n_results=max_results,
             )
         except Exception as exc:
             raise LeyaMemoryError(
@@ -394,7 +394,7 @@ class MemorySystem:
 
         # Сортировка по score (меньше = лучше)
         candidates.sort(key=lambda x: x[1])
-        selected = [engram for engram, _ in candidates[:top_k]]
+        selected = [engram for engram, _ in candidates[:max_results]]
 
         # Обновление статистики и усиление синапсов (LTP)
         for engram in selected:

@@ -407,7 +407,7 @@ class DriveSystem:
             drive_type.value: {
                 "current": drive.current,
                 "tension": drive.tension,
-                "target": drive.target,
+                "target": drive.baseline,
                 "satisfaction": getattr(drive, "satisfaction", 0.0),
             }
             for drive_type, drive in self.drives.items()

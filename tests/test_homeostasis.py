@@ -37,8 +37,9 @@ class TestHomeostasisInit:
 
 class TestGoalGeneration:
     """Тесты генерации целей."""
-
-    def test_generate_goal_with_high_disbalance(self, test_homeostasis_config):
+    
+    @pytest.mark.asyncio
+    async def test_generate_goal_with_high_disbalance(self, test_homeostasis_config):
         """Цель генерируется при высоком дисбалансе."""
         he = HomeostasisEngine(config=test_homeostasis_config)
         he.last_action_time = 0  # Сбрасываем rest period
@@ -52,7 +53,7 @@ class TestGoalGeneration:
             DriveType.CONNECTION: 0.3,
         }
 
-        goal = he.generate_goal(
+        goal = await he.generate_goal(
             drive_state=drive_state,
             predicted_state=predicted_state,
             recent_episodes=[],
@@ -62,8 +63,9 @@ class TestGoalGeneration:
         assert goal is not None
         assert "name" in goal
         assert "urgency" in goal
-
-    def test_no_goal_with_low_disbalance(self, test_homeostasis_config):
+    
+    @pytest.mark.asyncio
+    async def test_no_goal_with_low_disbalance(self, test_homeostasis_config):
         """Цель не генерируется при низком дисбалансе."""
         he = HomeostasisEngine(config=test_homeostasis_config)
         he.last_action_time = 0
@@ -77,7 +79,7 @@ class TestGoalGeneration:
             DriveType.CONNECTION: 0.2,
         }
 
-        goal = he.generate_goal(
+        goal = await he.generate_goal(
             drive_state=drive_state,
             predicted_state=predicted_state,
             recent_episodes=[],
@@ -85,8 +87,9 @@ class TestGoalGeneration:
         )
 
         assert goal is None
-
-    def test_respects_rest_period(self, test_homeostasis_config):
+    
+    @pytest.mark.asyncio
+    async def test_respects_rest_period(self, test_homeostasis_config):
         """Rest period предотвращает слишком частую генерацию."""
         test_homeostasis_config.rest_period = 60  # 60 секунд
         he = HomeostasisEngine(config=test_homeostasis_config)
@@ -97,7 +100,7 @@ class TestGoalGeneration:
         drive_state = {DriveType.CURIOSITY: 0.9}
         predicted_state = {DriveType.CURIOSITY: 0.95}
 
-        goal = he.generate_goal(
+        goal = await he.generate_goal(
             drive_state=drive_state,
             predicted_state=predicted_state,
             recent_episodes=[],

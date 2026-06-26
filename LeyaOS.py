@@ -578,7 +578,7 @@ class LeyaOS:
             try:
                 # Извлечение контекста из памяти
                 stimulus_content = stimulus.get("content", "")
-                memory_context = await self.memory.retrieve_context(query=stimulus_content, top_k=5)
+                memory_context = await self.memory.retrieve_context(query=stimulus_content, max_results=5)
 
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 self_model_dict = {"self_model": self.self_model}
@@ -749,7 +749,7 @@ class LeyaOS:
                 predicted_state = self.drives.get_predicted_disbalance()
                 recent_episodes = await self.memory.get_recent_episodes(limit=5)
 
-                goal = self.homeostasis.generate_goal(
+                goal = await self.homeostasis.generate_goal(
                     drive_state=drive_state,
                     predicted_state=predicted_state,
                     recent_episodes=recent_episodes,
