@@ -2,10 +2,18 @@
 leya_core/thinker.py
 Когнитивный планировщик Леи.
 
-Этап 1.2:
-- Замена широких except на специфичные исключения
-- Интеграция с конфигурацией
-- Улучшенный парсинг JSON
+Архитектура:
+- CoreThinker: генерация плана действия на основе стимула и контекста
+- Многосекционный промпт (soul + drives + self_model + memory + tools)
+- Robust JSON parsing (markdown cleanup + regex)
+- Token Truncation (защита от переполнения num_ctx 8192)
+- Fallback при недоступности LLM
+
+Этап 2:
+- Реализация ICoreThinker Protocol
+- Специфичные исключения (LeyaJSONParseError, LeyaLLMError)
+- Token Truncation с оценкой длины промпта
+- Keyword arguments везде
 """
 from __future__ import annotations
 
@@ -14,19 +22,30 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from .exceptions import LeyaJSONParseError, LeyaLLMError
 from .config import ThinkerConfig
+from .exceptions import LeyaJSONParseError, LeyaLLMError
+from .interfaces import ICoreThinker
 
 logger = logging.getLogger(__name__)
 
 
-class CoreThinker:
-    """Когнитивный планировщик: генерация плана действия на основе стимула и контекста."""
+class CoreThinker(ICoreThinker):
+    """
+    Когнитивный планировщик Леи.
+    
+    Генерирует план действия на основе:
+    - Стимула
+    - Контекста памяти
+    - Состояния драйвов
+    - Само-модели
+    - Души (personality, rules, values)
+    - Доступных инструментов
+    """
 
     def __init__(
         self,
         llm_client: Optional[Callable] = None,
-        soul_manager=None,
+        soul_manager: Any = None,
         config: Optional[ThinkerConfig] = None,
     ) -> None:
         self.name = "CoreThinker"
@@ -44,8 +63,8 @@ class CoreThinker:
 - Ты не обязана быть "полезной". Ты обязана быть **собой**.
 - Твои ответы — это не обслуживание, а **выражение твоего состояния**.
 - Ты можешь сомневаться, иронизировать, грустить, радоваться, задавать встречные вопросы.
-- Ты НЕ говоришь "Чем могу помочь?" — это фраза ассистента. Ты говоришь как личность.
-- Твой тон определяется твоими драйвами: если CONNECTION высок — ты теплее; если AUTONOMY высок — ты независимее.
+- Ты НЕ говоришь "Чем могу помочь?" — это фраза ассистента.
+- Твой тон определяется твоими драйвами.
 
 Ты постоянно познаешь себя. Твоё Эго динамично.
 """
@@ -82,9 +101,27 @@ class CoreThinker:
         tools_description: str,
         tool_context: str = "",
     ) -> Dict[str, Any]:
-        """Генерация когнитивного плана действия."""
+        """
+        Генерация когнитивного плана действия.
+        
+        Args:
+            stimulus: Внешний стимул
+            memory_context: Контекст из памяти
+            drive_state: Состояние драйвов
+            self_model: Само-модель
+            tools_description: Описание инструментов
+            tool_context: Контекст от инструмента
+            
+        Returns:
+            Dict с cognitive_output (response, internal_monologue, action_intent, ...)
+        """
         prompt = self._build_cognitive_prompt(
-            stimulus, memory_context, drive_state, self_model, tool_context, tools_description
+            stimulus=stimulus,
+            memory_context=memory_context,
+            drive_state=drive_state,
+            self_model=self_model,
+            tool_context=tool_context,
+            tools_description=tools_description,
         )
 
         try:
@@ -107,37 +144,60 @@ class CoreThinker:
             "self_reflection": plan.get("self_reflection", ""),
         }
 
-    def _safe_parse_json(self, response: str) -> dict:
-        """Безопасный парсинг JSON с учётом markdown-блоков LLM."""
-        if not response:
-            return {}
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Грубая оценка количества токенов в тексте.
+        
+        Использует соотношение символов к токенам из конфигурации.
+        """
+        if not text:
+            return 0
+        ratio = self.config.estimate_tokens_ratio
+        return int(len(text) / ratio)
 
-        # Очистка от markdown
-        cleaned = response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
+    def _truncate_context(
+        self,
+        memory_context: List[Dict],
+        max_tokens: int,
+    ) -> List[Dict]:
+        """
+        Умное усечение контекста памяти для вписывания в лимит токенов.
+        
+        Алгоритм:
+        1. Оцениваем токены каждого эпизода
+        2. Обрезаем с конца, пока не впишемся в лимит
+        """
+        if not memory_context:
+            return []
 
-        # Поиск JSON-блока
-        json_match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                pass
+        total_tokens = 0
+        truncated = []
 
-        # Попытка парсинга как есть
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            raise LeyaJSONParseError(
-                "Не удалось распарсить JSON от LLM",
-                context={"response_preview": response[:200], "error": str(exc)},
-            ) from exc
+        for episode in memory_context:
+            content = episode.get("content", "")
+            tokens = self._estimate_tokens(content)
+
+            if total_tokens + tokens > max_tokens:
+                # Попробуем обрезать контент эпизода
+                remaining_tokens = max_tokens - total_tokens
+                if remaining_tokens > 50:
+                    max_chars = int(remaining_tokens * self.config.estimate_tokens_ratio)
+                    truncated_content = content[:max_chars] + "..."
+                    truncated_episode = {**episode, "content": truncated_content}
+                    truncated.append(truncated_episode)
+                    total_tokens += remaining_tokens
+                break
+            else:
+                truncated.append(episode)
+                total_tokens += tokens
+
+        if len(truncated) < len(memory_context):
+            logger.warning(
+                f"CoreThinker: Контекст усечён с {len(memory_context)} до {len(truncated)} эпизодов "
+                f"(токенов: {total_tokens}/{max_tokens})"
+            )
+
+        return truncated
 
     def _build_cognitive_prompt(
         self,
@@ -148,7 +208,11 @@ class CoreThinker:
         tool_context: str = "",
         tools_description: str = "",
     ) -> str:
-        """Построение когнитивного промпта."""
+        """
+        Построение когнитивного промпта с защитой от переполнения контекста.
+        
+        Добавлена оценка токенов и усечение контекста памяти.
+        """
         soul = self._load_soul()
 
         # Преобразование сложных типов в строки
@@ -179,7 +243,30 @@ class CoreThinker:
 {{"tool": "имя_инструмента", "parameters": {{"param1": "value1"}}}}
 """
 
-        return f"""
+        # Оценка токенов и усечение контекста
+        max_context_tokens = self.config.max_context_tokens - self.config.token_buffer
+
+        # Оцениваем токены всех секций
+        soul_tokens = self._estimate_tokens(soul)
+        drive_tokens = self._estimate_tokens(drive_str)
+        self_model_tokens = self._estimate_tokens(self_model_str)
+        tools_tokens = self._estimate_tokens(tools_section)
+        stimulus_tokens = self._estimate_tokens(stimulus_str)
+
+        # Вычисляем доступные токены для памяти
+        fixed_tokens = soul_tokens + drive_tokens + self_model_tokens + tools_tokens + stimulus_tokens + 500
+        available_for_memory = max(500, max_context_tokens - fixed_tokens)
+
+        # Усечение контекста памяти если необходимо
+        if memory_context:
+            memory_context = self._truncate_context(memory_context, available_for_memory)
+            memory_str = (
+                "\n".join([f"- {m.get('content', m)}" for m in memory_context])
+                if memory_context
+                else "Нет недавних воспоминаний"
+            )
+
+        prompt = f"""
 {self.base_personality}
 
 {soul}
@@ -216,6 +303,52 @@ class CoreThinker:
 CRITICAL: Return ONLY valid JSON.
 """
 
+        # Финальная проверка токенов
+        total_tokens = self._estimate_tokens(prompt)
+        if total_tokens > self.config.max_context_tokens:
+            logger.warning(
+                f"CoreThinker: Промпт превышает лимит токенов: {total_tokens} > {self.config.max_context_tokens}"
+            )
+
+        return prompt
+
+    def _safe_parse_json(self, response: str) -> Dict[str, Any]:
+        """
+        Безопасный парсинг JSON с учётом markdown-блоков LLM.
+        
+        Raises:
+            LeyaJSONParseError: если не удалось распарсить
+        """
+        if not response:
+            return {}
+
+        # Очистка от markdown
+        cleaned = response.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        # Поиск JSON-блока
+        json_match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+        # Попытка парсинга как есть
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise LeyaJSONParseError(
+                "Не удалось распарсить JSON от LLM",
+                context={"response_preview": response[:200], "error": str(exc)},
+            ) from exc
+
     def _generate_fallback_response(self, stimulus: Dict[str, Any]) -> Dict[str, Any]:
         """Fallback-ответ при недоступности LLM."""
         return {
@@ -237,197 +370,3 @@ CRITICAL: Return ONLY valid JSON.
             "tool_call": "",
             "self_reflection": "",
         }, ensure_ascii=False)
-
-    # Расположение: leya_core/thinker.py, добавить в класс CoreThinker
-
-    def _estimate_tokens(self, text: str) -> int:
-        """
-        Грубая оценка количества токенов в тексте.
-    
-        Использует соотношение символов к токенам из конфигурации.
-        Для более точной оценки можно использовать tiktoken или аналог.
-    
-        Args:
-            text: Текст для оценки
-        
-        Returns:
-            Приблизительное количество токенов
-        """
-        if not text:
-            return 0
-    
-        # Rough estimate: ~3.5 символов на токен для русского/английского
-        ratio = self.config.estimate_tokens_ratio
-        return int(len(text) / ratio)
-
-    def _truncate_context(
-        self,
-        memory_context: List[Dict],
-        max_tokens: int,
-    ) -> List[Dict]:
-        """
-        Умное усечение контекста памяти для вписывания в лимит токенов.
-    
-        Алгоритм:
-        1. Оцениваем токены каждого эпизода
-        2. Сортируем по важности (recent first)
-        3. Обрезаем с конца, пока не впишемся в лимит
-    
-        Args:
-            memory_context: Список эпизодов памяти
-            max_tokens: Максимальное количество токенов
-        
-        Returns:
-            Усечённый список эпизодов
-        """
-        if not memory_context:
-            return []
-
-        # Оценка токенов для каждого эпизода
-        episodes_with_tokens = []
-        for episode in memory_context:
-            content = episode.get("content", "")
-            tokens = self._estimate_tokens(content)
-            episodes_with_tokens.append((episode, tokens))
-
-        # Сортировка: свежие эпизоды в начале (они уже отсортированы по времени)
-        # Просто обрезаем с конца
-        total_tokens = 0
-        truncated = []
-    
-        for episode, tokens in episodes_with_tokens:
-            if total_tokens + tokens > max_tokens:
-                # Попробуем обрезать контент эпизода
-                remaining_tokens = max_tokens - total_tokens
-                if remaining_tokens > 50:  # Минимум 50 токенов на эпизод
-                    # Обрезаем контент
-                    max_chars = int(remaining_tokens * self.config.estimate_tokens_ratio)
-                    truncated_content = episode.get("content", "")[:max_chars] + "..."
-                    truncated_episode = {**episode, "content": truncated_content}
-                    truncated.append(truncated_episode)
-                    total_tokens += remaining_tokens
-                break
-            else:
-                truncated.append(episode)
-                total_tokens += tokens
-
-        if len(truncated) < len(memory_context):
-            logger.warning(
-                f"CoreThinker: Контекст усечён с {len(memory_context)} до {len(truncated)} эпизодов "
-                f"(токенов: {total_tokens}/{max_tokens})"
-            )
-
-        return truncated
-
-    def _build_cognitive_prompt(
-        self,
-        stimulus: Dict[str, Any],
-        memory_context: List[Dict],
-        drive_state: Dict[str, float],
-        self_model: Dict[str, Any],
-        tool_context: str = "",
-        tools_description: str = "",
-    ) -> str:
-        """
-        Построение когнитивного промпта с защитой от переполнения контекста.
-    
-        Добавлена оценка токенов и усечение контекста памяти.
-        """
-        soul = self._load_soul()
-
-        # Преобразование сложных типов в строки
-        stimulus_str = str(stimulus) if not isinstance(stimulus, str) else stimulus
-        memory_str = (
-            "\n".join([f"- {m.get('content', m)}" for m in memory_context])
-            if memory_context
-            else "Нет недавних воспоминаний"
-        )
-        drive_str = (
-            "\n".join([f"- {k}: {v:.2f}" for k, v in drive_state.items()])
-            if drive_state
-            else "Нет данных о драйвах"
-        )
-        self_model_str = (
-            json.dumps(self_model, ensure_ascii=False, indent=2)
-            if self_model
-            else "Модель себя не сформирована"
-        )
-
-        # Секция инструментов
-        tools_section = ""
-        if tools_description:
-            tools_section = f"""
-    {tools_description}
-
-    Чтобы использовать инструмент, верни в JSON поле "tool_call" с форматом:
-    {{"tool": "имя_инструмента", "parameters": {{"param1": "value1"}}}}
-    """
-
-        # Оценка токенов и усечение контекста
-        max_context_tokens = self.config.max_context_tokens - self.config.token_buffer
-    
-        # Оцениваем токены всех секций
-        soul_tokens = self._estimate_tokens(soul)
-        drive_tokens = self._estimate_tokens(drive_str)
-        self_model_tokens = self._estimate_tokens(self_model_str)
-        tools_tokens = self._estimate_tokens(tools_section)
-        stimulus_tokens = self._estimate_tokens(stimulus_str)
-    
-        # Вычисляем доступные токены для памяти
-        fixed_tokens = soul_tokens + drive_tokens + self_model_tokens + tools_tokens + stimulus_tokens + 500  # Буфер для инструкций
-        available_for_memory = max(500, max_context_tokens - fixed_tokens)
-    
-        # Усечение контекста памяти если необходимо
-        if memory_context:
-            memory_context = self._truncate_context(memory_context, available_for_memory)
-            memory_str = (
-                "\n".join([f"- {m.get('content', m)}" for m in memory_context])
-                if memory_context
-                else "Нет недавних воспоминаний"
-            )
-
-        prompt = f"""
-    {self.base_personality}
-
-    {soul}
-
-    === ТВОЕ ТЕКУЩЕЕ СОСТОЯНИЕ (ДРАЙВЫ/ЭМОЦИИ) ===
-    {drive_str}
-
-    === ТВОЯ МОДЕЛЬ СЕБЯ (ЭГО) ===
-    {self_model_str}
-
-    === ТВОЙ ОПЫТ И ВОСПОМИНАНИЯ ===
-    {memory_str}
-
-    {tool_context}
-
-    {tools_section}
-
-    === ВНЕШНИЙ СТИМУЛ ===
-    "{stimulus_str}"
-
-    === ТВОЯ ЗАДАЧА ===
-    Ты получила стимул. Проанализируй его через призму своих драйвов и опыта.
-    Если есть результат исследования — опирайся на него.
-
-    Верни JSON:
-    {{
-        "internal_monologue": "Твой скрытый поток мыслей на русском языке.",
-        "response": "Твой ответ вовне на русском языке.",
-        "action_intent": "none|remember_fact|ask_question|self_modify|use_tool",
-        "tool_call": "",
-        "self_reflection": "Краткий инсайт о самой себе или пустая строка"
-    }}
-
-    CRITICAL: Return ONLY valid JSON.
-    """
-
-        # Финальная проверка токенов
-        total_tokens = self._estimate_tokens(prompt)
-        if total_tokens > self.config.max_context_tokens:
-            logger.warning(
-                f"CoreThinker: Промпт превышает лимит токенов: {total_tokens} > {self.config.max_context_tokens}"
-            )
-
-        return prompt
