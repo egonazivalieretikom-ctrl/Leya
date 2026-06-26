@@ -1,13 +1,13 @@
 """
 leya_core/interfaces.py
-Интерфейсы (Protocol) для всех ключевых модулей LeyaOS.
+Protocol-интерфейсы для всех ключевых модулей LeyaOS.
 
 Этап 2.1: Замена hasattr на isinstance-проверки.
 Все модули должны реализовывать эти интерфейсы.
 
 Использование:
     from leya_core.interfaces import IMemorySystem, IHomeostasisEngine
-    
+
     def __init__(self, memory: IMemorySystem, homeostasis: IHomeostasisEngine):
         self.memory = memory
         self.homeostasis = homeostasis

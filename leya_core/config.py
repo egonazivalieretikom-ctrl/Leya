@@ -51,18 +51,18 @@ class MemoryConfig:
     consolidation_threshold: float = 0.15
     max_recent_episodes: int = 20
     context_limit: int = 5
-    
+
     # Поля для кривой забывания Эббингауза (ИСПРАВЛЕНИЕ БАГА)
-    forgetting_threshold: float = 0.1  # Порог забывания (retention_strength < threshold → удаление)
-    forgetting_base_stability: float = 3600.0  # Базовая стабильность в секундах (1 час)
-    metabolism_interval_seconds: int = 60  # Интервал обновления метаболизма
-    
+    forgetting_threshold: float = 0.1
+    forgetting_base_stability: float = 3600.0
+    metabolism_interval_seconds: int = 60
+
     # Параметры синапсов
-    synapse_learning_rate: float = 0.05  # Скорость обучения LTP
-    synapse_max_weight: float = 1.0  # Максимальный вес синапса
-    
+    synapse_learning_rate: float = 0.05
+    synapse_max_weight: float = 1.0
+
     # Параметры само-модели
-    max_self_model_length: int = 5000  # Максимальная длина self_model
+    max_self_model_length: int = 5000
 
     def __post_init__(self) -> None:
         """Валидация и подготовка brain_dir."""

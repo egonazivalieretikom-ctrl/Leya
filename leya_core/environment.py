@@ -14,6 +14,15 @@ from typing import Dict, Any, Optional, Callable, List
 from dataclasses import dataclass
 from datetime import datetime
 
+from .exceptions import (
+    LeyaEnvironmentError,
+    LeyaToolError,
+    LeyaToolNotFoundError,
+    LeyaToolExecutionError,
+    LeyaSoulError,
+)
+from .interfaces import IEnvironment
+
 logger = logging.getLogger("Environment")
 
 
@@ -55,20 +64,41 @@ class ToolRegistry:
         descriptions = [tool.to_prompt_description() for tool in self.tools.values()]
         return "=== ДОСТУПНЫЕ ИНСТРУМЕНТЫ ===\n" + "\n".join(descriptions)
     
+    # Заменить метод execute в ToolRegistry полностью
+
     async def execute(self, tool_name: str, parameters: Dict[str, Any]) -> str:
-        """Выполняет инструмент с проверкой безопасности"""
+        """Выполняет инструмент с проверкой безопасности."""
         tool = self.get_tool(tool_name)
         if not tool:
-            return f"Ошибка: инструмент '{tool_name}' не найден."
-        
+            raise LeyaToolNotFoundError(
+                f"Инструмент '{tool_name}' не найден",
+                context={"tool_name": tool_name, "available": list(self.tools.keys())},
+            )
+
         try:
             logger.info(f"ToolRegistry: Выполнение '{tool_name}' с параметрами: {parameters}")
             result = await tool.handler(**parameters)
             logger.info(f"ToolRegistry: Результат '{tool_name}': {str(result)[:100]}...")
             return str(result)
-        except Exception as e:
-            logger.error(f"ToolRegistry: Ошибка выполнения '{tool_name}': {e}")
-            return f"Ошибка при выполнении инструмента: {str(e)}"
+
+        except LeyaToolError:
+            # Пробрасываем наши исключения
+            raise
+        except asyncio.TimeoutError as exc:
+            raise LeyaToolExecutionError(
+                f"Превышено время выполнения инструмента '{tool_name}'",
+                context={"tool_name": tool_name, "timeout": 15},
+            ) from exc
+        except TypeError as exc:
+            raise LeyaToolExecutionError(
+                f"Некорректные параметры для инструмента '{tool_name}'",
+                context={"tool_name": tool_name, "parameters": parameters, "error": str(exc)},
+            ) from exc
+        except Exception as exc:
+            raise LeyaToolExecutionError(
+                f"Ошибка выполнения инструмента '{tool_name}'",
+                context={"tool_name": tool_name, "error": str(exc)},
+            ) from exc
 
 
 # ==================== БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ "ДУШИ" ====================
@@ -106,10 +136,45 @@ class SoulFileManager:
         self._check_and_load(filename)
         return self._cache.get(filename, "")
 
+    # Добавить в класс SoulFileManager после метода read_file
+
+    def write_file(self, filename: str, content: str) -> str:
+        """Записывает содержимое в файл души и обновляет кэш."""
+        if filename not in self._files:
+            raise LeyaSoulError(
+                f"Неизвестный файл души: {filename}",
+                context={"filename": filename, "allowed": self._files},
+            )
+
+        filepath = os.path.join(self.soul_dir, filename)
+        try:
+            # Создаём директорию если нужно
+            os.makedirs(self.soul_dir, exist_ok=True)
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            # Обновляем кэш и mtime
+            self._cache[filename] = content
+            self._mtimes[filename] = os.path.getmtime(filepath)
+
+            logger.info(f"SoulFileManager: Записан файл '{filename}' ({len(content)} символов)")
+            return f"✅ Файл '{filename}' успешно обновлён."
+
+        except OSError as exc:
+            raise LeyaSoulError(
+                f"Не удалось записать файл души: {filename}",
+                context={"filename": filename, "error": str(exc)},
+            ) from exc
+
+    def list_files(self) -> List[str]:
+        """Возвращает список файлов души."""
+        return list(self._files)
+
 
 # ==================== БАЗОВЫЙ КЛАСС ENVIRONMENT ====================
 
-class Environment(ABC):
+class Environment(ABC, IEnvironment):
     """Базовый класс для всех интерфейсов Леи."""
     
     def __init__(self, leya_os):
@@ -444,130 +509,88 @@ class Environment(ABC):
         
         # ==================== КОД (sandbox) ====================
         
-        async def execute_python(code: str) -> str:
-            """Безопасное выполнение Python-кода"""
-            dangerous_patterns = [
-                r'import\s+os',
-                r'import\s+subprocess',
-                r'import\s+sys',
-                r'import\s+shutil',
-                r'open\s*\(',
-                r'__import__\s*\(',
-                r'exec\s*\(',
-                r'eval\s*\(',
-                r'compile\s*\(',
-                r'globals\s*\(',
-                r'locals\s*\(',
-                r'getattr\s*\(',
-                r'setattr\s*\(',
-                r'__builtins__',
-                r'import\s+socket',
-                r'import\s+requests',
-                r'import\s+aiohttp',
-            ]
+        # Заменить метод execute_tool_call в Environment полностью
 
-            for pattern in dangerous_patterns:
-                if re.search(pattern, code):
-                    return f"⚠️ Безопасность: обнаружен запрещённый паттерн '{pattern}'. Код не выполнен."
-
+        async def execute_tool_call(self, tool_call_json) -> str:
+            """
+            Парсит и выполняет вызов инструмента.
+            Принимает как JSON-строку, так и dict.
+            """
             try:
-                import io
-                from contextlib import redirect_stdout, redirect_stderr
+                # Если это уже dict, используем как есть
+                if isinstance(tool_call_json, dict):
+                    data = tool_call_json
+                else:
+                    # Иначе парсим JSON-строку
+                    data = json.loads(tool_call_json)
 
-                stdout_capture = io.StringIO()
-                stderr_capture = io.StringIO()
+                tool_name = data.get("tool")
+                parameters = data.get("parameters", {})
 
-                # Создаём ограниченный sandbox
-                safe_builtins = {
-                    "print": print,
-                    "len": len,
-                    "range": range,
-                    "str": str,
-                    "int": int,
-                    "float": float,
-                    "list": list,
-                    "dict": dict,
-                    "set": set,
-                    "tuple": tuple,
-                    "bool": bool,
-                    "abs": abs,
-                    "min": min,
-                    "max": max,
-                    "sum": sum,
-                    "sorted": sorted,
-                    "enumerate": enumerate,
-                    "zip": zip,
-                    "map": map,
-                    "filter": filter,
-                    "isinstance": isinstance,
-                    "type": type,
-                    "round": round,
-                    "pow": pow,
-                    "True": True,
-                    "False": False,
-                    "None": None,
-                }
+                # Если parameters не указан, но есть другие ключи — используем их
+                if not parameters and tool_name:
+                    parameters = {k: v for k, v in data.items() if k != "tool"}
 
-                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    exec(code, {"__builtins__": safe_builtins}, {})
+                if not tool_name:
+                    raise LeyaToolNotFoundError(
+                        "Не указан инструмент в вызове",
+                        context={"data": data},
+                    )
 
-                output = stdout_capture.getvalue()
-                errors = stderr_capture.getvalue()
+                return await self.tool_registry.execute(tool_name, parameters)
 
-                result = ""
-                if output:
-                    result += f"📤 Вывод:\n{output}"
-                if errors:
-                    result += f"\n⚠️ Предупреждения:\n{errors}"
-                if not result:
-                    result = "✅ Код выполнен успешно (нет вывода)"
-
-                if len(result) > 2000:
-                    result = result[:2000] + "\n...(обрезано)"
-
-                return result
-
-            except Exception as e:
-                return f"❌ Ошибка выполнения: {str(e)}"
+            except json.JSONDecodeError as exc:
+                raise LeyaToolError(
+                    "Невалидный JSON вызова инструмента",
+                    context={"raw": str(tool_call_json)[:200], "error": str(exc)},
+                ) from exc
+            except LeyaToolError:
+                # Пробрасываем наши исключения
+                raise
+            except Exception as exc:
+                raise LeyaToolError(
+                    "Неожиданная ошибка выполнения tool_call",
+                    context={"error": str(exc)},
+                ) from exc
     
-    @abstractmethod
-    async def listen(self) -> Optional[Dict[str, Any]]:
-        """Слушает внешний мир. Возвращает стимул или None."""
-        pass
+            @abstractmethod
+            async def listen(self) -> Optional[Dict[str, Any]]:
+                """Слушает внешний мир. Возвращает стимул или None."""
+                pass
     
-    @abstractmethod
-    async def send_message(self, message: str):
-        """Отправляет сообщение во внешний мир"""
-        pass
+            @abstractmethod
+            async def send_message(self, message: str):
+                """Отправляет сообщение во внешний мир"""
+                pass
     
-    async def execute_tool_call(self, tool_call_json) -> str:
-        """
-        Парсит и выполняет вызов инструмента.
-        Принимает как JSON-строку, так и dict.
-        """
-        try:
-            # Если это уже dict, используем как есть
-            if isinstance(tool_call_json, dict):
-                data = tool_call_json
-            else:
-                # Иначе парсим JSON-строку
-                data = json.loads(tool_call_json)
+            async def execute_tool_call(self, tool_call_json) -> str:
+                """
+                Парсит и выполняет вызов инструмента.
+                Принимает как JSON-строку, так и dict.
+                """
+                try:
+                    # Если это уже dict, используем как есть
+                    if isinstance(tool_call_json, dict):
+                        data = tool_call_json
+                    else:
+                        # Иначе парсим JSON-строку
+                        data = json.loads(tool_call_json)
         
-            tool_name = data.get("tool")
-            parameters = data.get("parameters", {})
+                    tool_name = data.get("tool")
+                    parameters = data.get("parameters", {})
         
-            # Если parameters не указан, но есть другие ключи — используем их
-            if not parameters and tool_name:
-                parameters = {k: v for k, v in data.items() if k != "tool"}
+                    # Если parameters не указан, но есть другие ключи — используем их
+                    if not parameters and tool_name:
+                        parameters = {k: v for k, v in data.items() if k != "tool"}
         
-            if not tool_name:
-                return "Ошибка: не указан инструмент."
+                    if not tool_name:
+                        return "Ошибка: не указан инструмент."
         
-            return await self.tool_registry.execute(tool_name, parameters)
-        except json.JSONDecodeError:
-            return "Ошибка: невалидный JSON вызова инструмента."
-        except Exception as e:
-            return f"Ошибка выполнения инструмента: {str(e)}"
+                    return await self.tool_registry.execute(tool_name, parameters)
+                except json.JSONDecodeError:
+                    return "Ошибка: невалидный JSON вызова инструмента."
+                except Exception as e:
+                    return f"Ошибка выполнения инструмента: {str(e)}"
 
 
 # ==================== КОНСОЛЬНЫЙ ИНТЕРФЕЙС (CLI) ====================
@@ -584,14 +607,14 @@ class CLIEnvironment(Environment):
         """Запускает фоновый процесс чтения ввода"""
         asyncio.create_task(self._input_listener())
     
-    async def _input_listener(self):
-        """Неблокирующее чтение ввода из консоли"""
+    # Заменить метод _input_listener в CLIEnvironment полностью
+
+    async def _input_listener(self) -> None:
+        """Неблокирующее чтение ввода из консоли."""
         loop = asyncio.get_event_loop()
-        
         while True:
             try:
                 user_input = await loop.run_in_executor(None, input, "")
-                
                 if user_input.strip():
                     await self.input_queue.put({
                         "type": "user_message",
@@ -602,8 +625,11 @@ class CLIEnvironment(Environment):
             except EOFError:
                 logger.info("CLIEnvironment: EOF получен. Завершение.")
                 break
-            except Exception as e:
-                logger.error(f"CLIEnvironment: Ошибка чтения ввода: {e}")
+            except LeyaEnvironmentError as exc:
+                logger.error(f"CLIEnvironment: Ошибка окружения: {exc}")
+                await asyncio.sleep(1)
+            except Exception as exc:
+                logger.error(f"CLIEnvironment: Неожиданная ошибка чтения ввода: {exc}", exc_info=True)
                 await asyncio.sleep(1)
     
     async def listen(self) -> Optional[Dict[str, Any]]:
