@@ -9,19 +9,16 @@
 - SoulFileManager (read, write, list)
 - CLIEnvironment (listen, send_message)
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from leya_core.environment import (
     CLIEnvironment,
-    Environment,
     SoulFileManager,
     Tool,
     ToolRegistry,
@@ -33,7 +30,6 @@ from leya_core.exceptions import (
     LeyaToolNotFoundError,
 )
 
-
 # ============================================================================
 # Тесты Tool dataclass
 # ============================================================================
@@ -44,6 +40,7 @@ class TestToolDataclass:
 
     def test_tool_creation(self):
         """Tool корректно создаётся."""
+
         async def handler():
             return "result"
 
@@ -283,10 +280,12 @@ class TestEnvironmentExecuteToolCall:
         tool = Tool(name="test", description="test", handler=handler)
         env.tool_registry.register(tool)
 
-        result = await env.execute_tool_call({
-            "tool": "test",
-            "parameters": {"param1": "value"},
-        })
+        result = await env.execute_tool_call(
+            {
+                "tool": "test",
+                "parameters": {"param1": "value"},
+            }
+        )
 
         assert result == "result: value"
 
@@ -305,7 +304,6 @@ class TestEnvironmentExecuteToolCall:
         env.tool_registry.register(tool)
 
         # Передаём параметры напрямую (без обёртки "parameters")
-        import json
         json_payload = json.dumps({"tool": "test"})
         result = await env.execute_tool_call(json_payload)
         assert result == "result"
@@ -367,11 +365,13 @@ class TestCLIEnvironment:
         env = CLIEnvironment(leya_os=mock_leya)
 
         # Добавляем сообщение в очередь
-        await env.input_queue.put({
-            "type": "user_message",
-            "content": "Привет!",
-            "source": "cli",
-        })
+        await env.input_queue.put(
+            {
+                "type": "user_message",
+                "content": "Привет!",
+                "source": "cli",
+            }
+        )
 
         result = await env.listen()
 

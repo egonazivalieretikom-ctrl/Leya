@@ -14,13 +14,14 @@ leya_core/global_workspace.py
 - Специфичные исключения (LeyaWorkspaceError)
 - Keyword arguments везде
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .config import WorkspaceConfig
 from .exceptions import LeyaWorkspaceError
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 class Priority(int, Enum):
     """Приоритет предложения в workspace."""
+
     LOW = 1
     MEDIUM = 2
     HIGH = 3
@@ -43,16 +45,17 @@ class WorkspaceProposal:
 
     Биологический аналог: модуль сознания, борющийся за внимание.
     """
+
     source: str  # "homeostasis", "user", "spontaneous", "meta_cognition"
     content: str
     action_type: str = "none"  # "question", "tool_call", "internal_question"
     priority: Priority = Priority.MEDIUM
     urgency: float = 0.5  # 0.0–1.0
     drive_relevance: float = 0.5  # 0.0–1.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
 
-    def compute_score(self, drive_state: Dict[str, float]) -> float:
+    def compute_score(self, drive_state: dict[str, float]) -> float:
         """
         Вычисление итогового score для конкуренции.
 
@@ -69,9 +72,7 @@ class WorkspaceProposal:
 
         # Базовый score
         score = (
-            0.4 * priority_score +
-            0.3 * self.urgency +
-            0.3 * self.drive_relevance
+            0.4 * priority_score + 0.3 * self.urgency + 0.3 * self.drive_relevance
         ) * age_factor
 
         return score
@@ -85,20 +86,19 @@ class GlobalWorkspace:
     Модули сознания конкурируют за внимание, победитель попадает в фокус.
     """
 
-    def __init__(self, config: Optional[WorkspaceConfig] = None) -> None:
+    def __init__(self, config: WorkspaceConfig | None = None) -> None:
         self.config = config or WorkspaceConfig()
 
-        self.proposals: List[WorkspaceProposal] = []
-        self.history: List[WorkspaceProposal] = []
-        self.current_focus: Optional[WorkspaceProposal] = None
+        self.proposals: list[WorkspaceProposal] = []
+        self.history: list[WorkspaceProposal] = []
+        self.current_focus: WorkspaceProposal | None = None
 
         # Статистика
         self.total_submissions = 0
         self.total_selections = 0
 
         logger.info(
-            f"GlobalWorkspace инициализирован: "
-            f"max_proposals={self.config.max_proposals}"
+            f"GlobalWorkspace инициализирован: " f"max_proposals={self.config.max_proposals}"
         )
 
     def submit(self, proposal: WorkspaceProposal) -> None:
@@ -139,13 +139,13 @@ class GlobalWorkspace:
             key=lambda p: p.compute_score({}),
             reverse=True,
         )
-        removed = self.proposals[self.config.max_proposals:]
-        self.proposals = self.proposals[:self.config.max_proposals]
+        removed = self.proposals[self.config.max_proposals :]
+        self.proposals = self.proposals[: self.config.max_proposals]
 
         if removed:
             logger.debug(f"GlobalWorkspace: Удалено {len(removed)} устаревших proposals")
 
-    def select_winner(self, drive_state: Dict[str, float]) -> Optional[WorkspaceProposal]:
+    def select_winner(self, drive_state: dict[str, float]) -> WorkspaceProposal | None:
         """
         Выбрать победителя среди proposals.
 
@@ -165,10 +165,7 @@ class GlobalWorkspace:
             return None
 
         # Вычисление score для каждого
-        scored = [
-            (p, p.compute_score(drive_state))
-            for p in self.proposals
-        ]
+        scored = [(p, p.compute_score(drive_state)) for p in self.proposals]
         scored.sort(key=lambda x: x[1], reverse=True)
 
         winner, score = scored[0]
@@ -180,7 +177,7 @@ class GlobalWorkspace:
 
         # Ограничение истории
         if len(self.history) > self.config.max_history:
-            self.history = self.history[-self.config.max_history:]
+            self.history = self.history[-self.config.max_history :]
 
         self.current_focus = winner
 
@@ -191,7 +188,7 @@ class GlobalWorkspace:
 
         return winner
 
-    def clear_expired(self, max_age: Optional[float] = None) -> None:
+    def clear_expired(self, max_age: float | None = None) -> None:
         """Удаление устаревших proposals."""
         if max_age is None:
             max_age = self.config.proposal_decay_start + self.config.proposal_decay_duration
@@ -199,20 +196,17 @@ class GlobalWorkspace:
         current_time = time.time()
         original_count = len(self.proposals)
 
-        self.proposals = [
-            p for p in self.proposals
-            if (current_time - p.timestamp) < max_age
-        ]
+        self.proposals = [p for p in self.proposals if (current_time - p.timestamp) < max_age]
 
         removed_count = original_count - len(self.proposals)
         if removed_count > 0:
             logger.debug(f"GlobalWorkspace: Удалено {removed_count} устаревших proposals")
 
-    def get_focus(self) -> Optional[WorkspaceProposal]:
+    def get_focus(self) -> WorkspaceProposal | None:
         """Получить текущий фокус внимания."""
         return self.current_focus
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Получить статус workspace для диагностики."""
         return {
             "proposals_count": len(self.proposals),
@@ -223,7 +217,8 @@ class GlobalWorkspace:
                     "content": self.current_focus.content[:100],
                     "action_type": self.current_focus.action_type,
                 }
-                if self.current_focus else None
+                if self.current_focus
+                else None
             ),
             "total_submissions": self.total_submissions,
             "total_selections": self.total_selections,
@@ -250,7 +245,7 @@ class GlobalWorkspace:
         self.submit(proposal)
         return proposal
 
-    def get_recent_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_history(self, limit: int = 10) -> list[dict[str, Any]]:
         """Получить недавнюю историю proposals."""
         return [
             {

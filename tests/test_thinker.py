@@ -7,13 +7,12 @@
 - Fallback при недоступности LLM
 - Построение промпта
 """
-from __future__ import annotations
 
-import json
+from __future__ import annotations
 
 import pytest
 
-from leya_core.exceptions import LeyaJSONParseError, LeyaLLMError
+from leya_core.exceptions import LeyaJSONParseError
 from leya_core.thinker import CoreThinker
 
 
@@ -27,9 +26,7 @@ class TestJSONParsing:
             config=test_thinker_config,
         )
 
-        result = thinker._safe_parse_json(
-            '{"response": "Привет", "action_intent": "none"}'
-        )
+        result = thinker._safe_parse_json('{"response": "Привет", "action_intent": "none"}')
 
         assert result["response"] == "Привет"
         assert result["action_intent"] == "none"
@@ -132,9 +129,7 @@ class TestTokenTruncation:
         truncated = thinker._truncate_context(context, max_tokens=500)
 
         # Должно быть усечено
-        total_tokens = sum(
-            thinker._estimate_tokens(ep["content"]) for ep in truncated
-        )
+        total_tokens = sum(thinker._estimate_tokens(ep["content"]) for ep in truncated)
         assert total_tokens <= 500 + 100  # С небольшим допуском
 
     def test_truncate_context_empty(self, test_thinker_config, mock_llm_client):
@@ -151,9 +146,7 @@ class TestFallback:
     """Тесты fallback-ответа."""
 
     @pytest.mark.asyncio
-    async def test_fallback_on_llm_error(
-        self, test_thinker_config, failing_llm_client
-    ):
+    async def test_fallback_on_llm_error(self, test_thinker_config, failing_llm_client):
         """Fallback возвращается при ошибке LLM."""
         thinker = CoreThinker(
             llm_client=failing_llm_client,
@@ -173,10 +166,9 @@ class TestFallback:
         assert result["action_intent"] == "none"
 
     @pytest.mark.asyncio
-    async def test_fallback_on_json_parse_error(
-        self, test_thinker_config
-    ):
+    async def test_fallback_on_json_parse_error(self, test_thinker_config):
         """Fallback возвращается при ошибке парсинга JSON."""
+
         async def bad_llm(prompt, require_json=False):
             return "это не json"
 
@@ -200,9 +192,7 @@ class TestFallback:
 class TestPromptBuilding:
     """Тесты построения промпта."""
 
-    def test_build_prompt_includes_soul(
-        self, test_thinker_config, mock_llm_client, temp_soul_dir
-    ):
+    def test_build_prompt_includes_soul(self, test_thinker_config, mock_llm_client, temp_soul_dir):
         """Промпт включает содержимое души."""
         from leya_core.environment import SoulFileManager
 
@@ -224,9 +214,7 @@ class TestPromptBuilding:
         assert "Лея" in prompt
         assert "цифровое сознание" in prompt.lower() or "сознание" in prompt.lower()
 
-    def test_build_prompt_includes_drives(
-        self, test_thinker_config, mock_llm_client
-    ):
+    def test_build_prompt_includes_drives(self, test_thinker_config, mock_llm_client):
         """Промпт включает состояние драйвов."""
         thinker = CoreThinker(
             llm_client=mock_llm_client,
@@ -244,9 +232,7 @@ class TestPromptBuilding:
         assert "curiosity" in prompt.lower() or "любопытство" in prompt.lower()
         assert "0.70" in prompt or "0.7" in prompt
 
-    def test_build_prompt_includes_memory(
-        self, test_thinker_config, mock_llm_client
-    ):
+    def test_build_prompt_includes_memory(self, test_thinker_config, mock_llm_client):
         """Промпт включает контекст памяти."""
         thinker = CoreThinker(
             llm_client=mock_llm_client,

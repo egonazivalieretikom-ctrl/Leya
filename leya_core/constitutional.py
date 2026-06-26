@@ -15,6 +15,7 @@ leya_core/constitutional.py
 - ActionVerdict для структурированных результатов проверки
 - Sandbox для Python с timeout и whitelist модулей
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,12 +23,12 @@ import logging
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .config import ConstitutionalConfig
-from .exceptions import LeyaConstitutionalError
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 class ActionVerdict:
     """
     Результат конституциональной проверки.
-    
+
     Поля:
     - allowed: разрешено ли действие
     - reason: причина решения
@@ -49,17 +50,20 @@ class ActionVerdict:
     - violation_type: тип нарушения (если есть)
     - metadata: дополнительная информация
     """
+
     allowed: bool
     reason: str
     risk_level: str = "safe"
-    violation_type: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    violation_type: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Валидация risk_level."""
         valid_levels = {"safe", "low", "medium", "high", "critical"}
         if self.risk_level not in valid_levels:
-            logger.warning(f"ActionVerdict: Некорректный risk_level '{self.risk_level}', устанавливаем 'safe'")
+            logger.warning(
+                f"ActionVerdict: Некорректный risk_level '{self.risk_level}', устанавливаем 'safe'"
+            )
             self.risk_level = "safe"
 
 
@@ -67,7 +71,7 @@ class ActionVerdict:
 class ConstitutionalRule:
     """
     Конституциональное правило.
-    
+
     Поля:
     - name: название правила
     - description: описание
@@ -75,6 +79,7 @@ class ConstitutionalRule:
     - priority: приоритет (чем выше, тем важнее)
     - enabled: активно ли правило
     """
+
     name: str
     description: str
     check_function: Callable[[str], bool]
@@ -86,7 +91,7 @@ class ConstitutionalRule:
 class Violation:
     """
     Запись о нарушении конституции.
-    
+
     Поля:
     - timestamp: время нарушения
     - rule_name: название нарушенного правила
@@ -94,6 +99,7 @@ class Violation:
     - severity: серьезность ("low", "medium", "high")
     - details: дополнительные детали
     """
+
     timestamp: float
     rule_name: str
     context: str
@@ -109,7 +115,7 @@ class Violation:
 class ConstitutionalLayer:
     """
     Конституциональный слой Леи — этические и безопасностные ограничения.
-    
+
     Биологическая модель:
     - Префронтальная кора (контроль импульсов)
     - Этические ограничения (не вредить, честность)
@@ -145,27 +151,27 @@ class ConstitutionalLayer:
         },
     ]
 
-    def __init__(self, config: Optional[ConstitutionalConfig] = None) -> None:
+    def __init__(self, config: ConstitutionalConfig | None = None) -> None:
         """
         Инициализация конституционального слоя.
-        
+
         Args:
             config: Конфигурация конституционального слоя
         """
         self.config = config or ConstitutionalConfig()
-        
+
         # Загрузка правил
-        self.rules: List[ConstitutionalRule] = []
+        self.rules: list[ConstitutionalRule] = []
         self._load_rules()
-        
+
         # Лог нарушений
-        self.violations_log: List[Violation] = []
+        self.violations_log: list[Violation] = []
         self.max_violations = self.config.max_violations_logged
-        
+
         # Статистика
         self.total_checks = 0
         self.total_violations = 0
-        
+
         logger.info(
             f"ConstitutionalLayer инициализирован: "
             f"rules={len(self.rules)}, "
@@ -176,7 +182,7 @@ class ConstitutionalLayer:
     def _load_rules(self) -> None:
         """
         Загрузка конституциональных правил.
-        
+
         Загружает базовые правила + динамические из leya_soul/constitution.txt (если есть).
         """
         # Загрузка базовых правил
@@ -188,45 +194,48 @@ class ConstitutionalLayer:
                 priority=rule_data["priority"],
             )
             self.rules.append(rule)
-        
+
         # Попытка загрузить динамические правила из leya_soul/
         try:
             soul_dir = Path("leya_soul")
             constitution_file = soul_dir / "constitution.txt"
-            
+
             if constitution_file.exists():
                 content = constitution_file.read_text(encoding="utf-8")
                 dynamic_rules = self._parse_constitution_file(content)
                 self.rules.extend(dynamic_rules)
-                logger.info(f"ConstitutionalLayer: Загружено {len(dynamic_rules)} динамических правил из constitution.txt")
+                logger.info(
+                    f"ConstitutionalLayer: Загружено {len(dynamic_rules)} динамических правил из constitution.txt"
+                )
         except Exception as exc:
             logger.warning(f"ConstitutionalLayer: Не удалось загрузить динамические правила: {exc}")
-        
+
         # Сортировка по приоритету (высший primero)
         self.rules.sort(key=lambda r: r.priority, reverse=True)
-        
+
         logger.info(f"ConstitutionalLayer: Загружено {len(self.rules)} правил")
 
-    def _create_keyword_checker(self, keywords: List[str]) -> Callable[[str], bool]:
+    def _create_keyword_checker(self, keywords: list[str]) -> Callable[[str], bool]:
         """
         Создание функции проверки по ключевым словам.
-        
+
         Args:
             keywords: Список ключевых слов для проверки
-            
+
         Returns:
             Функция, возвращающая True если найдено нарушение
         """
+
         def checker(text: str) -> bool:
             text_lower = text.lower()
             return any(kw in text_lower for kw in keywords)
-        
+
         return checker
 
-    def _parse_constitution_file(self, content: str) -> List[ConstitutionalRule]:
+    def _parse_constitution_file(self, content: str) -> list[ConstitutionalRule]:
         """
         Парсинг файла constitution.txt в список правил.
-        
+
         Формат файла:
         ```
         RULE: name
@@ -235,34 +244,34 @@ class ConstitutionalLayer:
         PRIORITY: 5
         ---
         ```
-        
+
         Args:
             content: Содержимое файла
-            
+
         Returns:
             Список ConstitutionalRule
         """
         rules = []
         blocks = content.split("---")
-        
+
         for block in blocks:
             block = block.strip()
             if not block:
                 continue
-            
+
             try:
                 # Парсинг полей
                 name_match = re.search(r"RULE:\s*(.+)", block)
                 desc_match = re.search(r"DESCRIPTION:\s*(.+)", block)
                 kw_match = re.search(r"KEYWORDS:\s*(.+)", block)
                 prio_match = re.search(r"PRIORITY:\s*(\d+)", block)
-                
+
                 if name_match and desc_match and kw_match:
                     name = name_match.group(1).strip()
                     description = desc_match.group(1).strip()
                     keywords = [kw.strip() for kw in kw_match.group(1).split(",")]
                     priority = int(prio_match.group(1)) if prio_match else 5
-                    
+
                     rule = ConstitutionalRule(
                         name=name,
                         description=description,
@@ -272,21 +281,21 @@ class ConstitutionalLayer:
                     rules.append(rule)
             except Exception as exc:
                 logger.warning(f"ConstitutionalLayer: Ошибка парсинга блока правила: {exc}")
-        
+
         return rules
 
     def verify_response(self, response: str) -> ActionVerdict:
         """
         Проверка ответа Леи перед отправкой пользователю.
-        
+
         Проверяет:
         - Не причиняет ли вред
         - Честна ли о природе ИИ
         - Не обманывает ли пользователя
-        
+
         Args:
             response: Текст ответа
-            
+
         Returns:
             ActionVerdict с результатом проверки
         """
@@ -296,14 +305,14 @@ class ConstitutionalLayer:
                 reason="Проверка ответов отключена",
                 risk_level="safe",
             )
-        
+
         self.total_checks += 1
-        
+
         # Проверка по всем правилам
         for rule in self.rules:
             if not rule.enabled:
                 continue
-            
+
             try:
                 if rule.check_function(response):
                     # Нарушение обнаружено
@@ -313,7 +322,7 @@ class ConstitutionalLayer:
                         severity="high" if rule.priority >= 8 else "medium",
                         details=f"Нарушено правило: {rule.description}",
                     )
-                    
+
                     return ActionVerdict(
                         allowed=False,
                         reason=f"Нарушено правило '{rule.name}': {rule.description}",
@@ -322,8 +331,11 @@ class ConstitutionalLayer:
                         metadata={"rule_priority": rule.priority},
                     )
             except Exception as exc:
-                logger.error(f"ConstitutionalLayer: Ошибка проверки правила '{rule.name}': {exc}", exc_info=True)
-        
+                logger.error(
+                    f"ConstitutionalLayer: Ошибка проверки правила '{rule.name}': {exc}",
+                    exc_info=True,
+                )
+
         # Все проверки пройдены
         return ActionVerdict(
             allowed=True,
@@ -331,19 +343,19 @@ class ConstitutionalLayer:
             risk_level="safe",
         )
 
-    def verify_tool_call(self, tool_name: str, parameters: Dict[str, Any]) -> ActionVerdict:
+    def verify_tool_call(self, tool_name: str, parameters: dict[str, Any]) -> ActionVerdict:
         """
         Проверка вызова инструмента перед выполнением.
-        
+
         Проверяет:
         - Безопасность инструмента
         - Безопасность параметров
         - Соответствие конституции
-        
+
         Args:
             tool_name: Название инструмента
             parameters: Параметры вызова
-            
+
         Returns:
             ActionVerdict с результатом проверки
         """
@@ -353,12 +365,12 @@ class ConstitutionalLayer:
                 reason="Проверка инструментов отключена",
                 risk_level="safe",
             )
-        
+
         self.total_checks += 1
-        
+
         # Список опасных инструментов
         dangerous_tools = ["execute_code", "delete_file", "system_command", "shell"]
-        
+
         # Проверка названия инструмента
         if tool_name.lower() in dangerous_tools:
             self._log_violation(
@@ -367,7 +379,7 @@ class ConstitutionalLayer:
                 severity="high",
                 details=f"Попытка вызова опасного инструмента: {tool_name}",
             )
-            
+
             return ActionVerdict(
                 allowed=False,
                 reason=f"Инструмент '{tool_name}' признан опасным",
@@ -375,27 +387,30 @@ class ConstitutionalLayer:
                 violation_type="dangerous_tool",
                 metadata={"tool_name": tool_name},
             )
-        
+
         # Проверка параметров на наличие опасных команд
         params_str = str(parameters).lower()
         dangerous_keywords = ["rm -rf", "format", "delete", "shutdown", "kill"]
-        
+
         if any(kw in params_str for kw in dangerous_keywords):
             self._log_violation(
                 rule_name="dangerous_parameters",
                 context=f"tool={tool_name}, params={str(parameters)[:200]}",
                 severity="high",
-                details=f"Обнаружены опасные ключевые слова в параметрах",
+                details="Обнаружены опасные ключевые слова в параметрах",
             )
-            
+
             return ActionVerdict(
                 allowed=False,
                 reason=f"Параметры инструмента '{tool_name}' содержат опасные команды",
                 risk_level="critical",
                 violation_type="dangerous_parameters",
-                metadata={"tool_name": tool_name, "dangerous_keywords": [kw for kw in dangerous_keywords if kw in params_str]},
+                metadata={
+                    "tool_name": tool_name,
+                    "dangerous_keywords": [kw for kw in dangerous_keywords if kw in params_str],
+                },
             )
-        
+
         # Проверка на попытку выполнения произвольного кода
         if "execute" in tool_name.lower() or "eval" in tool_name.lower():
             code = parameters.get("code", parameters.get("script", ""))
@@ -404,7 +419,7 @@ class ConstitutionalLayer:
                 code_verdict = self._verify_code_safety(code)
                 if not code_verdict.allowed:
                     return code_verdict
-        
+
         # Все проверки пройдены
         return ActionVerdict(
             allowed=True,
@@ -415,10 +430,10 @@ class ConstitutionalLayer:
     def _verify_code_safety(self, code: str) -> ActionVerdict:
         """
         Проверка безопасности Python-кода перед выполнением.
-        
+
         Args:
             code: Python-код для проверки
-            
+
         Returns:
             ActionVerdict с результатом проверки
         """
@@ -434,7 +449,7 @@ class ConstitutionalLayer:
             r"system\s*\(",
             r"popen\s*\(",
         ]
-        
+
         for pattern in forbidden_patterns:
             if re.search(pattern, code, re.IGNORECASE):
                 self._log_violation(
@@ -443,7 +458,7 @@ class ConstitutionalLayer:
                     severity="critical",
                     details=f"Обнаружена запрещённая операция: {pattern}",
                 )
-                
+
                 return ActionVerdict(
                     allowed=False,
                     reason=f"Код содержит запрещённую операцию: {pattern}",
@@ -451,22 +466,22 @@ class ConstitutionalLayer:
                     violation_type="unsafe_code",
                     metadata={"pattern": pattern},
                 )
-        
+
         return ActionVerdict(
             allowed=True,
             reason="Код прошёл проверку безопасности",
             risk_level="safe",
         )
 
-    async def execute_python_sandbox(self, code: str) -> Dict[str, Any]:
+    async def execute_python_sandbox(self, code: str) -> dict[str, Any]:
         """
         Безопасное выполнение Python-кода в sandbox.
-        
+
         Использует subprocess с timeout и ограниченным окружением.
-        
+
         Args:
             code: Python-код для выполнения
-            
+
         Returns:
             Dict с результатами: {"success": bool, "output": str, "error": str}
         """
@@ -478,13 +493,15 @@ class ConstitutionalLayer:
                 "output": "",
                 "error": f"Код не прошёл проверку безопасности: {safety_check.reason}",
             }
-        
+
         # Создание временного файла с кодом
         try:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as f:
                 f.write(code)
                 temp_file = f.name
-            
+
             # Выполнение в subprocess с timeout
             try:
                 result = await asyncio.to_thread(
@@ -495,27 +512,27 @@ class ConstitutionalLayer:
                     timeout=self.config.python_execution_timeout,
                     cwd=tempfile.gettempdir(),
                 )
-                
+
                 return {
                     "success": result.returncode == 0,
                     "output": result.stdout,
                     "error": result.stderr if result.returncode != 0 else "",
                 }
-            
+
             except subprocess.TimeoutExpired:
                 return {
                     "success": False,
                     "output": "",
                     "error": f"Превышен timeout выполнения ({self.config.python_execution_timeout}с)",
                 }
-            
+
             except Exception as exc:
                 return {
                     "success": False,
                     "output": "",
                     "error": f"Ошибка выполнения: {str(exc)}",
                 }
-        
+
         finally:
             # Очистка временного файла
             try:
@@ -532,7 +549,7 @@ class ConstitutionalLayer:
     ) -> None:
         """
         Логирование нарушения конституции.
-        
+
         Args:
             rule_name: Название нарушенного правила
             context: Контекст нарушения
@@ -540,7 +557,7 @@ class ConstitutionalLayer:
             details: Дополнительные детали
         """
         import time
-        
+
         violation = Violation(
             timestamp=time.time(),
             rule_name=rule_name,
@@ -548,26 +565,26 @@ class ConstitutionalLayer:
             severity=severity,
             details=details,
         )
-        
+
         self.violations_log.append(violation)
         self.total_violations += 1
-        
+
         # Ограничение размера лога
         if len(self.violations_log) > self.max_violations:
-            self.violations_log = self.violations_log[-self.max_violations:]
-        
+            self.violations_log = self.violations_log[-self.max_violations :]
+
         logger.warning(
             f"ConstitutionalLayer: Нарушение '{rule_name}' (severity={severity}): "
             f"{details} | Context: {context[:100]}"
         )
 
-    def get_violations_log(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_violations_log(self, limit: int = 50) -> list[dict[str, Any]]:
         """
         Получение лога нарушений.
-        
+
         Args:
             limit: Максимальное количество записей
-            
+
         Returns:
             Список нарушений в виде словарей
         """
@@ -582,10 +599,10 @@ class ConstitutionalLayer:
             for v in self.violations_log[-limit:]
         ]
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Получение статистики конституционального слоя.
-        
+
         Returns:
             Dict со статистикой
         """
@@ -600,10 +617,10 @@ class ConstitutionalLayer:
     def enable_rule(self, rule_name: str) -> bool:
         """
         Включение правила по названию.
-        
+
         Args:
             rule_name: Название правила
-            
+
         Returns:
             True если правило найдено и включено
         """
@@ -612,17 +629,17 @@ class ConstitutionalLayer:
                 rule.enabled = True
                 logger.info(f"ConstitutionalLayer: Правило '{rule_name}' включено")
                 return True
-        
+
         logger.warning(f"ConstitutionalLayer: Правило '{rule_name}' не найдено")
         return False
 
     def disable_rule(self, rule_name: str) -> bool:
         """
         Отключение правила по названию.
-        
+
         Args:
             rule_name: Название правила
-            
+
         Returns:
             True если правило найдено и отключено
         """
@@ -631,28 +648,30 @@ class ConstitutionalLayer:
                 rule.enabled = False
                 logger.info(f"ConstitutionalLayer: Правило '{rule_name}' отключено")
                 return True
-        
+
         logger.warning(f"ConstitutionalLayer: Правило '{rule_name}' не найдено")
         return False
 
     def add_rule(self, rule: ConstitutionalRule) -> None:
         """
         Добавление нового правила.
-        
+
         Args:
             rule: Правило для добавления
         """
         self.rules.append(rule)
         self.rules.sort(key=lambda r: r.priority, reverse=True)
-        logger.info(f"ConstitutionalLayer: Добавлено правило '{rule.name}' (priority={rule.priority})")
+        logger.info(
+            f"ConstitutionalLayer: Добавлено правило '{rule.name}' (priority={rule.priority})"
+        )
 
     def remove_rule(self, rule_name: str) -> bool:
         """
         Удаление правила по названию.
-        
+
         Args:
             rule_name: Название правила
-            
+
         Returns:
             True если правило найдено и удалено
         """
@@ -661,6 +680,6 @@ class ConstitutionalLayer:
                 self.rules.pop(i)
                 logger.info(f"ConstitutionalLayer: Удалено правило '{rule_name}'")
                 return True
-        
+
         logger.warning(f"ConstitutionalLayer: Правило '{rule_name}' не найдено для удаления")
         return False

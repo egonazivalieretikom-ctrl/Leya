@@ -12,10 +12,9 @@ pip install playwright
 playwright install
 """
 
-import webbrowser
-import logging
 import asyncio
-from typing import Optional
+import logging
+import webbrowser
 
 logger = logging.getLogger("LeyaOS.DesktopControl")
 
@@ -59,6 +58,7 @@ class DesktopControl:
         """
         try:
             from playwright.async_api import async_playwright
+
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=False)
                 page = await browser.new_page()

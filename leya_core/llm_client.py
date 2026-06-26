@@ -12,13 +12,15 @@ Circuit Breaker + обёртка для HTTP-запросов к Ollama.
 - Сетевых ошибок
 - Бесконечных ожиданий
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 import aiohttp
 
@@ -33,15 +35,16 @@ logger = logging.getLogger(__name__)
 
 class CircuitState(str, Enum):
     """Состояние Circuit Breaker."""
-    CLOSED = "closed"          # Нормальная работа
-    OPEN = "open"              # LLM недоступна, fallback
-    HALF_OPEN = "half_open"    # Проверка восстановления
+
+    CLOSED = "closed"  # Нормальная работа
+    OPEN = "open"  # LLM недоступна, fallback
+    HALF_OPEN = "half_open"  # Проверка восстановления
 
 
 class CircuitBreaker:
     """
     Circuit Breaker для защиты от каскадных отказов LLM.
-    
+
     Параметры:
     - failure_threshold: количество подряд идущих отказов для открытия
     - recovery_timeout: секунд до попытки half-open
@@ -90,7 +93,7 @@ class CircuitBreaker:
         """Записать отказ."""
         self._failure_count += 1
         self._last_failure_time = time.time()
-        
+
         if self._state == CircuitState.HALF_OPEN:
             self._transition_to(CircuitState.OPEN)
         elif self._state == CircuitState.CLOSED:
@@ -102,7 +105,7 @@ class CircuitBreaker:
         old_state = self._state
         self._state = new_state
         self._last_state_change = time.time()
-        
+
         if new_state == CircuitState.CLOSED:
             self._failure_count = 0
             self._success_count = 0
@@ -124,8 +127,7 @@ class CircuitBreaker:
             "failure_count": self._failure_count,
             "success_count": self._success_count,
             "last_failure_ago": (
-                time.time() - self._last_failure_time
-                if self._last_failure_time > 0 else None
+                time.time() - self._last_failure_time if self._last_failure_time > 0 else None
             ),
         }
 
@@ -133,7 +135,7 @@ class CircuitBreaker:
 class OllamaClient:
     """
     Клиент для Ollama с Circuit Breaker и retry-логикой.
-    
+
     Использование:
         client = OllamaClient(base_url="http://localhost:11434", model="qwen2.5:14b-instruct-q3_K_M")
         response = await client.chat(prompt, require_json=True)
@@ -168,8 +170,8 @@ class OllamaClient:
             recovery_timeout=recovery_timeout,
         )
 
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._fallback_fn: Optional[Callable] = None
+        self._session: aiohttp.ClientSession | None = None
+        self._fallback_fn: Callable | None = None
 
     def set_fallback(self, fallback_fn: Callable) -> None:
         """Установить fallback-функцию на случай недоступности LLM."""
@@ -191,12 +193,12 @@ class OllamaClient:
         self,
         prompt: str,
         require_json: bool = False,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """
         Отправка запроса к Ollama с защитой Circuit Breaker.
-        
+
         Бросает:
         - LeyaLLMUnavailableError: Circuit Breaker в состоянии OPEN
         - LeyaLLMTimeoutError: превышен таймаут
@@ -278,7 +280,7 @@ class OllamaClient:
                 context={"error": str(exc)},
             ) from exc
 
-    async def __aenter__(self) -> "OllamaClient":
+    async def __aenter__(self) -> OllamaClient:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:

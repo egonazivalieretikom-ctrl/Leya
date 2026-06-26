@@ -10,22 +10,16 @@
 - Динамическая загрузка правил
 - Управление правилами
 """
-from __future__ import annotations
 
-import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
 
 import pytest
 
 from leya_core.config import ConstitutionalConfig
 from leya_core.constitutional import (
-    ActionVerdict,
     ConstitutionalLayer,
     ConstitutionalRule,
-    Violation,
 )
-
 
 # ============================================================================
 # Тесты инициализации

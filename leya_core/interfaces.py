@@ -12,10 +12,10 @@ Protocol-интерфейсы для всех ключевых модулей Le
         self.memory = memory
         self.homeostasis = homeostasis
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
-
+from typing import Any, Protocol, runtime_checkable
 
 # ============================================================================
 # Память
@@ -30,7 +30,7 @@ class IMemorySystem(Protocol):
         self,
         content: str,
         emotional_boost: float = 0.0,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """Сохранить восприятие как энграмму."""
         ...
@@ -38,7 +38,7 @@ class IMemorySystem(Protocol):
     async def store_fact(
         self,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """Сохранить семантический факт."""
         ...
@@ -48,15 +48,15 @@ class IMemorySystem(Protocol):
         query: str,
         top_k: int = 5,
         min_retention: float = 0.1,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Извлечь релевантный контекст из памяти."""
         ...
 
-    async def get_recent_episodes(self, limit: int = 20) -> List[Any]:
+    async def get_recent_episodes(self, limit: int = 20) -> list[Any]:
         """Получить недавние эпизоды (публичный API)."""
         ...
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> List[Any]:
+    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Any]:
         """Получить недавние спонтанные мысли."""
         ...
 
@@ -68,7 +68,7 @@ class IMemorySystem(Protocol):
         """Получить текущую само-модель для промпта."""
         ...
 
-    async def consolidate_memories(self) -> Dict[str, Any]:
+    async def consolidate_memories(self) -> dict[str, Any]:
         """Консолидация памяти (во время 'сна')."""
         ...
 
@@ -90,11 +90,11 @@ class IDriveSystem(Protocol):
         self,
         stimulus: str,
         context: str = "",
-    ) -> Dict[Any, float]:
+    ) -> dict[Any, float]:
         """Оценить влияние стимула на драйвы."""
         ...
 
-    def apply_deltas(self, deltas: Dict[Any, float]) -> None:
+    def apply_deltas(self, deltas: dict[Any, float]) -> None:
         """Применить дельты изменений к драйвам."""
         ...
 
@@ -111,7 +111,7 @@ class IDriveSystem(Protocol):
         """Вычислить Reward Prediction Error."""
         ...
 
-    def get_predicted_disbalance(self) -> Dict[Any, float]:
+    def get_predicted_disbalance(self) -> dict[Any, float]:
         """Получить предсказанный дисбаланс драйвов."""
         ...
 
@@ -127,11 +127,11 @@ class IDriveSystem(Protocol):
         """Остановить фоновый метаболизм."""
         ...
 
-    def save_state(self) -> Dict[str, Any]:
+    def save_state(self) -> dict[str, Any]:
         """Сохранить состояние."""
         ...
 
-    def load_state(self, state: Dict[str, Any]) -> None:
+    def load_state(self, state: dict[str, Any]) -> None:
         """Загрузить состояние."""
         ...
 
@@ -147,11 +147,11 @@ class IHomeostasisEngine(Protocol):
 
     def generate_goal(
         self,
-        drive_state: Dict[Any, float],
-        predicted_state: Dict[Any, float],
-        recent_episodes: List[Any],
-        action_values: Dict[str, float],
-    ) -> Optional[Dict[str, Any]]:
+        drive_state: dict[Any, float],
+        predicted_state: dict[Any, float],
+        recent_episodes: list[Any],
+        action_values: dict[str, float],
+    ) -> dict[str, Any] | None:
         """Сгенерировать цель на основе дисбаланса драйвов."""
         ...
 
@@ -160,7 +160,7 @@ class IHomeostasisEngine(Protocol):
         topic: str,
         article_text: str,
         llm_client: Any,
-    ) -> List[str]:
+    ) -> list[str]:
         """Извлечь ключевые факты из статьи."""
         ...
 
@@ -168,7 +168,7 @@ class IHomeostasisEngine(Protocol):
         self,
         article_text: str,
         llm_client: Any,
-    ) -> List[str]:
+    ) -> list[str]:
         """Извлечь новые термины из статьи."""
         ...
 
@@ -176,7 +176,7 @@ class IHomeostasisEngine(Protocol):
         """Пометить тему как исследованную."""
         ...
 
-    def add_dynamic_keywords(self, keywords: List[str]) -> None:
+    def add_dynamic_keywords(self, keywords: list[str]) -> None:
         """Добавить динамические ключевые слова."""
         ...
 
@@ -184,11 +184,11 @@ class IHomeostasisEngine(Protocol):
         """Обновить пороги из self_model."""
         ...
 
-    def save_state(self) -> Dict[str, Any]:
+    def save_state(self) -> dict[str, Any]:
         """Сохранить состояние."""
         ...
 
-    def load_state(self, state: Dict[str, Any]) -> None:
+    def load_state(self, state: dict[str, Any]) -> None:
         """Загрузить состояние."""
         ...
 
@@ -204,13 +204,13 @@ class ICoreThinker(Protocol):
 
     async def generate_plan(
         self,
-        stimulus: Dict[str, Any],
-        memory_context: List[Dict],
-        drive_state: Dict[str, float],
-        self_model: Dict[str, Any],
+        stimulus: dict[str, Any],
+        memory_context: list[dict],
+        drive_state: dict[str, float],
+        self_model: dict[str, Any],
         tools_description: str,
         tool_context: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Сгенерировать когнитивный план действия."""
         ...
 
@@ -233,7 +233,7 @@ class IMetaCognition(Protocol):
         """Быстрая рефлексия после акта мышления."""
         ...
 
-    async def generate_spontaneous_thought(self) -> Optional[str]:
+    async def generate_spontaneous_thought(self) -> str | None:
         """Сгенерировать спонтанную мысль."""
         ...
 
@@ -259,11 +259,11 @@ class IGlobalWorkspace(Protocol):
         """Подать предложение."""
         ...
 
-    def select_winner(self, drive_state: Dict[str, float]) -> Optional[Any]:
+    def select_winner(self, drive_state: dict[str, float]) -> Any | None:
         """Выбрать победителя."""
         ...
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Получить статус."""
         ...
 
@@ -288,12 +288,12 @@ class IConstitutionalLayer(Protocol):
     def verify_tool_call(
         self,
         tool_name: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
     ) -> Any:
         """Проверить вызов инструмента."""
         ...
 
-    async def execute_python_sandbox(self, code: str) -> Dict[str, Any]:
+    async def execute_python_sandbox(self, code: str) -> dict[str, Any]:
         """Безопасное выполнение Python-кода."""
         ...
 
@@ -307,7 +307,7 @@ class IConstitutionalLayer(Protocol):
 class IEnvironment(Protocol):
     """Интерфейс окружения (Web/CLI)."""
 
-    async def listen(self) -> Optional[Dict[str, Any]]:
+    async def listen(self) -> dict[str, Any] | None:
         """Получить следующий стимул."""
         ...
 
@@ -323,7 +323,7 @@ class IEnvironment(Protocol):
         """Отправить мысль."""
         ...
 
-    async def update_drives(self, drive_state: Dict[str, float]) -> None:
+    async def update_drives(self, drive_state: dict[str, float]) -> None:
         """Обновить драйвы."""
         ...
 
@@ -349,8 +349,8 @@ class ILLMClient(Protocol):
         self,
         prompt: str,
         require_json: bool = False,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Отправить запрос к LLM."""
         ...

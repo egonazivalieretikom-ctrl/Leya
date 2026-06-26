@@ -7,16 +7,15 @@
 - Mark as researched
 - Извлечение фактов и терминов (mock LLM)
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 
 import pytest
 
 from leya_core.drives import DriveType
-from leya_core.exceptions import LeyaJSONParseError
 from leya_core.homeostasis_engine import HomeostasisEngine
 
 
@@ -192,9 +191,11 @@ class TestExtractFacts:
 
         # Mock LLM возвращает JSON с фактами
         async def mock_llm(prompt, require_json=False):
-            return json.dumps({
-                "facts": ["Факт 1", "Факт 2", "Факт 3"],
-            })
+            return json.dumps(
+                {
+                    "facts": ["Факт 1", "Факт 2", "Факт 3"],
+                }
+            )
 
         # Текст должен быть >= 50 символов (проверка в extract_key_facts)
         long_text = (

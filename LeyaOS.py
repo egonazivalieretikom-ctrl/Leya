@@ -20,6 +20,7 @@ LeyaOS.py — Оркестратор цифрового сознания Леи.
 - Мета-когниция и спонтанные мысли
 - Конституциональные ограничения
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +29,7 @@ import os
 import signal
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Отключение телеметрии ChromaDB ДО импорта
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
@@ -38,10 +39,14 @@ logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICA
 # Импорт конфигурации
 from leya_core.config import LeyaConfig
 
+# Импорт модулей
+from leya_core.constitutional import ConstitutionalLayer
+from leya_core.drives import DriveSystem
+from leya_core.environment import CLIEnvironment
+
 # Импорт исключений (Этап 1.1)
 from leya_core.exceptions import (
     LeyaBroadcastError,
-    LeyaConfigError,
     LeyaEnvironmentError,
     LeyaHomeostasisError,
     LeyaLLMError,
@@ -52,6 +57,8 @@ from leya_core.exceptions import (
     LeyaToolError,
     LeyaWorkspaceError,
 )
+from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
+from leya_core.homeostasis_engine import HomeostasisEngine
 
 # Импорт Protocol-интерфейсов (Этап 2.1)
 from leya_core.interfaces import (
@@ -64,12 +71,6 @@ from leya_core.interfaces import (
     IMemorySystem,
     IMetaCognition,
 )
-
-# Импорт модулей
-from leya_core.constitutional import ConstitutionalLayer
-from leya_core.drives import DriveSystem
-from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
-from leya_core.homeostasis_engine import HomeostasisEngine
 from leya_core.llm_client import OllamaClient
 from leya_core.memory import MemorySystem
 from leya_core.reflection import MetaCognition
@@ -77,7 +78,6 @@ from leya_core.state_persistence import StatePersistence
 from leya_core.system_metrics import SystemMetrics
 from leya_core.thinker import CoreThinker
 from leya_core.tool_generator import ToolGenerator
-from leya_core.environment import CLIEnvironment
 from web_interface.web_environment import WebEnvironment
 
 logger = logging.getLogger("LeyaOS")
@@ -86,7 +86,7 @@ logger = logging.getLogger("LeyaOS")
 class LeyaOS:
     """
     Оркестратор когнитивной архитектуры Леи.
-    
+
     Отвечает за:
     - Инициализацию всех модулей с передачей конфигурации
     - Когнитивный цикл (perceive → plan → act → reflect)
@@ -97,12 +97,12 @@ class LeyaOS:
 
     def __init__(
         self,
-        config: Optional[LeyaConfig] = None,
+        config: LeyaConfig | None = None,
         use_web: bool = True,
     ) -> None:
         """
         Инициализация LeyaOS.
-        
+
         Args:
             config: Конфигурация системы (если None, загружается из .env)
             use_web: Использовать веб-интерфейс (иначе CLI)
@@ -120,9 +120,7 @@ class LeyaOS:
         )
 
         # Глобальное рабочее пространство
-        self.workspace: IGlobalWorkspace = GlobalWorkspace(
-            config=self.config.workspace
-        )
+        self.workspace: IGlobalWorkspace = GlobalWorkspace(config=self.config.workspace)
 
         logger.info("Инициализация когнитивной архитектуры...")
 
@@ -178,9 +176,7 @@ class LeyaOS:
         )
 
         # Гомеостаз
-        self.homeostasis: IHomeostasisEngine = HomeostasisEngine(
-            config=self.config.homeostasis
-        )
+        self.homeostasis: IHomeostasisEngine = HomeostasisEngine(config=self.config.homeostasis)
 
         # Мета-когниция
         self.reflection: IMetaCognition = MetaCognition(
@@ -222,7 +218,7 @@ class LeyaOS:
 
         # Блокировки и задачи
         self._perceive_lock = asyncio.Lock()
-        self._background_tasks: List[asyncio.Task] = []
+        self._background_tasks: list[asyncio.Task] = []
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
@@ -230,10 +226,10 @@ class LeyaOS:
     # Публичные методы
     # =========================================================================
 
-    async def perceive(self, stimulus: Dict[str, Any]) -> None:
+    async def perceive(self, stimulus: dict[str, Any]) -> None:
         """
         Точка входа для любого стимула.
-        
+
         Args:
             stimulus: Словарь с типом, содержимым и метаданными стимула
         """
@@ -245,8 +241,7 @@ class LeyaOS:
         tool_context = stimulus.get("tool_context", "")
 
         logger.info(
-            f"Восприятие стимула [{stimulus_type}] от {source}: "
-            f"{stimulus_content[:100]}..."
+            f"Восприятие стимула [{stimulus_type}] от {source}: " f"{stimulus_content[:100]}..."
         )
 
         # Обработка пользовательских сообщений
@@ -271,7 +266,7 @@ class LeyaOS:
     async def run(self) -> None:
         """
         Главный цикл жизни Леи.
-        
+
         Запускает фоновые задачи, загружает состояние, запускает цикл восприятия.
         """
         logger.info("Загрузка Модели Себя...")
@@ -286,17 +281,11 @@ class LeyaOS:
 
         # Запуск фоновых задач с защитой от падения
         self._background_tasks = [
-            self._safe_create_task(
-                self.drives.background_metabolism(), "metabolism"
-            ),
-            self._safe_create_task(
-                self.reflection.background_consolidation(), "consolidation"
-            ),
+            self._safe_create_task(self.drives.background_metabolism(), "metabolism"),
+            self._safe_create_task(self.reflection.background_consolidation(), "consolidation"),
             self._safe_create_task(self._homeostasis_loop(), "homeostasis"),
             self._safe_create_task(self._broadcast_state_loop(), "broadcast"),
-            self._safe_create_task(
-                self._spontaneous_thought_loop(), "spontaneous_thoughts"
-            ),
+            self._safe_create_task(self._spontaneous_thought_loop(), "spontaneous_thoughts"),
             self._safe_create_task(self._system_metrics_loop(), "system_metrics"),
             self._safe_create_task(self._workspace_loop(), "workspace"),
         ]
@@ -308,10 +297,7 @@ class LeyaOS:
             try:
                 leya_state = {
                     "self_model": self.self_model[:500] if self.self_model else "",
-                    "drives": {
-                        d.type.value: d.current
-                        for d in self.drives.drives.values()
-                    },
+                    "drives": {d.type.value: d.current for d in self.drives.drives.values()},
                     "state": self.state,
                 }
                 self.env.soul_manager.update_secret_key(leya_state)
@@ -319,7 +305,9 @@ class LeyaOS:
             except LeyaSoulError as exc:
                 logger.warning(f"Не удалось обновить секретный ключ: {exc}")
             except Exception as exc:
-                logger.error(f"Неожиданная ошибка обновления секретного ключа: {exc}", exc_info=True)
+                logger.error(
+                    f"Неожиданная ошибка обновления секретного ключа: {exc}", exc_info=True
+                )
 
         # Обновление гомеостаза из self_model
         try:
@@ -378,9 +366,7 @@ class LeyaOS:
         # Установка обработчиков сигналов для graceful shutdown
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(
-                sig, lambda s=sig: asyncio.create_task(self.shutdown())
-            )
+            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self.shutdown()))
 
         # Главный цикл восприятия
         try:
@@ -452,11 +438,11 @@ class LeyaOS:
     async def _llm_call(self, prompt: str, require_json: bool = False) -> str:
         """
         Вызов LLM через OllamaClient с Circuit Breaker.
-        
+
         Args:
             prompt: Промпт для LLM
             require_json: Требовать JSON-формат
-            
+
         Returns:
             Ответ LLM или fallback
         """
@@ -472,10 +458,10 @@ class LeyaOS:
     async def _llm_fallback(self, prompt: str) -> str:
         """
         Fallback-ответ при недоступности LLM.
-        
+
         Args:
             prompt: Исходный промпт
-            
+
         Returns:
             JSON с базовым ответом
         """
@@ -498,10 +484,10 @@ class LeyaOS:
     async def _handle_user_request(self, stimulus_content: str) -> str:
         """
         Обработка пользовательского запроса (возможно, с инструментом).
-        
+
         Args:
             stimulus_content: Текст запроса
-            
+
         Returns:
             Контекст от инструмента (если использовался)
         """
@@ -536,9 +522,7 @@ class LeyaOS:
                     )
 
                     if is_error:
-                        tool_context = (
-                            f"⚠️ Поиск не удался: {tool_result}. Не выдумывай данные."
-                        )
+                        tool_context = f"⚠️ Поиск не удался: {tool_result}. Не выдумывай данные."
                     else:
                         tool_context = (
                             f"=== РЕАЛЬНЫЕ ДАННЫЕ ИЗ WIKIPEDIA ===\n{tool_result}\n\n"
@@ -558,13 +542,13 @@ class LeyaOS:
 
         return tool_context
 
-    def _extract_topic_from_user(self, text: str) -> Optional[str]:
+    def _extract_topic_from_user(self, text: str) -> str | None:
         """
         Извлечение темы из пользовательского запроса.
-        
+
         Args:
             text: Текст запроса
-            
+
         Returns:
             Извлечённая тема или None
         """
@@ -582,12 +566,10 @@ class LeyaOS:
         topic = text.strip().strip("?!.,")
         return topic if len(topic) > 2 else None
 
-    async def _cognitive_loop(
-        self, stimulus: Dict[str, Any], tool_context: str
-    ) -> None:
+    async def _cognitive_loop(self, stimulus: dict[str, Any], tool_context: str) -> None:
         """
         Основной когнитивный цикл: планирование → действие → постобработка.
-        
+
         Args:
             stimulus: Стимул для обработки
             tool_context: Контекст от инструмента (если есть)
@@ -596,13 +578,9 @@ class LeyaOS:
             try:
                 # Извлечение контекста из памяти
                 stimulus_content = stimulus.get("content", "")
-                memory_context = await self.memory.retrieve_context(
-                    query=stimulus_content, top_k=5
-                )
+                memory_context = await self.memory.retrieve_context(query=stimulus_content, top_k=5)
 
-                drive_state = {
-                    d.type.value: d.current for d in self.drives.drives.values()
-                }
+                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 self_model_dict = {"self_model": self.self_model}
 
                 # Генерация плана
@@ -624,9 +602,7 @@ class LeyaOS:
                 # Конституциональная проверка ответа
                 verdict = self.constitutional.verify_response(response)
                 if not verdict.allowed:
-                    logger.warning(
-                        f"Ответ не прошёл конституциональную проверку: {verdict.reason}"
-                    )
+                    logger.warning(f"Ответ не прошёл конституциональную проверку: {verdict.reason}")
                     response = "Извини, я не могу ответить на этот вопрос."
 
                 # Отправка ответа
@@ -650,9 +626,7 @@ class LeyaOS:
                         logger.warning(f"Не удалось обновить self_model: {exc}")
 
                 # Обработка action_intent
-                await self._process_action_intent(
-                    action_intent, cognitive_output, stimulus_content
-                )
+                await self._process_action_intent(action_intent, cognitive_output, stimulus_content)
 
             except LeyaLLMError as exc:
                 logger.error(f"Ошибка LLM в когнитивном цикле: {exc}", exc_info=True)
@@ -667,11 +641,11 @@ class LeyaOS:
                 )
 
     async def _process_action_intent(
-        self, action_intent: str, cognitive_output: Dict, stimulus: str
+        self, action_intent: str, cognitive_output: dict, stimulus: str
     ) -> None:
         """
         Обработка намерения действия из когнитивного вывода.
-        
+
         Args:
             action_intent: Тип намерения
             cognitive_output: Когнитивный вывод
@@ -712,14 +686,12 @@ class LeyaOS:
         except LeyaWorkspaceError as exc:
             logger.warning(f"Ошибка workspace при обработке action_intent: {exc}")
         except Exception as exc:
-            logger.error(
-                f"Неожиданная ошибка при обработке action_intent: {exc}", exc_info=True
-            )
+            logger.error(f"Неожиданная ошибка при обработке action_intent: {exc}", exc_info=True)
 
     async def _execute_tool(self, tool_call: str) -> None:
         """
         Выполнение инструмента из tool_call.
-        
+
         Args:
             tool_call: JSON-строка или dict с описанием вызова инструмента
         """
@@ -773,9 +745,7 @@ class LeyaOS:
             try:
                 await asyncio.sleep(self.config.homeostasis.rest_period)
 
-                drive_state = {
-                    d.type: d.current for d in self.drives.drives.values()
-                }
+                drive_state = {d.type: d.current for d in self.drives.drives.values()}
                 predicted_state = self.drives.get_predicted_disbalance()
                 recent_episodes = await self.memory.get_recent_episodes(limit=5)
 
@@ -819,9 +789,7 @@ class LeyaOS:
         while self.running:
             try:
                 await asyncio.sleep(5)
-                drive_state = {
-                    d.type.value: d.current for d in self.drives.drives.values()
-                }
+                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 winner = self.workspace.select_winner(drive_state)
 
                 if winner:
@@ -867,9 +835,7 @@ class LeyaOS:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error(
-                    f"Неожиданная ошибка в спонтанных мыслях: {exc}", exc_info=True
-                )
+                logger.error(f"Неожиданная ошибка в спонтанных мыслях: {exc}", exc_info=True)
                 await asyncio.sleep(60)
 
     async def _system_metrics_loop(self) -> None:
@@ -884,9 +850,7 @@ class LeyaOS:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error(
-                    f"Неожиданная ошибка в системных метриках: {exc}", exc_info=True
-                )
+                logger.error(f"Неожиданная ошибка в системных метриках: {exc}", exc_info=True)
                 await asyncio.sleep(60)
 
     async def _broadcast_state_loop(self) -> None:
@@ -898,9 +862,7 @@ class LeyaOS:
         while self.running:
             try:
                 await asyncio.sleep(2)
-                drive_state = {
-                    d.type.value: d.current for d in self.drives.drives.values()
-                }
+                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 await self.env.update_drives(drive_state)
                 await self.env.broadcast_state(self.state)
 
@@ -916,11 +878,11 @@ class LeyaOS:
     def _safe_create_task(self, coro, name: str) -> asyncio.Task:
         """
         Создание задачи с защитой от падения event loop.
-        
+
         Args:
             coro: Корoutine для выполнения
             name: Имя задачи для логирования
-            
+
         Returns:
             asyncio.Task
         """

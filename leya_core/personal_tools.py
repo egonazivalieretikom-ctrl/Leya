@@ -10,9 +10,8 @@ personal_tools.py
 Все инструменты безопасны для персонального использования и легко расширяются.
 """
 
-import webbrowser
 import logging
-from typing import Dict, Any
+import webbrowser
 
 logger = logging.getLogger("LeyaOS.PersonalTools")
 
@@ -41,11 +40,11 @@ def open_browser_tab(query_or_url: str) -> str:
 def send_personal_message(contact: str, message: str, method: str = "print") -> str:
     """
     Отправляет сообщение контакту.
-    
+
     Поддерживаемые методы:
     - "print"     — просто выводит в консоль (для теста)
     - "telegram"  — отправка через Telegram (требует токен и chat_id)
-    
+
     В будущем можно добавить email, WhatsApp и т.д.
     """
     if method == "print":
@@ -77,22 +76,18 @@ def get_latest_news(topic: str) -> str:
 PERSONAL_TOOLS_DESCRIPTION = {
     "open_browser_tab": {
         "description": "Открывает вкладку в браузере с результатами поиска или по прямой ссылке.",
-        "parameters": {
-            "query_or_url": "Строка с запросом или URL"
-        }
+        "parameters": {"query_or_url": "Строка с запросом или URL"},
     },
     "send_personal_message": {
         "description": "Отправляет сообщение контакту. Используй, когда нужно уведомить кого-то.",
         "parameters": {
             "contact": "Имя или контакт получателя",
             "message": "Текст сообщения",
-            "method": "Способ отправки: 'print' (по умолчанию) или 'telegram'"
-        }
+            "method": "Способ отправки: 'print' (по умолчанию) или 'telegram'",
+        },
     },
     "get_latest_news": {
         "description": "Ищет и показывает свежие новости по заданной теме.",
-        "parameters": {
-            "topic": "Тема новостей"
-        }
-    }
+        "parameters": {"topic": "Тема новостей"},
+    },
 }

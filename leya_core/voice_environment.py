@@ -2,18 +2,16 @@
 voice_environment.py (ИСПРАВЛЕННАЯ ВЕРСИЯ - Phase 2)
 """
 
-import asyncio
 import logging
-from typing import Optional
 
 from leya_core.environment import Environment, Tool
-from leya_core.voice_interface import VoiceInterface
 from leya_core.personal_tools import (
+    PERSONAL_TOOLS_DESCRIPTION,
+    get_latest_news,
     open_browser_tab,
     send_personal_message,
-    get_latest_news,
-    PERSONAL_TOOLS_DESCRIPTION
 )
+from leya_core.voice_interface import VoiceInterface
 
 logger = logging.getLogger("LeyaOS.VoiceEnvironment")
 
@@ -28,10 +26,7 @@ class VoiceEnvironment(Environment):
 
         if self.use_voice:
             try:
-                self.voice = VoiceInterface(
-                    stt_model_size="base",
-                    tts_rate=175
-                )
+                self.voice = VoiceInterface(stt_model_size="base", tts_rate=175)
                 logger.info("VoiceInterface подключён к VoiceEnvironment.")
             except Exception as e:
                 logger.error(f"Не удалось загрузить VoiceInterface: {e}")
@@ -41,7 +36,7 @@ class VoiceEnvironment(Environment):
 
     def _register_personal_tools(self):
         """Правильная регистрация инструментов"""
-        if not hasattr(self, 'tool_registry') or self.tool_registry is None:
+        if not hasattr(self, "tool_registry") or self.tool_registry is None:
             return
 
         # open_browser_tab
@@ -49,7 +44,7 @@ class VoiceEnvironment(Environment):
             name="open_browser_tab",
             description=PERSONAL_TOOLS_DESCRIPTION["open_browser_tab"]["description"],
             parameters=PERSONAL_TOOLS_DESCRIPTION["open_browser_tab"]["parameters"],
-            handler=open_browser_tab
+            handler=open_browser_tab,
         )
         self.tool_registry.register(tool1)
 
@@ -58,7 +53,7 @@ class VoiceEnvironment(Environment):
             name="send_personal_message",
             description=PERSONAL_TOOLS_DESCRIPTION["send_personal_message"]["description"],
             parameters=PERSONAL_TOOLS_DESCRIPTION["send_personal_message"]["parameters"],
-            handler=send_personal_message
+            handler=send_personal_message,
         )
         self.tool_registry.register(tool2)
 
@@ -67,13 +62,13 @@ class VoiceEnvironment(Environment):
             name="get_latest_news",
             description=PERSONAL_TOOLS_DESCRIPTION["get_latest_news"]["description"],
             parameters=PERSONAL_TOOLS_DESCRIPTION["get_latest_news"]["parameters"],
-            handler=get_latest_news
+            handler=get_latest_news,
         )
         self.tool_registry.register(tool3)
 
         logger.info("Зарегистрированы персональные инструменты Phase 2")
 
-    async def listen(self) -> Optional[str]:
+    async def listen(self) -> str | None:
         if self.use_voice and self.voice:
             try:
                 transcript = await self.voice.listen_once()

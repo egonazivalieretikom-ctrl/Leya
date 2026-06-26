@@ -3,11 +3,10 @@
 
 Проверяет, что все модули реализуют свои Protocol-интерфейсы.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem

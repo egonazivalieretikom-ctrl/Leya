@@ -16,6 +16,7 @@ leya_core/environment.py
 - SoulFileManager с методами read_file, write_file, list_files
 - Keyword arguments везде
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,9 +26,10 @@ import os
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .exceptions import (
     LeyaEnvironmentError,
@@ -49,23 +51,24 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Tool:
     """Описание инструмента."""
+
     name: str
     description: str
     handler: Callable[..., Any]
-    parameters: Dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
     category: str = "general"
 
 
 class ToolRegistry:
     """
     Реестр инструментов Леи.
-    
+
     Регистрирует встроенные и динамически сгенерированные инструменты.
     Обеспечивает безопасное выполнение с обработкой ошибок.
     """
 
     def __init__(self) -> None:
-        self.tools: Dict[str, Tool] = {}
+        self.tools: dict[str, Tool] = {}
         self._register_builtin_tools()
 
     def register(self, tool: Tool) -> None:
@@ -78,7 +81,7 @@ class ToolRegistry:
         self.tools[tool.name] = tool
         logger.info(f"ToolRegistry: Зарегистрирован инструмент '{tool.name}'")
 
-    def get_tool(self, name: str) -> Optional[Tool]:
+    def get_tool(self, name: str) -> Tool | None:
         """Получение инструмента по имени."""
         return self.tools.get(name)
 
@@ -89,17 +92,19 @@ class ToolRegistry:
 
         lines = ["=== ДОСТУПНЫЕ ИНСТРУМЕНТЫ ==="]
         for tool in self.tools.values():
-            params_str = ", ".join(
-                f"{k}: {v}" for k, v in tool.parameters.items()
-            ) if tool.parameters else "нет"
+            params_str = (
+                ", ".join(f"{k}: {v}" for k, v in tool.parameters.items())
+                if tool.parameters
+                else "нет"
+            )
             lines.append(f"- {tool.name}: {tool.description} (параметры: {params_str})")
 
         return "\n".join(lines)
 
-    async def execute(self, tool_name: str, parameters: Dict[str, Any]) -> str:
+    async def execute(self, tool_name: str, parameters: dict[str, Any]) -> str:
         """
         Выполнение инструмента с проверкой безопасности.
-        
+
         Raises:
             LeyaToolNotFoundError: инструмент не найден
             LeyaToolExecutionError: ошибка выполнения
@@ -145,74 +150,93 @@ class ToolRegistry:
     def _register_builtin_tools(self) -> None:
         """Регистрация встроенных инструментов."""
         # Wikipedia Search
-        self.register(Tool(
-            name="wikipedia_search",
-            description="Поиск информации в Wikipedia на указанном языке",
-            handler=self._wikipedia_search,
-            parameters={"query": "str (тема поиска)", "lang": "str (ru/en, по умолчанию ru)"},
-            category="research",
-        ))
+        self.register(
+            Tool(
+                name="wikipedia_search",
+                description="Поиск информации в Wikipedia на указанном языке",
+                handler=self._wikipedia_search,
+                parameters={"query": "str (тема поиска)", "lang": "str (ru/en, по умолчанию ru)"},
+                category="research",
+            )
+        )
 
         # DuckDuckGo Search
-        self.register(Tool(
-            name="duckduckgo_search",
-            description="Поиск информации в DuckDuckGo",
-            handler=self._duckduckgo_search,
-            parameters={"query": "str (поисковый запрос)", "max_results": "int (по умолчанию 5)"},
-            category="research",
-        ))
+        self.register(
+            Tool(
+                name="duckduckgo_search",
+                description="Поиск информации в DuckDuckGo",
+                handler=self._duckduckgo_search,
+                parameters={
+                    "query": "str (поисковый запрос)",
+                    "max_results": "int (по умолчанию 5)",
+                },
+                category="research",
+            )
+        )
 
         # GitHub README
-        self.register(Tool(
-            name="github_readme",
-            description="Получение README файла из GitHub репозитория",
-            handler=self._github_readme,
-            parameters={"repo": "str (owner/repo)"},
-            category="research",
-        ))
+        self.register(
+            Tool(
+                name="github_readme",
+                description="Получение README файла из GitHub репозитория",
+                handler=self._github_readme,
+                parameters={"repo": "str (owner/repo)"},
+                category="research",
+            )
+        )
 
         # Reddit Posts
-        self.register(Tool(
-            name="reddit_posts",
-            description="Получение постов из субреддита",
-            handler=self._reddit_posts,
-            parameters={"subreddit": "str", "limit": "int (по умолчанию 5)"},
-            category="research",
-        ))
+        self.register(
+            Tool(
+                name="reddit_posts",
+                description="Получение постов из субреддита",
+                handler=self._reddit_posts,
+                parameters={"subreddit": "str", "limit": "int (по умолчанию 5)"},
+                category="research",
+            )
+        )
 
         # Execute Python
-        self.register(Tool(
-            name="execute_python",
-            description="Безопасное выполнение Python-кода в sandbox",
-            handler=self._execute_python,
-            parameters={"code": "str (Python-код)"},
-            category="computation",
-        ))
+        self.register(
+            Tool(
+                name="execute_python",
+                description="Безопасное выполнение Python-кода в sandbox",
+                handler=self._execute_python,
+                parameters={"code": "str (Python-код)"},
+                category="computation",
+            )
+        )
 
         # Soul File Operations
-        self.register(Tool(
-            name="read_soul_file",
-            description="Чтение файла души (personality.txt, rules.txt, values.txt)",
-            handler=self._read_soul_file,
-            parameters={"filename": "str (имя файла)"},
-            category="self",
-        ))
+        self.register(
+            Tool(
+                name="read_soul_file",
+                description="Чтение файла души (personality.txt, rules.txt, values.txt)",
+                handler=self._read_soul_file,
+                parameters={"filename": "str (имя файла)"},
+                category="self",
+            )
+        )
 
-        self.register(Tool(
-            name="write_soul_file",
-            description="Запись в файл души (только personality.txt, rules.txt, values.txt)",
-            handler=self._write_soul_file,
-            parameters={"filename": "str", "content": "str"},
-            category="self",
-        ))
+        self.register(
+            Tool(
+                name="write_soul_file",
+                description="Запись в файл души (только personality.txt, rules.txt, values.txt)",
+                handler=self._write_soul_file,
+                parameters={"filename": "str", "content": "str"},
+                category="self",
+            )
+        )
 
-        self.register(Tool(
-            name="list_soul_files",
-            description="Список файлов души",
-            handler=self._list_soul_files,
-            parameters={},
-            category="self",
-        ))
+        self.register(
+            Tool(
+                name="list_soul_files",
+                description="Список файлов души",
+                handler=self._list_soul_files,
+                parameters={},
+                category="self",
+            )
+        )
 
     # =========================================================================
     # Встроенные инструменты: реализация
@@ -222,6 +246,7 @@ class ToolRegistry:
         """Поиск в Wikipedia."""
         try:
             import aiohttp
+
             url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{query}"
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -241,6 +266,7 @@ class ToolRegistry:
         """Поиск в DuckDuckGo."""
         try:
             from duckduckgo_search import DDGS
+
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=max_results))
                 if not results:
@@ -258,10 +284,13 @@ class ToolRegistry:
         """Получение README из GitHub."""
         try:
             import aiohttp
+
             url = f"https://api.github.com/repos/{repo}/readme"
             headers = {"Accept": "application/vnd.github.v3.raw"}
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
                     if resp.status == 200:
                         content = await resp.text()
                         return content[:3000]  # Ограничение длины
@@ -278,10 +307,13 @@ class ToolRegistry:
         """Получение постов из Reddit."""
         try:
             import aiohttp
+
             url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit={limit}"
             headers = {"User-Agent": "LeyaOS/1.0"}
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         posts = data.get("data", {}).get("children", [])
@@ -290,7 +322,9 @@ class ToolRegistry:
                         output = []
                         for post in posts[:limit]:
                             d = post.get("data", {})
-                            output.append(f"- {d.get('title', 'Без названия')} (score: {d.get('score', 0)})")
+                            output.append(
+                                f"- {d.get('title', 'Без названия')} (score: {d.get('score', 0)})"
+                            )
                         return "\n".join(output)
                     else:
                         return f"Ошибка Reddit: статус {resp.status}"
@@ -302,13 +336,22 @@ class ToolRegistry:
     async def _execute_python(self, code: str) -> str:
         """Безопасное выполнение Python-кода."""
         # Базовая проверка безопасности
-        forbidden = ["import os", "import subprocess", "import shutil", "__import__", "eval(", "exec("]
+        forbidden = [
+            "import os",
+            "import subprocess",
+            "import shutil",
+            "__import__",
+            "eval(",
+            "exec(",
+        ]
         for f in forbidden:
             if f in code:
                 return f"⚠️ Запрещённая операция в коде: {f}"
 
         try:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as f:
                 f.write(code)
                 temp_file = f.name
 
@@ -371,7 +414,7 @@ class ToolRegistry:
 class SoulFileManager:
     """
     Менеджер файлов души Леи.
-    
+
     Управляет файлами personality.txt, rules.txt, values.txt.
     Поддерживает кэширование и отслеживание изменений.
     """
@@ -381,8 +424,8 @@ class SoulFileManager:
     def __init__(self, soul_dir: str = "./leya_soul") -> None:
         self.soul_dir = soul_dir
         self._files = self.ALLOWED_FILES.copy()
-        self._cache: Dict[str, str] = {}
-        self._mtimes: Dict[str, float] = {}
+        self._cache: dict[str, str] = {}
+        self._mtimes: dict[str, float] = {}
 
         # Создание директории
         try:
@@ -400,7 +443,9 @@ class SoulFileManager:
                 try:
                     with open(filepath, "w", encoding="utf-8") as f:
                         f.write(self._get_default_content(filename))
-                    logger.info(f"SoulFileManager: Создан файл '{filename}' с содержимым по умолчанию")
+                    logger.info(
+                        f"SoulFileManager: Создан файл '{filename}' с содержимым по умолчанию"
+                    )
                 except OSError as exc:
                     raise LeyaSoulError(
                         f"Не удалось создать файл души: {filename}",
@@ -441,7 +486,7 @@ class SoulFileManager:
     def read_file(self, filename: str) -> str:
         """
         Чтение файла души с кэшированием.
-        
+
         Raises:
             LeyaSoulError: файл не разрешён или не существует
         """
@@ -465,7 +510,7 @@ class SoulFileManager:
         if filename not in self._mtimes or self._mtimes[filename] < current_mtime:
             # Файл изменился, перечитываем
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(filepath, encoding="utf-8") as f:
                     content = f.read()
                 self._cache[filename] = content
                 self._mtimes[filename] = current_mtime
@@ -480,7 +525,7 @@ class SoulFileManager:
     def write_file(self, filename: str, content: str) -> str:
         """
         Запись в файл души.
-        
+
         Raises:
             LeyaSoulError: файл не разрешён или ошибка записи
         """
@@ -508,20 +553,22 @@ class SoulFileManager:
                 context={"filename": filename, "error": str(exc)},
             ) from exc
 
-    def list_files(self) -> List[str]:
+    def list_files(self) -> list[str]:
         """Возвращает список файлов души."""
         return list(self._files)
 
-    def get_all_contents(self) -> Dict[str, str]:
+    def get_all_contents(self) -> dict[str, str]:
         """Возвращает содержимое всех файлов души."""
         return {filename: self.read_file(filename) for filename in self._files}
 
-    def update_secret_key(self, leya_state: Dict[str, Any]) -> None:
+    def update_secret_key(self, leya_state: dict[str, Any]) -> None:
         """
         Обновление секретного ключа на основе состояния Леи.
         Используется для SoulCrypto (если доступен).
         """
-        logger.debug(f"SoulFileManager: Обновление секретного ключа (state keys: {list(leya_state.keys())})")
+        logger.debug(
+            f"SoulFileManager: Обновление секретного ключа (state keys: {list(leya_state.keys())})"
+        )
 
 
 # ============================================================================
@@ -532,7 +579,7 @@ class SoulFileManager:
 class Environment(ABC, IEnvironment):
     """
     Базовый абстрактный класс окружения.
-    
+
     Реализует IEnvironment Protocol.
     Предоставляет общую функциональность для Web и CLI окружений.
     """
@@ -545,9 +592,9 @@ class Environment(ABC, IEnvironment):
     async def execute_tool_call(self, tool_call_json: Any) -> str:
         """
         Парсит и выполняет вызов инструмента.
-        
+
         Принимает как JSON-строку, так и dict.
-        
+
         Raises:
             LeyaToolError: ошибка парсинга или выполнения
         """
@@ -585,7 +632,7 @@ class Environment(ABC, IEnvironment):
             ) from exc
 
     @abstractmethod
-    async def listen(self) -> Optional[Dict[str, Any]]:
+    async def listen(self) -> dict[str, Any] | None:
         """Получить следующий стимул."""
         ...
 
@@ -598,7 +645,7 @@ class Environment(ABC, IEnvironment):
         """Отправить мысль (по умолчанию — логирование)."""
         logger.debug(f"[{thought_type}] {content[:100]}")
 
-    async def update_drives(self, drive_state: Dict[str, float]) -> None:
+    async def update_drives(self, drive_state: dict[str, float]) -> None:
         """Обновить драйвы (по умолчанию — no-op)."""
         pass
 
@@ -619,14 +666,14 @@ class Environment(ABC, IEnvironment):
 class CLIEnvironment(Environment):
     """
     CLI-окружение для Леи.
-    
+
     Простой текстовый ввод/вывод через stdin/stdout.
     """
 
     def __init__(self, leya_os: Any) -> None:
         super().__init__(leya_os)
         self.input_queue: asyncio.Queue = asyncio.Queue()
-        self._listener_task: Optional[asyncio.Task] = None
+        self._listener_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Запуск фонового слушателя ввода."""
@@ -640,12 +687,14 @@ class CLIEnvironment(Environment):
             try:
                 user_input = await loop.run_in_executor(None, input, "")
                 if user_input.strip():
-                    await self.input_queue.put({
-                        "type": "user_message",
-                        "content": user_input.strip(),
-                        "source": "cli",
-                        "timestamp": datetime.now().timestamp(),
-                    })
+                    await self.input_queue.put(
+                        {
+                            "type": "user_message",
+                            "content": user_input.strip(),
+                            "source": "cli",
+                            "timestamp": datetime.now().timestamp(),
+                        }
+                    )
             except EOFError:
                 logger.info("CLIEnvironment: EOF получен. Завершение.")
                 break
@@ -653,10 +702,12 @@ class CLIEnvironment(Environment):
                 logger.error(f"CLIEnvironment: Ошибка окружения: {exc}")
                 await asyncio.sleep(1)
             except Exception as exc:
-                logger.error(f"CLIEnvironment: Неожиданная ошибка чтения ввода: {exc}", exc_info=True)
+                logger.error(
+                    f"CLIEnvironment: Неожиданная ошибка чтения ввода: {exc}", exc_info=True
+                )
                 await asyncio.sleep(1)
 
-    async def listen(self) -> Optional[Dict[str, Any]]:
+    async def listen(self) -> dict[str, Any] | None:
         """Получить следующий стимул из очереди."""
         if self._listener_task is None:
             await self.start()

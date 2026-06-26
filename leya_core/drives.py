@@ -15,23 +15,25 @@ leya_core/drives.py
 - Специфичные исключения (LeyaDriveNotFoundError, LeyaHomeostasisError)
 - Улучшение RPE и метаболизма
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .config import DrivesConfig
-from .exceptions import LeyaDriveNotFoundError, LeyaHomeostasisError
+from .exceptions import LeyaDriveNotFoundError
 
 logger = logging.getLogger(__name__)
 
 
 class DriveType(str, Enum):
     """Типы драйвов."""
+
     CURIOSITY = "curiosity"
     CONNECTION = "connection"
     AUTONOMY = "autonomy"
@@ -47,7 +49,7 @@ class DriveType(str, Enum):
 class Drive:
     """
     Единичный драйв с текущим состоянием.
-    
+
     Биологическая модель:
     - current: текущее напряжение (0.0–1.0)
     - baseline: базовое значение (точка гомеостаза)
@@ -55,6 +57,7 @@ class Drive:
     - base_growth_rate: скорость роста напряжения
     - satisfaction_decay: скорость удовлетворения
     """
+
     type: DriveType
     current: float = 0.5
     baseline: float = 0.5
@@ -73,7 +76,7 @@ class Drive:
 class DriveSystem:
     """
     Биологически мотивированная система драйвов.
-    
+
     Архитектура:
     - Аллостаз: предсказываем будущее состояние, действуем заранее
     - RPE: учимся на ошибках предсказания награды
@@ -91,19 +94,19 @@ class DriveSystem:
         (DriveType.CONNECTION, DriveType.CURIOSITY): 0.1,
     }
 
-    def __init__(self, config: Optional[DrivesConfig] = None) -> None:
+    def __init__(self, config: DrivesConfig | None = None) -> None:
         """
         Инициализация системы драйвов.
-        
+
         Args:
             config: Конфигурация драйвов (rates, intervals)
         """
         self.config = config or DrivesConfig()
-        
-        self.tension_history: List[Dict[str, float]] = []
+
+        self.tension_history: list[dict[str, float]] = []
 
         # Инициализация драйвов с rates из конфигурации
-        self.drives: Dict[DriveType, Drive] = {
+        self.drives: dict[DriveType, Drive] = {
             DriveType.CURIOSITY: Drive(
                 type=DriveType.CURIOSITY,
                 current=0.3,
@@ -151,10 +154,10 @@ class DriveSystem:
         self.max_history_length = self.config.max_action_history
 
         # Action values — ожидаемая награда для каждого действия (обучается через RPE)
-        self.action_values: Dict[str, float] = {}
+        self.action_values: dict[str, float] = {}
 
         # История удовлетворения для анализа паттернов
-        self.satisfaction_history: List[Dict[str, Any]] = []
+        self.satisfaction_history: list[dict[str, Any]] = []
 
         # Параметры аллостаза
         self.prediction_horizon = 300  # Горизонт предсказания (секунды)
@@ -171,14 +174,14 @@ class DriveSystem:
             f"drives={len(self.drives)}"
         )
 
-    async def evaluate_stimulus(self, stimulus: str, context: str = "") -> Dict[DriveType, float]:
+    async def evaluate_stimulus(self, stimulus: str, context: str = "") -> dict[DriveType, float]:
         """
         Оценивает влияние стимула на драйвы.
-        
+
         Returns:
             Dict с дельтами изменений для каждого драйва
         """
-        deltas: Dict[DriveType, float] = {}
+        deltas: dict[DriveType, float] = {}
         stimulus_lower = stimulus.lower()
 
         # Эвристики для оценки влияния стимула
@@ -200,17 +203,19 @@ class DriveSystem:
         self.tension_history.append(current_state)
 
         if len(self.tension_history) > self.max_history_length:
-            self.tension_history = self.tension_history[-self.max_history_length:]
+            self.tension_history = self.tension_history[-self.max_history_length :]
 
         return deltas
 
-    def apply_deltas(self, deltas: Dict[DriveType, float]) -> None:
+    def apply_deltas(self, deltas: dict[DriveType, float]) -> None:
         """Применяет дельты изменений к драйвам."""
         for drive_type, delta in deltas.items():
             if drive_type in self.drives:
                 drive = self.drives[drive_type]
                 drive.current = max(0.0, min(1.0, drive.current + delta))
-                logger.debug(f"DriveSystem: {drive_type.value} изменён на {delta:+.2f} → {drive.current:.2f}")
+                logger.debug(
+                    f"DriveSystem: {drive_type.value} изменён на {delta:+.2f} → {drive.current:.2f}"
+                )
             else:
                 logger.warning(f"DriveSystem: Драйв {drive_type} не найден")
 
@@ -221,7 +226,7 @@ class DriveSystem:
     async def background_metabolism(self) -> None:
         """
         Фоновый метаболизм драйвов.
-        
+
         Защита от падения: обёрнут в try/except.
         """
         logger.info("DriveSystem: Метаболизм запущен.")
@@ -249,7 +254,7 @@ class DriveSystem:
                 self.tension_history.append(current_state)
 
                 if len(self.tension_history) > self.max_history_length:
-                    self.tension_history = self.tension_history[-self.max_history_length:]
+                    self.tension_history = self.tension_history[-self.max_history_length :]
 
             except asyncio.CancelledError:
                 logger.info("DriveSystem: Метаболизм отменён.")
@@ -261,7 +266,7 @@ class DriveSystem:
     def _calculate_cross_influence(self, target_type: DriveType) -> float:
         """
         Вычисляет суммарное перекрестное влияние на целевой драйв.
-        
+
         Биологический аналог: нейромодуляция (дофамин, серотонин, кортизол).
         """
         total_effect = 0.0
@@ -278,7 +283,7 @@ class DriveSystem:
     def _update_predictions(self) -> None:
         """
         Обновляет предсказанные состояния драйвов (аллостаз).
-        
+
         Биологический аналог: префронтальная кора предсказывает будущие потребности.
         """
         ticks_ahead = self.prediction_horizon / self.prediction_update_interval
@@ -293,16 +298,16 @@ class DriveSystem:
     def calculate_rpe(self, action_key: str, actual_outcome: float) -> float:
         """
         Вычисляет Reward Prediction Error (ошибку предсказания награды).
-        
+
         Биологический аналог: дофаминовые нейроны в VTA.
         - RPE > 0: награда лучше ожидаемой → дофаминовый всплеск
         - RPE < 0: награда хуже ожидаемой → падение дофамина
         - RPE = 0: награда как ожидалась → стабильный дофамин
-        
+
         Args:
             action_key: Ключ действия (например, "wikipedia_search:science")
             actual_outcome: Фактический результат (0.0–1.0)
-            
+
         Returns:
             RPE (ошибка предсказания)
         """
@@ -313,16 +318,18 @@ class DriveSystem:
         self.action_values[action_key] = expected + self.learning_rate * rpe
 
         # Записываем в историю
-        self.satisfaction_history.append({
-            "action_key": action_key,
-            "expected": expected,
-            "actual": actual_outcome,
-            "rpe": rpe,
-            "timestamp": time.time(),
-        })
+        self.satisfaction_history.append(
+            {
+                "action_key": action_key,
+                "expected": expected,
+                "actual": actual_outcome,
+                "rpe": rpe,
+                "timestamp": time.time(),
+            }
+        )
 
         if len(self.satisfaction_history) > self.max_history_length:
-            self.satisfaction_history = self.satisfaction_history[-self.max_history_length:]
+            self.satisfaction_history = self.satisfaction_history[-self.max_history_length :]
 
         logger.info(
             f"DriveSystem: RPE для {action_key}: {rpe:.2f} "
@@ -334,9 +341,9 @@ class DriveSystem:
     def apply_satisfaction(self, drive_type: DriveType, base_amount: float, rpe: float) -> None:
         """
         Применяет удовлетворение драйва, модифицированное RPE.
-        
+
         Биологический аналог: дофамин усиливает удовлетворение при положительном RPE.
-        
+
         Args:
             drive_type: Тип драйва
             base_amount: Базовое количество удовлетворения
@@ -391,17 +398,14 @@ class DriveSystem:
         else:
             return "критический"
 
-    def get_predicted_disbalance(self) -> Dict[DriveType, float]:
+    def get_predicted_disbalance(self) -> dict[DriveType, float]:
         """
         Возвращает предсказанный дисбаланс для всех драйвов.
         Используется HomeostasisEngine для проактивного планирования.
         """
-        return {
-            drive_type: drive.predicted_deviation
-            for drive_type, drive in self.drives.items()
-        }
+        return {drive_type: drive.predicted_deviation for drive_type, drive in self.drives.items()}
 
-    def update_from_system_metrics(self, modifiers: Dict[str, float]) -> None:
+    def update_from_system_metrics(self, modifiers: dict[str, float]) -> None:
         """Применяет модификаторы от системных метрик к драйвам."""
         drive_map = {
             "curiosity": DriveType.CURIOSITY,
@@ -420,22 +424,23 @@ class DriveSystem:
                     drive = self.drives[drive_type]
                     drive.current = max(0.1, min(0.9, drive.current + modifier))
 
-    def save_state(self) -> Dict[str, Any]:
+    def save_state(self) -> dict[str, Any]:
         """Сохраняет состояние DriveSystem."""
         return {
             "action_values": self.action_values,
             "satisfaction_history": self.satisfaction_history[-100:],
             "current_drives": {
-                drive_type.value: drive.current
-                for drive_type, drive in self.drives.items()
+                drive_type.value: drive.current for drive_type, drive in self.drives.items()
             },
         }
 
-    def load_state(self, state: Dict[str, Any]) -> None:
+    def load_state(self, state: dict[str, Any]) -> None:
         """Загружает состояние DriveSystem."""
         if "action_values" in state:
             self.action_values = state["action_values"]
-            logger.info(f"DriveSystem: Загружено {len(self.action_values)} обученных ценностей действий")
+            logger.info(
+                f"DriveSystem: Загружено {len(self.action_values)} обученных ценностей действий"
+            )
 
         if "satisfaction_history" in state:
             self.satisfaction_history = state["satisfaction_history"]
@@ -447,4 +452,4 @@ class DriveSystem:
                         if drive_type in self.drives:
                             self.drives[drive_type].current = max(0.1, min(0.9, value))
                         break
-            logger.info(f"DriveSystem: Загружены текущие значения драйвов")
+            logger.info("DriveSystem: Загружены текущие значения драйвов")

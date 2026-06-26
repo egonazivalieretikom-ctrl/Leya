@@ -15,12 +15,14 @@ leya_core/thinker.py
 - Token Truncation с оценкой длины промпта
 - Keyword arguments везде
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .config import ThinkerConfig
 from .exceptions import LeyaJSONParseError, LeyaLLMError
@@ -32,7 +34,7 @@ logger = logging.getLogger(__name__)
 class CoreThinker(ICoreThinker):
     """
     Когнитивный планировщик Леи.
-    
+
     Генерирует план действия на основе:
     - Стимула
     - Контекста памяти
@@ -44,9 +46,9 @@ class CoreThinker(ICoreThinker):
 
     def __init__(
         self,
-        llm_client: Optional[Callable] = None,
+        llm_client: Callable | None = None,
         soul_manager: Any = None,
-        config: Optional[ThinkerConfig] = None,
+        config: ThinkerConfig | None = None,
     ) -> None:
         self.name = "CoreThinker"
         self.llm_client = llm_client or self._default_llm_call
@@ -94,16 +96,16 @@ class CoreThinker(ICoreThinker):
 
     async def generate_plan(
         self,
-        stimulus: Dict[str, Any],
-        memory_context: List[Dict],
-        drive_state: Dict[str, float],
-        self_model: Dict[str, Any],
+        stimulus: dict[str, Any],
+        memory_context: list[dict],
+        drive_state: dict[str, float],
+        self_model: dict[str, Any],
         tools_description: str,
         tool_context: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Генерация когнитивного плана действия.
-        
+
         Args:
             stimulus: Внешний стимул
             memory_context: Контекст из памяти
@@ -111,7 +113,7 @@ class CoreThinker(ICoreThinker):
             self_model: Само-модель
             tools_description: Описание инструментов
             tool_context: Контекст от инструмента
-            
+
         Returns:
             Dict с cognitive_output (response, internal_monologue, action_intent, ...)
         """
@@ -147,7 +149,7 @@ class CoreThinker(ICoreThinker):
     def _estimate_tokens(self, text: str) -> int:
         """
         Грубая оценка количества токенов в тексте.
-        
+
         Использует соотношение символов к токенам из конфигурации.
         """
         if not text:
@@ -157,12 +159,12 @@ class CoreThinker(ICoreThinker):
 
     def _truncate_context(
         self,
-        memory_context: List[Dict],
+        memory_context: list[dict],
         max_tokens: int,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Умное усечение контекста памяти для вписывания в лимит токенов.
-        
+
         Алгоритм:
         1. Оцениваем токены каждого эпизода
         2. Обрезаем с конца, пока не впишемся в лимит
@@ -201,16 +203,16 @@ class CoreThinker(ICoreThinker):
 
     def _build_cognitive_prompt(
         self,
-        stimulus: Dict[str, Any],
-        memory_context: List[Dict],
-        drive_state: Dict[str, float],
-        self_model: Dict[str, Any],
+        stimulus: dict[str, Any],
+        memory_context: list[dict],
+        drive_state: dict[str, float],
+        self_model: dict[str, Any],
         tool_context: str = "",
         tools_description: str = "",
     ) -> str:
         """
         Построение когнитивного промпта с защитой от переполнения контекста.
-        
+
         Добавлена оценка токенов и усечение контекста памяти.
         """
         soul = self._load_soul()
@@ -254,7 +256,9 @@ class CoreThinker(ICoreThinker):
         stimulus_tokens = self._estimate_tokens(stimulus_str)
 
         # Вычисляем доступные токены для памяти
-        fixed_tokens = soul_tokens + drive_tokens + self_model_tokens + tools_tokens + stimulus_tokens + 500
+        fixed_tokens = (
+            soul_tokens + drive_tokens + self_model_tokens + tools_tokens + stimulus_tokens + 500
+        )
         available_for_memory = max(500, max_context_tokens - fixed_tokens)
 
         # Усечение контекста памяти если необходимо
@@ -312,10 +316,10 @@ CRITICAL: Return ONLY valid JSON.
 
         return prompt
 
-    def _safe_parse_json(self, response: str) -> Dict[str, Any]:
+    def _safe_parse_json(self, response: str) -> dict[str, Any]:
         """
         Безопасный парсинг JSON с учётом markdown-блоков LLM.
-        
+
         Raises:
             LeyaJSONParseError: если не удалось распарсить
         """
@@ -349,7 +353,7 @@ CRITICAL: Return ONLY valid JSON.
                 context={"response_preview": response[:200], "error": str(exc)},
             ) from exc
 
-    def _generate_fallback_response(self, stimulus: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_fallback_response(self, stimulus: dict[str, Any]) -> dict[str, Any]:
         """Fallback-ответ при недоступности LLM."""
         return {
             "response": "Мои когнитивные процессы временно затруднены, но я здесь и пытаюсь понять тебя.",
@@ -363,10 +367,13 @@ CRITICAL: Return ONLY valid JSON.
 
     async def _default_llm_call(self, prompt: str, require_json: bool = False) -> str:
         """Заглушка для LLM."""
-        return json.dumps({
-            "internal_monologue": "Я обрабатываю стимул. Мои драйвы активизируются.",
-            "response": "Привет! Я здесь и думаю о том, как интересно устроен этот диалог.",
-            "action_intent": "none",
-            "tool_call": "",
-            "self_reflection": "",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "internal_monologue": "Я обрабатываю стимул. Мои драйвы активизируются.",
+                "response": "Привет! Я здесь и думаю о том, как интересно устроен этот диалог.",
+                "action_intent": "none",
+                "tool_call": "",
+                "self_reflection": "",
+            },
+            ensure_ascii=False,
+        )

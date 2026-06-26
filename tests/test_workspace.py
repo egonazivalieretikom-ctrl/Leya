@@ -10,17 +10,16 @@
 - clear_expired
 - compute_score
 """
+
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
 
 import pytest
 
 from leya_core.config import WorkspaceConfig
 from leya_core.exceptions import LeyaWorkspaceError
 from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
-
 
 # ============================================================================
 # Тесты WorkspaceProposal
@@ -62,12 +61,8 @@ class TestWorkspaceProposal:
 
     def test_compute_score_priority_weight(self):
         """Высокий приоритет даёт больший score."""
-        low = WorkspaceProposal(
-            source="user", content="Тест", priority=Priority.LOW
-        )
-        high = WorkspaceProposal(
-            source="user", content="Тест", priority=Priority.CRITICAL
-        )
+        low = WorkspaceProposal(source="user", content="Тест", priority=Priority.LOW)
+        high = WorkspaceProposal(source="user", content="Тест", priority=Priority.CRITICAL)
 
         assert high.compute_score({}) > low.compute_score({})
 

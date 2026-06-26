@@ -9,12 +9,9 @@
 - forget_weak_memories
 - update_self_model
 """
+
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import hmac
-import os
 import pickle
 import time
 from pathlib import Path
@@ -23,13 +20,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from leya_core.exceptions import (
-    LeyaMemoryError,
     LeyaStateCorruptedError,
     LeyaStateVersionMismatchError,
 )
 from leya_core.memory import (
     Engram,
-    MEMORY_STATE_VERSION,
     MemorySystem,
     MemoryType,
     Synapse,
@@ -220,9 +215,7 @@ class TestLTP:
             memory = MemorySystem(config=test_memory_config)
 
             # Создаём синапс
-            memory.synapses["a->b"] = Synapse(
-                source_id="a", target_id="b", weight=0.3
-            )
+            memory.synapses["a->b"] = Synapse(source_id="a", target_id="b", weight=0.3)
 
             initial_weight = memory.synapses["a->b"].weight
 

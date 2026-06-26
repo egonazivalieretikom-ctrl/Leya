@@ -16,15 +16,17 @@ pip install faster-whisper pyttsx3 sounddevice numpy
 
 import asyncio
 import logging
-import tempfile
 import os
-from typing import Optional, Callable, Awaitable
+import tempfile
+from collections.abc import Awaitable, Callable
+
 import numpy as np
-import sounddevice as sd
 import pyttsx3
+import sounddevice as sd
 from faster_whisper import WhisperModel
 
 logger = logging.getLogger("LeyaOS.VoiceInterface")
+
 
 class VoiceInterface:
     """
@@ -36,11 +38,13 @@ class VoiceInterface:
     - Базовое определение, обращено ли к системе (простая эвристика + контекст).
     """
 
-    def __init__(self, 
-                 stt_model_size: str = "base",  # tiny, base, small, medium, large
-                 tts_rate: int = 180,
-                 sample_rate: int = 16000,
-                 channels: int = 1):
+    def __init__(
+        self,
+        stt_model_size: str = "base",  # tiny, base, small, medium, large
+        tts_rate: int = 180,
+        sample_rate: int = 16000,
+        channels: int = 1,
+    ):
         self.sample_rate = sample_rate
         self.channels = channels
         self.is_listening = False
@@ -53,21 +57,23 @@ class VoiceInterface:
 
         # TTS - pyttsx3 (простой кросс-платформенный)
         self.tts_engine = pyttsx3.init()
-        self.tts_engine.setProperty('rate', tts_rate)
+        self.tts_engine.setProperty("rate", tts_rate)
         # Можно настроить голос: self.tts_engine.setProperty('voice', 'ru') если доступен русский голос
 
         # Callback для обработки распознанного текста
-        self.on_transcript: Optional[Callable[[str], Awaitable[None]]] = None
+        self.on_transcript: Callable[[str], Awaitable[None]] | None = None
 
         logger.info("VoiceInterface инициализирован (персональный режим).")
 
     async def record_audio(self, duration: float = 5.0) -> np.ndarray:
         """Простая запись аудио (push-to-talk стиль)."""
         logger.info(f"Запись аудио {duration} сек...")
-        audio = sd.rec(int(duration * self.sample_rate), 
-                       samplerate=self.sample_rate, 
-                       channels=self.channels, 
-                       dtype='float32')
+        audio = sd.rec(
+            int(duration * self.sample_rate),
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            dtype="float32",
+        )
         sd.wait()
         return audio.flatten()
 
@@ -75,6 +81,7 @@ class VoiceInterface:
         """Распознавание речи с помощью Whisper."""
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             import soundfile as sf
+
             sf.write(tmp.name, audio, self.sample_rate)
             tmp_path = tmp.name
 
@@ -101,10 +108,12 @@ class VoiceInterface:
         transcript = await self.transcribe(audio)
         return transcript
 
-    async def start_always_listening(self, 
-                                     on_transcript: Callable[[str], Awaitable[None]],
-                                     silence_threshold: float = 0.01,
-                                     min_speech_duration: float = 1.5):
+    async def start_always_listening(
+        self,
+        on_transcript: Callable[[str], Awaitable[None]],
+        silence_threshold: float = 0.01,
+        min_speech_duration: float = 1.5,
+    ):
         """
         Простая always-on прослушка с обнаружением речи (VAD-like).
         Для настоящего VAD рекомендуется использовать webrtcvad или Silero VAD.
@@ -178,7 +187,7 @@ async def example_usage():
     while True:
         input("Нажмите Enter для записи (или 'q' для выхода): ")
         cmd = input().strip().lower()
-        if cmd == 'q':
+        if cmd == "q":
             break
         transcript = await vi.listen_once()
         await handle_transcript(transcript)

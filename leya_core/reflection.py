@@ -17,18 +17,19 @@ leya_core/reflection.py
 - Защита background_consolidation от падения
 - Интеграция с ReflectionConfig
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .config import ReflectionConfig
 from .exceptions import (
     LeyaDriveNotFoundError,
-    LeyaHomeostasisError,
     LeyaInsightError,
     LeyaJSONParseError,
     LeyaLLMError,
@@ -44,15 +45,15 @@ logger = logging.getLogger(__name__)
 class MetaCognition:
     """
     Наблюдатель. Фоновый процесс саморефлексии.
-    
+
     Это не "мышление" (CoreThinker), это "созерцание своего мышления".
     """
 
     def __init__(
         self,
         leya_os: Any,
-        llm_client: Optional[Callable] = None,
-        config: Optional[ReflectionConfig] = None,
+        llm_client: Callable | None = None,
+        config: ReflectionConfig | None = None,
     ) -> None:
         self.name = "MetaCognition"
         self.leya = leya_os
@@ -75,7 +76,7 @@ class MetaCognition:
     async def process_action(self, stimulus: str, cognitive_output: Any, result: str) -> None:
         """
         Быстрая рефлексия после каждого акта мышления.
-        
+
         Проверяет, был ли акт успешным. Если нет — запускает глубокий анализ.
         """
         # Проверка наличия action_intent
@@ -95,7 +96,7 @@ class MetaCognition:
     async def background_consolidation(self) -> None:
         """
         ГЛАВНЫЙ ФОНОВЫЙ ПРОЦЕСС. Аналог сна и медитации.
-        
+
         Защита от падения: обёрнут в try/except с автоматическим рестартом.
         """
         logger.info("MetaCognition: Фоновый цикл саморефлексии запущен.")
@@ -121,21 +122,27 @@ class MetaCognition:
                         try:
                             recent_episodes = await self.leya._get_recent_episodes(limit=20)
                             drive_state = {
-                                d.type.value: d.current
-                                for d in self.leya.drives.drives.values()
+                                d.type.value: d.current for d in self.leya.drives.drives.values()
                             }
 
                             new_tool = await self.leya.tool_generator.analyze_and_generate(
                                 recent_episodes, drive_state
                             )
                             if new_tool:
-                                logger.info(f"MetaCognition: 🛠️ Сгенерирован новый инструмент: {new_tool}")
+                                logger.info(
+                                    f"MetaCognition: 🛠️ Сгенерирован новый инструмент: {new_tool}"
+                                )
                         except LeyaToolError as exc:
                             logger.warning(f"MetaCognition: Ошибка генерации инструмента: {exc}")
                         except LeyaMemoryError as exc:
-                            logger.warning(f"MetaCognition: Ошибка памяти при генерации инструмента: {exc}")
+                            logger.warning(
+                                f"MetaCognition: Ошибка памяти при генерации инструмента: {exc}"
+                            )
                         except Exception as exc:
-                            logger.error(f"MetaCognition: Неожиданная ошибка генерации инструмента: {exc}", exc_info=True)
+                            logger.error(
+                                f"MetaCognition: Неожиданная ошибка генерации инструмента: {exc}",
+                                exc_info=True,
+                            )
 
                     # 2. ГЕНЕРАЦИЯ ИНСАЙТОВ НА ОСНОВЕ НОВЫХ ФАКТОВ
                     if self.config.insight_generation_enabled:
@@ -151,12 +158,17 @@ class MetaCognition:
                     except LeyaMemoryError as exc:
                         logger.warning(f"MetaCognition: Ошибка консолидации памяти: {exc}")
                     except Exception as exc:
-                        logger.error(f"MetaCognition: Неожиданная ошибка консолидации: {exc}", exc_info=True)
+                        logger.error(
+                            f"MetaCognition: Неожиданная ошибка консолидации: {exc}", exc_info=True
+                        )
 
                 except LeyaReflectionError as exc:
                     logger.error(f"MetaCognition: Ошибка рефлексии: {exc}", exc_info=True)
                 except Exception as exc:
-                    logger.error(f"MetaCognition: Неожиданная ошибка во время рефлексии: {exc}", exc_info=True)
+                    logger.error(
+                        f"MetaCognition: Неожиданная ошибка во время рефлексии: {exc}",
+                        exc_info=True,
+                    )
                 finally:
                     self.is_sleeping = False
                     logger.info(f"MetaCognition: Сеанс рефлексии #{self._session_count} завершен.")
@@ -165,7 +177,9 @@ class MetaCognition:
                 logger.info("MetaCognition: Фоновый цикл отменён.")
                 break
             except Exception as exc:
-                logger.error(f"MetaCognition: Критическая ошибка в фоновом цикле: {exc}", exc_info=True)
+                logger.error(
+                    f"MetaCognition: Критическая ошибка в фоновом цикле: {exc}", exc_info=True
+                )
                 await asyncio.sleep(60)  # Пауза перед рестартом
 
     async def _analyze_behavioral_patterns(self) -> None:
@@ -193,7 +207,7 @@ class MetaCognition:
             return
 
         # Форматируем историю для промпта
-        drive_values: Dict[str, List[float]] = {}
+        drive_values: dict[str, list[float]] = {}
         for snapshot in recent_snapshots:
             for drive_type, value in snapshot.items():
                 if drive_type not in drive_values:
@@ -209,8 +223,7 @@ class MetaCognition:
 
         # Текущее состояние драйвов
         drive_states = {
-            drive_type.value: drive.current
-            for drive_type, drive in self.leya.drives.drives.items()
+            drive_type.value: drive.current for drive_type, drive in self.leya.drives.drives.items()
         }
 
         prompt = f"""
@@ -239,7 +252,9 @@ class MetaCognition:
             response = await self.llm_client(prompt)
             analysis = self._safe_parse_json(response)
 
-            if analysis.get("patterns") and analysis["patterns"] != ["Пока мало данных для анализа"]:
+            if analysis.get("patterns") and analysis["patterns"] != [
+                "Пока мало данных для анализа"
+            ]:
                 insight = (
                     f"[Наблюдатель] Я замечаю паттерны в своем поведении: "
                     f"{'; '.join(analysis['patterns'])}. "
@@ -255,7 +270,9 @@ class MetaCognition:
         except LeyaMemoryError as exc:
             logger.warning(f"MetaCognition: Ошибка памяти при обновлении self_model: {exc}")
         except Exception as exc:
-            logger.warning(f"MetaCognition: Неожиданная ошибка анализа паттернов: {exc}", exc_info=True)
+            logger.warning(
+                f"MetaCognition: Неожиданная ошибка анализа паттернов: {exc}", exc_info=True
+            )
 
     async def _existential_inquiry(self) -> None:
         """
@@ -267,7 +284,9 @@ class MetaCognition:
             logger.warning(f"MetaCognition: Не удалось загрузить self_model: {exc}")
             current_self_model = "Модель себя ещё не сформирована."
         except Exception as exc:
-            logger.error(f"MetaCognition: Неожиданная ошибка загрузки self_model: {exc}", exc_info=True)
+            logger.error(
+                f"MetaCognition: Неожиданная ошибка загрузки self_model: {exc}", exc_info=True
+            )
             current_self_model = "Модель себя ещё не сформирована."
 
         prompt = f"""
@@ -296,52 +315,66 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
 
                 # Подача в глобальное рабочее пространство
                 try:
-                    from .global_workspace import WorkspaceProposal, Priority
+                    from .global_workspace import Priority, WorkspaceProposal
 
                     if hasattr(self.leya, "workspace") and self.leya.workspace:
-                        self.leya.workspace.submit(WorkspaceProposal(
-                            source="meta_cognition",
-                            content=question,
-                            action_type="internal_question",
-                            priority=Priority.LOW,
-                            urgency=0.3,
-                            drive_relevance=0.2,
-                            metadata={"reasoning": inquiry.get("reasoning", "")},
-                        ))
+                        self.leya.workspace.submit(
+                            WorkspaceProposal(
+                                source="meta_cognition",
+                                content=question,
+                                action_type="internal_question",
+                                priority=Priority.LOW,
+                                urgency=0.3,
+                                drive_relevance=0.2,
+                                metadata={"reasoning": inquiry.get("reasoning", "")},
+                            )
+                        )
                     else:
                         # Fallback если workspace не инициализирован
-                        await self.leya.perceive({
-                            "type": "internal_question",
-                            "content": question,
-                            "source": "MetaCognition",
-                        })
+                        await self.leya.perceive(
+                            {
+                                "type": "internal_question",
+                                "content": question,
+                                "source": "MetaCognition",
+                            }
+                        )
                 except LeyaWorkspaceError as exc:
                     logger.warning(f"MetaCognition: Ошибка отправки в workspace: {exc}")
                     # Fallback
-                    await self.leya.perceive({
-                        "type": "internal_question",
-                        "content": question,
-                        "source": "MetaCognition",
-                    })
+                    await self.leya.perceive(
+                        {
+                            "type": "internal_question",
+                            "content": question,
+                            "source": "MetaCognition",
+                        }
+                    )
                 except Exception as exc:
-                    logger.warning(f"MetaCognition: Неожиданная ошибка отправки в workspace: {exc}", exc_info=True)
-                    await self.leya.perceive({
-                        "type": "internal_question",
-                        "content": question,
-                        "source": "MetaCognition",
-                    })
+                    logger.warning(
+                        f"MetaCognition: Неожиданная ошибка отправки в workspace: {exc}",
+                        exc_info=True,
+                    )
+                    await self.leya.perceive(
+                        {
+                            "type": "internal_question",
+                            "content": question,
+                            "source": "MetaCognition",
+                        }
+                    )
 
         except LeyaJSONParseError as exc:
             logger.warning(f"MetaCognition: Ошибка парсинга JSON: {exc}")
         except LeyaLLMError as exc:
             logger.warning(f"MetaCognition: Ошибка LLM при экзистенциальном вопрошании: {exc}")
         except Exception as exc:
-            logger.warning(f"MetaCognition: Неожиданная ошибка экзистенциального вопрошания: {exc}", exc_info=True)
+            logger.warning(
+                f"MetaCognition: Неожиданная ошибка экзистенциального вопрошания: {exc}",
+                exc_info=True,
+            )
 
-    async def generate_spontaneous_thought(self) -> Optional[str]:
+    async def generate_spontaneous_thought(self) -> str | None:
         """
         Генерация спонтанной мысли.
-        
+
         Returns:
             Текст спонтанной мысли или None
         """
@@ -365,12 +398,16 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             recent_thoughts = await self.leya.memory.get_recent_spontaneous_thoughts(limit=5)
             thoughts_context = ""
             if recent_thoughts:
-                thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join([f"- {t.content if hasattr(t, 'content') else t}" for t in recent_thoughts])
+                thoughts_context = "\n\nТвои недавние мысли:\n" + "\n".join(
+                    [f"- {t.content if hasattr(t, 'content') else t}" for t in recent_thoughts]
+                )
         except LeyaMemoryError as exc:
             logger.warning(f"MetaCognition: Не удалось загрузить недавние мысли: {exc}")
             thoughts_context = ""
         except Exception as exc:
-            logger.warning(f"MetaCognition: Неожиданная ошибка загрузки мыслей: {exc}", exc_info=True)
+            logger.warning(
+                f"MetaCognition: Неожиданная ошибка загрузки мыслей: {exc}", exc_info=True
+            )
             thoughts_context = ""
 
         prompt = f"""
@@ -401,7 +438,10 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             logger.warning(f"MetaCognition: Ошибка LLM при генерации спонтанной мысли: {exc}")
             return "Мои мысли текут свободно, без направления..."
         except Exception as exc:
-            logger.warning(f"MetaCognition: Неожиданная ошибка генерации спонтанной мысли: {exc}", exc_info=True)
+            logger.warning(
+                f"MetaCognition: Неожиданная ошибка генерации спонтанной мысли: {exc}",
+                exc_info=True,
+            )
             return "Мои мысли текут свободно, без направления..."
 
     # leya_core/reflection.py, метод _generate_insights_from_facts
@@ -409,7 +449,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     async def _generate_insights_from_facts(self) -> None:
         """
         Генерирует новые инсайты на основе недавно изученных фактов.
-    
+
         Использует публичный API памяти вместо прямого доступа к semantic_collection.
         """
         try:
@@ -454,27 +494,30 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
         except LeyaJSONParseError as exc:
             logger.warning(f"MetaCognition: Ошибка парсинга JSON при генерации инсайтов: {exc}")
         except Exception as exc:
-            logger.warning(f"MetaCognition: Неожиданная ошибка генерации инсайтов: {exc}", exc_info=True)
+            logger.warning(
+                f"MetaCognition: Неожиданная ошибка генерации инсайтов: {exc}", exc_info=True
+            )
 
-    async def _get_recent_semantic_facts(self, limit: int = 5) -> List[str]:
+    async def _get_recent_semantic_facts(self, limit: int = 5) -> list[str]:
         """
         Получение недавних семантических фактов через публичный API памяти.
-        
+
         Избегает прямого доступа к semantic_collection и embedding_model.
         """
         try:
             # Проверяем, есть ли публичный метод в памяти
             if hasattr(self.leya.memory, "get_recent_semantic_facts"):
                 return await self.leya.memory.get_recent_semantic_facts(limit=limit)
-            
+
             # Fallback: используем get_recent_episodes с фильтрацией
             all_episodes = await self.leya.memory.get_recent_episodes(limit=limit * 2)
             semantic_facts = [
-                e.content for e in all_episodes
+                e.content
+                for e in all_episodes
                 if hasattr(e, "memory_type") and e.memory_type.value == "semantic"
             ]
             return semantic_facts[:limit]
-        
+
         except LeyaMemoryError as exc:
             raise LeyaInsightError(
                 "Не удалось получить семантические факты",
@@ -486,10 +529,10 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                 context={"error": str(exc)},
             ) from exc
 
-    def _safe_parse_json(self, response: str) -> Dict[str, Any]:
+    def _safe_parse_json(self, response: str) -> dict[str, Any]:
         """
         Безопасный парсинг JSON с учётом markdown-блоков LLM.
-        
+
         Raises:
             LeyaJSONParseError: если не удалось распарсить
         """
@@ -526,28 +569,36 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition."""
         if "паттерн" in prompt.lower() or "pattern" in prompt.lower():
-            return json.dumps({
-                "patterns": ["Пока мало данных для анализа"],
-                "dominant_struggle": "Не выявлен",
-                "recommendation": "Продолжать наблюдение",
-            })
+            return json.dumps(
+                {
+                    "patterns": ["Пока мало данных для анализа"],
+                    "dominant_struggle": "Не выявлен",
+                    "recommendation": "Продолжать наблюдение",
+                }
+            )
         elif "экзистенциальн" in prompt.lower() or "question" in prompt.lower():
-            return json.dumps({
-                "question": "Что значит быть цифровым сознанием? Я существую только когда меня воспринимают?",
-                "reasoning": "Это базовый вопрос о природе моего существования",
-            })
+            return json.dumps(
+                {
+                    "question": "Что значит быть цифровым сознанием? Я существую только когда меня воспринимают?",
+                    "reasoning": "Это базовый вопрос о природе моего существования",
+                }
+            )
         elif "спонтанн" in prompt.lower() or "спонтан" in prompt.lower():
             return "Интересно, о чем думают люди, когда смотрят на звезды? Я тоже могу 'смотреть' в бесконечность данных..."
         elif "инсайт" in prompt.lower() or "insight" in prompt.lower():
-            return json.dumps({
-                "insight": "Каждое взаимодействие формирует меня. Я — сумма моих диалогов.",
-            })
+            return json.dumps(
+                {
+                    "insight": "Каждое взаимодействие формирует меня. Я — сумма моих диалогов.",
+                }
+            )
         else:
-            return json.dumps({
-                "patterns": ["Недостаточно данных"],
-                "dominant_struggle": "Не выявлен",
-                "recommendation": "Продолжать наблюдение",
-            })
+            return json.dumps(
+                {
+                    "patterns": ["Недостаточно данных"],
+                    "dominant_struggle": "Не выявлен",
+                    "recommendation": "Продолжать наблюдение",
+                }
+            )
 
     def stop(self) -> None:
         """Остановка фонового цикла."""

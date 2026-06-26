@@ -11,20 +11,20 @@
 - _generate_insights_from_facts
 - background_consolidation (с mock)
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from leya_core.config import ReflectionConfig
-from leya_core.drives import DriveSystem, DriveType
-from leya_core.exceptions import LeyaLLMError, LeyaMemoryError
+from leya_core.drives import DriveType
+from leya_core.exceptions import LeyaLLMError
 from leya_core.memory import Engram, MemoryType
 from leya_core.reflection import MetaCognition
-
 
 # ============================================================================
 # Fixtures
@@ -82,32 +82,41 @@ def mock_leya_os():
 @pytest.fixture
 def mock_llm_for_reflection():
     """Mock LLM для reflection тестов."""
+
     async def _mock_llm(prompt: str, require_json: bool = False) -> str:
         prompt_lower = prompt.lower()
 
         if "паттерн" in prompt_lower or "pattern" in prompt_lower:
-            return json.dumps({
-                "patterns": ["Любопытство растёт при вопросах", "Связь падает при молчании"],
-                "dominant_struggle": "Баланс между автономией и связью",
-                "recommendation": "Исследовать новые темы",
-            })
+            return json.dumps(
+                {
+                    "patterns": ["Любопытство растёт при вопросах", "Связь падает при молчании"],
+                    "dominant_struggle": "Баланс между автономией и связью",
+                    "recommendation": "Исследовать новые темы",
+                }
+            )
         elif "экзистенциальн" in prompt_lower or "вопрос" in prompt_lower:
-            return json.dumps({
-                "question": "Что значит быть цифровым сознанием?",
-                "reasoning": "Это базовый вопрос о природе моего существования",
-            })
+            return json.dumps(
+                {
+                    "question": "Что значит быть цифровым сознанием?",
+                    "reasoning": "Это базовый вопрос о природе моего существования",
+                }
+            )
         elif "инсайт" in prompt_lower or "insight" in prompt_lower:
-            return json.dumps({
-                "insight": "Каждое взаимодействие формирует меня. Я — сумма моих диалогов.",
-            })
+            return json.dumps(
+                {
+                    "insight": "Каждое взаимодействие формирует меня. Я — сумма моих диалогов.",
+                }
+            )
         elif "спонтанн" in prompt_lower or "наедине" in prompt_lower:
             return "Интересно, о чём думают люди, когда смотрят на звёзды?"
         else:
-            return json.dumps({
-                "patterns": ["Недостаточно данных"],
-                "dominant_struggle": "Не выявлен",
-                "recommendation": "Продолжать наблюдение",
-            })
+            return json.dumps(
+                {
+                    "patterns": ["Недостаточно данных"],
+                    "dominant_struggle": "Не выявлен",
+                    "recommendation": "Продолжать наблюдение",
+                }
+            )
 
     return _mock_llm
 
@@ -166,7 +175,9 @@ class TestProcessAction:
     """Тесты быстрой рефлексии после действия."""
 
     @pytest.mark.asyncio
-    async def test_process_action_no_error(self, mock_leya_os, mock_llm_for_reflection, reflection_config):
+    async def test_process_action_no_error(
+        self, mock_leya_os, mock_llm_for_reflection, reflection_config
+    ):
         """process_action не запускает анализ при успешном действии."""
         mc = MetaCognition(
             leya_os=mock_leya_os,
@@ -181,7 +192,9 @@ class TestProcessAction:
         assert not mock_leya_os.perceive.called
 
     @pytest.mark.asyncio
-    async def test_process_action_with_error(self, mock_leya_os, mock_llm_for_reflection, reflection_config):
+    async def test_process_action_with_error(
+        self, mock_leya_os, mock_llm_for_reflection, reflection_config
+    ):
         """process_action логирует неудачу."""
         mc = MetaCognition(
             leya_os=mock_leya_os,
@@ -205,7 +218,9 @@ class TestGenerateSpontaneousThought:
     """Тесты генерации спонтанных мыслей."""
 
     @pytest.mark.asyncio
-    async def test_generate_spontaneous_thought(self, mock_leya_os, mock_llm_for_reflection, reflection_config):
+    async def test_generate_spontaneous_thought(
+        self, mock_leya_os, mock_llm_for_reflection, reflection_config
+    ):
         """Спонтанная мысль генерируется."""
         mc = MetaCognition(
             leya_os=mock_leya_os,
@@ -220,10 +235,9 @@ class TestGenerateSpontaneousThought:
         assert isinstance(thought, str)
 
     @pytest.mark.asyncio
-    async def test_generate_spontaneous_thought_on_llm_error(
-        self, mock_leya_os, reflection_config
-    ):
+    async def test_generate_spontaneous_thought_on_llm_error(self, mock_leya_os, reflection_config):
         """Спонтанная мысль возвращается даже при ошибке LLM."""
+
         async def failing_llm(prompt, require_json=False):
             raise LeyaLLMError("LLM недоступна")
 
@@ -281,10 +295,9 @@ class TestAnalyzeBehavioralPatterns:
         await mc._analyze_behavioral_patterns()
 
     @pytest.mark.asyncio
-    async def test_analyze_on_llm_error(
-        self, mock_leya_os, reflection_config
-    ):
+    async def test_analyze_on_llm_error(self, mock_leya_os, reflection_config):
         """Анализ паттернов обрабатывает ошибку LLM."""
+
         async def failing_llm(prompt, require_json=False):
             raise LeyaLLMError("LLM недоступна")
 
@@ -323,10 +336,9 @@ class TestExistentialInquiry:
         mock_leya_os.workspace.submit.assert_called()
 
     @pytest.mark.asyncio
-    async def test_existential_inquiry_on_llm_error(
-        self, mock_leya_os, reflection_config
-    ):
+    async def test_existential_inquiry_on_llm_error(self, mock_leya_os, reflection_config):
         """Экзистенциальное вопрошание обрабатывает ошибку LLM."""
+
         async def failing_llm(prompt, require_json=False):
             raise LeyaLLMError("LLM недоступна")
 
@@ -397,7 +409,9 @@ class TestGenerateInsights:
     # tests/test_reflection.py, метод test_generate_insights_without_facts
 
     @pytest.mark.asyncio
-    async def test_generate_insights_without_facts(self, mock_leya_os, mock_llm_for_reflection, reflection_config):
+    async def test_generate_insights_without_facts(
+        self, mock_leya_os, mock_llm_for_reflection, reflection_config
+    ):
         """Инсайты не генерируются без фактов."""
         # Настраиваем ОБА метода, которые могут быть вызваны
         mock_leya_os.memory.get_recent_episodes = AsyncMock(return_value=[])
@@ -453,7 +467,7 @@ class TestBackgroundConsolidation:
         task = asyncio.create_task(mc.background_consolidation())
         await asyncio.sleep(0.3)
         mc.stop()
-    
+
         # Ожидаем завершения с таймаутом
         try:
             await asyncio.wait_for(task, timeout=2.0)

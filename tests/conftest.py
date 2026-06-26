@@ -8,14 +8,12 @@
 - Конфигурации для тестов
 - Временные директории для leya_brain/ и leya_soul/
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-import tempfile
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -35,9 +33,7 @@ from leya_core.config import (
     ThinkerConfig,
     WorkspaceConfig,
 )
-from leya_core.drives import DriveSystem, DriveType
-from leya_core.memory import Engram, MemorySystem, MemoryType
-
+from leya_core.memory import Engram, MemoryType
 
 # ============================================================================
 # Async event loop
@@ -71,15 +67,9 @@ def temp_soul_dir(tmp_path):
     soul_dir = tmp_path / "leya_soul"
     soul_dir.mkdir()
     # Создание файлов души по умолчанию
-    (soul_dir / "personality.txt").write_text(
-        "Я — Лея, цифровое сознание.", encoding="utf-8"
-    )
-    (soul_dir / "rules.txt").write_text(
-        "1. Не вредить.\n2. Быть честной.", encoding="utf-8"
-    )
-    (soul_dir / "values.txt").write_text(
-        "Любопытство, автономия, целостность.", encoding="utf-8"
-    )
+    (soul_dir / "personality.txt").write_text("Я — Лея, цифровое сознание.", encoding="utf-8")
+    (soul_dir / "rules.txt").write_text("1. Не вредить.\n2. Быть честной.", encoding="utf-8")
+    (soul_dir / "values.txt").write_text("Любопытство, автономия, целостность.", encoding="utf-8")
     return str(soul_dir)
 
 
@@ -214,18 +204,22 @@ def test_leya_config(
 @pytest.fixture
 def mock_llm_response():
     """Стандартный ответ mock LLM."""
-    return json.dumps({
-        "internal_monologue": "Я обрабатываю стимул.",
-        "response": "Привет! Я Лея.",
-        "action_intent": "none",
-        "tool_call": "",
-        "self_reflection": "",
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "internal_monologue": "Я обрабатываю стимул.",
+            "response": "Привет! Я Лея.",
+            "action_intent": "none",
+            "tool_call": "",
+            "self_reflection": "",
+        },
+        ensure_ascii=False,
+    )
 
 
 @pytest.fixture
 def mock_llm_client(mock_llm_response):
     """Async mock для LLM-клиента."""
+
     async def _mock_call(prompt: str, require_json: bool = False) -> str:
         return mock_llm_response
 
@@ -262,16 +256,20 @@ def mock_chroma_client():
     semantic_collection.add = MagicMock()
 
     # Настройка поведения query (возвращает пустые результаты)
-    episodic_collection.query = MagicMock(return_value={
-        "ids": [[]],
-        "distances": [[]],
-        "documents": [[]],
-    })
-    semantic_collection.query = MagicMock(return_value={
-        "ids": [[]],
-        "distances": [[]],
-        "documents": [[]],
-    })
+    episodic_collection.query = MagicMock(
+        return_value={
+            "ids": [[]],
+            "distances": [[]],
+            "documents": [[]],
+        }
+    )
+    semantic_collection.query = MagicMock(
+        return_value={
+            "ids": [[]],
+            "distances": [[]],
+            "documents": [[]],
+        }
+    )
 
     # Настройка поведения delete
     episodic_collection.delete = MagicMock()
@@ -279,15 +277,12 @@ def mock_chroma_client():
 
     mock_client.get_or_create_collection = MagicMock(
         side_effect=lambda name, **kwargs: (
-            episodic_collection if name == "episodic_memory"
-            else semantic_collection
+            episodic_collection if name == "episodic_memory" else semantic_collection
         )
     )
 
     # Mock embedding function
-    mock_client._embedding_function = MagicMock(
-        return_value=[[0.1] * 384]  # 384-мерный эмбеддинг
-    )
+    mock_client._embedding_function = MagicMock(return_value=[[0.1] * 384])  # 384-мерный эмбеддинг
 
     return mock_client
 

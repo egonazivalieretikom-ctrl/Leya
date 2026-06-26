@@ -4,16 +4,14 @@
 Проверяет полный цикл: perceive → plan → act → reflect
 с mock LLM и mock ChromaDB.
 """
+
 from __future__ import annotations
 
-import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from LeyaOS import LeyaOS
-from leya_core.config import LeyaConfig
 
 
 class TestIntegrationSmoke:
@@ -52,11 +50,13 @@ class TestIntegrationSmoke:
                 leya.env = mock_env
 
                 # Выполняем perceive
-                await leya.perceive({
-                    "type": "user_message",
-                    "content": "Привет, Лея!",
-                    "source": "test",
-                })
+                await leya.perceive(
+                    {
+                        "type": "user_message",
+                        "content": "Привет, Лея!",
+                        "source": "test",
+                    }
+                )
 
                 # Проверяем, что сообщение было отправлено
                 mock_env.send_message.assert_called()

@@ -10,14 +10,14 @@
 - evaluate_stimulus
 - save_state / load_state
 """
+
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
-from leya_core.drives import Drive, DriveSystem, DriveType
+from leya_core.drives import DriveSystem, DriveType
 from leya_core.exceptions import LeyaDriveNotFoundError
 
 
@@ -64,9 +64,7 @@ class TestDriveSystemMetabolism:
             drive.current = 0.2  # Низкое значение, чтобы cross_influence был минимальным
 
         # Запоминаем начальные значения
-        initial_values = {
-            dt: d.current for dt, d in ds.drives.items()
-        }
+        initial_values = {dt: d.current for dt, d in ds.drives.items()}
 
         # Запускаем метаболизм на короткое время
         task = asyncio.create_task(ds.background_metabolism())
@@ -80,11 +78,11 @@ class TestDriveSystemMetabolism:
         for dt, drive in ds.drives.items():
             if drive.current > initial_values[dt]:
                 increased_count += 1
-    
+
         # Хотя бы половина драйвов должна вырасти (base_growth_rate > 0)
-        assert increased_count >= len(ds.drives) // 2, (
-            f"Слишком мало драйвов выросло: {increased_count}/{len(ds.drives)}"
-        )
+        assert (
+            increased_count >= len(ds.drives) // 2
+        ), f"Слишком мало драйвов выросло: {increased_count}/{len(ds.drives)}"
 
     @pytest.mark.asyncio
     async def test_metabolism_respects_bounds(self, test_drives_config):

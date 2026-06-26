@@ -6,6 +6,7 @@ leya_core/exceptions.py
 Все исключения наследуются от LeyaError для возможности
 глобального перехвата в фоновых задачах.
 """
+
 from __future__ import annotations
 
 
@@ -94,6 +95,7 @@ class LeyaBroadcastError(LeyaEnvironmentError):
 class LeyaConfigError(LeyaError):
     """Ошибка конфигурации (невалидные значения .env)."""
 
+
 # --- Circuit Breaker ---
 class LeyaCircuitBreakerError(LeyaError):
     """Ошибка Circuit Breaker (не связано с LLM напрямую)."""
@@ -130,7 +132,9 @@ class LeyaWorkspaceError(LeyaError):
 class LeyaSoulError(LeyaError):
     """Ошибка загрузки или обновления души (personality, rules, values)."""
 
+
 # Добавить в конец leya_core/exceptions.py
+
 
 # --- Constitutional ---
 class LeyaConstitutionalError(LeyaError):

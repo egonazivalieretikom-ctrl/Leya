@@ -6,14 +6,14 @@ leya_core/state_persistence.py
 - Замена широких except на специфичные исключения
 - Атомарная запись с резервной копией
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from .exceptions import LeyaPersistenceError, LeyaStateCorruptedError
 
@@ -39,7 +39,7 @@ class StatePersistence:
                     context={"path": directory, "error": str(exc)},
                 ) from exc
 
-    def save_state(self, state: Dict[str, Any]) -> bool:
+    def save_state(self, state: dict[str, Any]) -> bool:
         """Сохранение состояния в JSON файл с атомарной записью."""
         try:
             state["_saved_at"] = datetime.now().isoformat()
@@ -57,7 +57,7 @@ class StatePersistence:
             try:
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(state, f, ensure_ascii=False, indent=2)
-                
+
                 os.replace(tmp_path, self.state_file)
             except OSError as exc:
                 # Очистка tmp на случай ошибки
@@ -71,7 +71,9 @@ class StatePersistence:
                     context={"path": self.state_file, "error": str(exc)},
                 ) from exc
 
-            logger.info(f"StatePersistence: Состояние сохранено ({os.path.getsize(self.state_file)} байт)")
+            logger.info(
+                f"StatePersistence: Состояние сохранено ({os.path.getsize(self.state_file)} байт)"
+            )
             return True
 
         except LeyaPersistenceError:
@@ -82,20 +84,22 @@ class StatePersistence:
                 context={"path": self.state_file, "error": str(exc)},
             ) from exc
 
-    def load_state(self) -> Dict[str, Any]:
+    def load_state(self) -> dict[str, Any]:
         """Загрузка состояния из JSON файла."""
         if not os.path.exists(self.state_file):
             # Попытка загрузить из резервной копии
             backup_path = self.state_file + ".backup"
             if os.path.exists(backup_path):
-                logger.info("StatePersistence: Основной файл не найден, загружаем из резервной копии")
+                logger.info(
+                    "StatePersistence: Основной файл не найден, загружаем из резервной копии"
+                )
                 self.state_file = backup_path
             else:
                 logger.info("StatePersistence: Файл состояния не найден, начинаем с чистого листа")
                 return {}
 
         try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
+            with open(self.state_file, encoding="utf-8") as f:
                 state = json.load(f)
 
             saved_at = state.get("_saved_at", "неизвестно")
