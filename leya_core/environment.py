@@ -774,16 +774,29 @@ class Environment(ABC, IEnvironment):
         logger.debug(f"[{thought_type}] {content[:100]}")
 
     async def update_drives(self, drive_state: dict[str, float]) -> None:
-        """Обновить драйвы (по умолчанию — no-op)."""
-        pass
+            """Обновление состояния драйвов.
+
+            В базовой реализации — логирование.
+            WebEnvironment переопределяет метод для отправки через WebSocket.
+            CLIEnvironment может переопределять для вывода в консоль.
+            """
+            logger.debug(f"[Environment] Drive state updated: {drive_state}")
 
     async def update_self_model(self, self_model: str) -> None:
-        """Обновить self_model (по умолчанию — no-op)."""
-        pass
+            """Обновление модели себя.
+
+            В базовой реализации — логирование.
+            WebEnvironment переопределяет метод для отправки через WebSocket.
+            """
+            logger.debug("[Environment] Self-model updated")
 
     async def broadcast_state(self, state: str) -> None:
-        """Отправить состояние (по умолчанию — no-op)."""
-        pass
+            """Трансляция общего состояния системы.
+
+            В базовой реализации — логирование.
+            WebEnvironment переопределяет метод для отправки через WebSocket.
+            """
+            logger.debug(f"[Environment] System state: {state}")
 
 
 # ============================================================================
@@ -853,3 +866,12 @@ class CLIEnvironment(Environment):
     async def broadcast_thought(self, thought_type: str, content: str) -> None:
         """Логирование мысли в CLI."""
         logger.info(f"[{thought_type}] {content}")
+
+    async def update_drives(self, drive_state: dict[str, float]) -> None:
+        logger.info(f"[CLI] Drive state updated")
+
+        async def update_self_model(self, self_model: str) -> None:
+            logger.info("[CLI] Self-model updated")
+
+        async def broadcast_state(self, state: str) -> None:
+            logger.info(f"[CLI] System state: {state}")
