@@ -225,7 +225,7 @@ class IMemorySystem(Protocol):
         """
         ...
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Any]:
+    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> list[Any]:
         """
         Возвращает недавние спонтанные мысли.
 
@@ -233,7 +233,7 @@ class IMemorySystem(Protocol):
             limit: Максимальное количество мыслей
 
         Returns:
-            Список строк с мыслями
+            Список энграмм (list[Engram]) или список словарей
         """
         ...
 
