@@ -850,30 +850,23 @@ class MemorySystem:
     # ========================================================================
 
     async def _save_state(self) -> None:
-        """
-        Атомарное сохранение состояния памяти в JSON с HMAC-подписью.
-        """
+        """Атомарное сохранение состояния памяти в JSON с HMAC-подписью."""
         state_path = Path(self.state_path).expanduser().resolve()
-        # Принудительно используем расширение .json
         if state_path.suffix != ".json":
             state_path = state_path.with_suffix(".json")
-    
         state_path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
-            "__version__": MEMORY_STATE_VERSION,
+            "version": getattr(self, "MEMORY_STATE_VERSION", "1.0"),
             "data": {
-                "engrams": {k: v.to_dict() for k, v in self.engrams.items()},
-                "synapses": {k: v.to_dict() for k, v in self.synapses.items()},
+                "engrams": {eid: eng.to_dict() for eid, eng in self.engrams.items()},
+                "synapses": {sid: syn.to_dict() for sid, syn in self.synapses.items()},
                 "self_model": self.self_model,
-            },
+            }
         }
 
-        # Временный файл в той же ФС для атомарности os.replace
         fd, tmp_path_str = tempfile.mkstemp(
-            prefix=state_path.name + ".",
-            suffix=".tmp",
-            dir=str(state_path.parent),
+            prefix=".tmp_", suffix=".json", dir=str(state_path.parent)
         )
         tmp_path = Path(tmp_path_str)
 
@@ -881,38 +874,22 @@ class MemorySystem:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
 
-            # HMAC-подпись
-            key = self._get_hmac_key()
-            signature = self._compute_hmac(tmp_path, key)
+            key = self._get_hmac_key().encode("utf-8")
+            signature = hmac.new(key, tmp_path.read_bytes(), hashlib.sha256).hexdigest()
             hmac_path = state_path.with_suffix(".json.hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
-            # Атомарная замена
-            try:
-                os.replace(tmp_path, state_path)
-            except OSError as exc:
-                raise LeyaAtomicWriteError(
-                    "Атомарная замена memory_state не удалась",
-                    context={"path": str(state_path), "error": str(exc)},
-                ) from exc
-        except LeyaMemoryError:
-            raise
-        except Exception as exc:
-            raise LeyaMemoryError(
-                "Сбой при сохранении состояния памяти",
-                context={"path": str(state_path), "error": str(exc)},
-            ) from exc
+            os.replace(tmp_path, state_path)
+        except Exception as e:
+            raise RuntimeError(f"Сбой сохранения состояния памяти: {e}") from e
         finally:
             if tmp_path.exists():
                 with contextlib.suppress(OSError):
                     tmp_path.unlink()
 
     async def _load_state(self) -> None:
-        """
-        Загрузка состояния памяти из JSON с проверкой HMAC и версии.
-        """
+        """Загрузка состояния из JSON с проверкой HMAC и версионированием."""
         state_path = Path(self.state_path).expanduser().resolve()
-        # Принудительно используем расширение .json
         if state_path.suffix != ".json":
             state_path = state_path.with_suffix(".json")
         
@@ -923,53 +900,28 @@ class MemorySystem:
             return
 
         hmac_path = state_path.with_suffix(".json.hmac")
-        key = self._get_hmac_key()
+        if not hmac_path.exists():
+            raise RuntimeError("Отсутствует HMAC-файл состояния памяти")
 
-        # Проверка HMAC
-        if hmac_path.exists():
-            expected = hmac_path.read_text(encoding="utf-8").strip()
-            actual = self._compute_hmac(state_path, key)
-            if not hmac.compare_digest(expected, actual):
-                raise LeyaStateCorruptedError(
-                    "HMAC memory_state не совпадает",
-                    context={"path": str(state_path)},
-                )
-        else:
-            raise LeyaStateCorruptedError(
-                "Отсутствует HMAC для memory_state",
-                context={"path": str(state_path)},
-            )
+        key = self._get_hmac_key().encode("utf-8")
+        expected_sig = hmac_path.read_text(encoding="utf-8").strip()
+        actual_sig = hmac.new(key, state_path.read_bytes(), hashlib.sha256).hexdigest()
+    
+        if not hmac.compare_digest(expected_sig, actual_sig):
+            raise RuntimeError("HMAC проверка целостности состояния памяти не пройдена")
 
-        # Десериализация только из JSON
-        try:
-            with state_path.open("r", encoding="utf-8") as f:
-                raw = json.load(f)
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise LeyaStateCorruptedError(
-                "Повреждён memory_state",
-                context={"path": str(state_path), "error": str(exc)},
-            ) from exc
+        with state_path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
 
-        # Проверка версии
-        if not isinstance(raw, dict) or raw.get("__version__") != MEMORY_STATE_VERSION:
-            raise LeyaStateVersionMismatchError(
-                "Несовместимая версия memory_state",
-                context={
-                    "path": str(state_path),
-                    "file_version": raw.get("__version__") if isinstance(raw, dict) else None,
-                    "expected_version": MEMORY_STATE_VERSION,
-                },
-            )
+        version = raw.get("version", "0.0")
+        if version != getattr(self, "MEMORY_STATE_VERSION", "1.0"):
+            raise RuntimeError(f"Несовместимая версия памяти: {version}")
 
-        # Восстановление состояния
         data = raw.get("data", {})
-        self.engrams = {k: Engram.from_dict(v) for k, v in data.get("engrams", {}).items()}
-        self.synapses = {k: Synapse.from_dict(v) for k, v in data.get("synapses", {}).items()}
+        # Используем from_dict, который должен быть реализован в Engram/Synapse
+        self.engrams = {eid: Engram.from_dict(v) for eid, v in data.get("engrams", {}).items()}
+        self.synapses = {sid: Synapse.from_dict(v) for sid, v in data.get("synapses", {}).items()}
         self.self_model = data.get("self_model", "")
-
-        logger.info(
-            f"Состояние памяти загружено: {len(self.engrams)} энграмм, {len(self.synapses)} синапсов"
-        )
 
     def _compute_hmac(self, path: Path, key: bytes) -> str:
         """
