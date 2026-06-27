@@ -140,7 +140,7 @@ class BaseEnvironment(ABC):
             f"не реализовано в {type(self).__name__}"
         )
 
-    def broadcast_soul_update(self, soul_files: list[str]) -> None:
+    def broadcast_soul_update(self, soul_files: dict[str, str]) -> None:
         """
         Транслирует обновление файлов души (personality, rules, values).
 
@@ -716,6 +716,7 @@ class Environment(ABC, IEnvironment):
         self.leya = leya_os
         self.tool_registry = ToolRegistry()
         self.soul_manager = SoulFileManager()
+        self.tool_generator = ToolGenerator(...)
 
     async def execute_tool_call(self, tool_call_json: Any) -> str:
         """
@@ -744,7 +745,7 @@ class Environment(ABC, IEnvironment):
                     context={"data": data},
                 )
 
-            return await self.tool_registry.execute(tool_name, parameters)
+            result = await self.env.execute_tool_call(tool_name, parameters)
 
         except json.JSONDecodeError as exc:
             raise LeyaToolError(
@@ -863,15 +864,14 @@ class CLIEnvironment(Environment):
         """Отправить сообщение в stdout."""
         print(f"\n[Лея]: {message}\n")
 
-    async def broadcast_thought(self, thought_type: str, content: str) -> None:
-        """Логирование мысли в CLI."""
-        logger.info(f"[{thought_type}] {content}")
-
     async def update_drives(self, drive_state: dict[str, float]) -> None:
-        logger.info(f"[CLI] Drive state updated")
+        logger.info(f"[CLI] Drives updated: {drive_state}")
 
-        async def update_self_model(self, self_model: str) -> None:
-            logger.info("[CLI] Self-model updated")
+    async def update_self_model(self, self_model: str) -> None:
+        logger.info(f"[CLI] Self-model updated")
 
-        async def broadcast_state(self, state: str) -> None:
-            logger.info(f"[CLI] System state: {state}")
+    async def update_memory(self, memory_info: dict) -> None:
+        logger.info(f"[CLI] Memory updated")
+
+    async def broadcast_soul_update(self, soul_files: dict[str, str]) -> None:
+        logger.info(f"[CLI] Soul files updated: {list(soul_files.keys())}")
