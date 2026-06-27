@@ -394,48 +394,121 @@ class LeyaOS:
         finally:
             await self.shutdown()
 
+    async def _save_all_state(self) -> None:
+        """Сохранение состояния всех компонентов при shutdown.
+
+        Этап 1.3: каждый компонент сохраняется отдельно, ошибки одного
+        не прерывают сохранение остальных. Все ошибки логируются с контекстом
+        и собираются в список для итогового отчёта.
+        """
+        from .exceptions import LeyaAtomicWriteError, LeyaMemoryError, LeyaError
+
+        errors: list[tuple[str, Exception]] = []
+
+        # 1. Память
+        if self.memory is not None:
+            try:
+                await self.memory._save_state()
+                logger.info("✅ Состояние памяти сохранено")
+            except LeyaAtomicWriteError as e:
+                logger.error(
+                    f"Ошибка атомарной записи памяти при shutdown: {e}",
+                    exc_info=True,
+                    extra={"component": "memory"}
+                )
+                errors.append(("memory.atomic_write", e))
+            except LeyaMemoryError as e:
+                logger.error(
+                    f"Ошибка памяти при shutdown: {e}",
+                    exc_info=True,
+                    extra={"component": "memory"}
+                )
+                errors.append(("memory", e))
+
+        # 2. Драйвы
+        if self.drives is not None:
+            try:
+                from .state_persistence import save_drives_state
+                save_drives_state(self.drives, self.config.memory.brain_dir)
+                logger.info("✅ Состояние драйвов сохранено")
+            except (OSError, LeyaError) as e:
+                logger.error(
+                    f"Ошибка сохранения драйвов: {e}",
+                    exc_info=True,
+                    extra={"component": "drives"}
+                )
+                errors.append(("drives", e))
+
+        # 3. Гомеостаз
+        if self.homeostasis is not None:
+            try:
+                from .state_persistence import save_homeostasis_state
+                save_homeostasis_state(self.homeostasis, self.config.memory.brain_dir)
+                logger.info("✅ Состояние гомеостаза сохранено")
+            except (OSError, LeyaError) as e:
+                logger.error(
+                    f"Ошибка сохранения гомеостаза: {e}",
+                    exc_info=True,
+                    extra={"component": "homeostasis"}
+                )
+                errors.append(("homeostasis", e))
+
+        if errors:
+            logger.warning(
+                f"⚠️ Shutdown завершился с {len(errors)} ошибкой(ами): "
+                + ", ".join(name for name, _ in errors)
+            )
+        return errors
+
     async def shutdown(self) -> None:
+        """Graceful shutdown: остановка задач + сохранение состояния.
+
+        Этап 1.3: ошибки при сохранении не проглатываются молча — они
+        логируются с контекстом и возвращаются списком. Сам shutdown
+        не падает, даже если все компоненты отказали.
         """
-        Graceful shutdown: остановка фоновых задач, сохранение состояния.
-        """
-        if not self.running:
+        if self._shutdown_event.is_set():
+            logger.warning("Shutdown уже инициирован")
             return
+        self._shutdown_event.set()
 
-        logger.info(f"{self.name} засыпает...")
-        self.running = False
-        self.state = "sleeping"
+        logger.info("🛑 Начало graceful shutdown...")
 
-        # Остановка фоновых задач
-        for task in self._background_tasks:
-            if not task.done():
-                task.cancel()
+        # 1. Отменяем все фоновые задачи
+        tasks_to_cancel = [
+            t for t in self._background_tasks
+            if not t.done()
+        ]
+        for task in tasks_to_cancel:
+            task.cancel()
 
-        if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+            logger.info(f"Отменено фоновых задач: {len(tasks_to_cancel)}")
 
-        # Остановка метаболизма драйвов
-        self.drives.stop()
+        # 2. Закрываем сессию LLM-клиента
+        if hasattr(self, "llm_client") and self.llm_client is not None:
+            try:
+                await self.llm_client.close()
+            except Exception as e:
+                logger.error(
+                    f"Ошибка закрытия LLM-сессии: {e}",
+                    exc_info=True,
+                    extra={"component": "llm_client"}
+                )
 
-        # Сохранение состояния
-        try:
-            state = {
-                "drives": self.drives.save_state(),
-                "homeostasis": self.homeostasis.save_state(),
-            }
-            self.persistence.save_state(state)
-            logger.info("✅ Состояние сохранено")
-        except LeyaPersistenceError as exc:
-            logger.error(f"Не удалось сохранить состояние: {exc}", exc_info=True)
-        except Exception as exc:
-            logger.error(f"Неожиданная ошибка сохранения состояния: {exc}", exc_info=True)
+        # 3. Сохраняем состояние всех компонентов
+        save_errors = await self._save_all_state()
 
-        # Закрытие LLM-клиента
-        try:
-            await self.llm_client.close()
-        except Exception as exc:
-            logger.warning(f"Ошибка закрытия LLM-клиента: {exc}")
+        # 4. Финальный лог
+        if save_errors:
+            logger.warning(
+                f"⚠️ Shutdown завершён с {len(save_errors)} ошибкой(ами) сохранения"
+            )
+        else:
+            logger.info("✅ Graceful shutdown завершён успешно")
 
-        logger.info(f"{self.name} уснула. Спокойной ночи.")
+        return save_errors
 
     # =========================================================================
     # Внутренние методы

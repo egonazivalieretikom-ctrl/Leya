@@ -193,93 +193,133 @@ class OllamaClient:
     async def chat(
         self,
         prompt: str,
+        system: str | None = None,
         require_json: bool = False,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
+        timeout: float | None = None,
     ) -> str:
-        """
-        Отправка запроса к Ollama с защитой Circuit Breaker.
+        """Отправка запроса к Ollama и получение ответа.
 
-        Бросает:
-        - LeyaLLMUnavailableError: Circuit Breaker в состоянии OPEN
-        - LeyaLLMTimeoutError: превышен таймаут
-        - LeyaLLMError: другие ошибки
+        Этап 1.3: broad except Exception заменён на конкретные исключения.
+        - aiohttp.ClientError → LeyaLLMConnectionError
+        - asyncio.TimeoutError → LeyaLLMTimeoutError
+        - json.JSONDecodeError → LeyaJSONParseError
+        - HTTP non-2xx → LeyaLLMError
+        - Circuit Breaker OPEN → LeyaLLMUnavailableError
+        - Любая другая ошибка → LeyaLLMError (wrapped, с __cause__)
         """
-        # Проверка Circuit Breaker
-        if not self.circuit_breaker.is_available:
-            logger.warning("OllamaClient: Circuit Breaker OPEN, используем fallback")
-            if self._fallback_fn:
-                return await self._fallback_fn(prompt)
+        from .exceptions import (
+            LeyaLLMConnectionError,
+            LeyaLLMTimeoutError,
+            LeyaLLMUnavailableError,
+            LeyaLLMError,
+            LeyaJSONParseError,
+        )
+        import aiohttp
+
+        # Circuit Breaker check
+        if not self._breaker.is_available():
             raise LeyaLLMUnavailableError(
-                "Ollama недоступна (Circuit Breaker OPEN)",
-                context=self.circuit_breaker.get_status(),
+                "LLM недоступен: Circuit Breaker в состоянии OPEN",
+                context={"breaker_status": self._breaker.get_status()}
             )
 
-        # Формирование payload
+        url = f"{self.config.base_url.rstrip('/')}/api/chat"
         payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            "model": self.config.model,
             "stream": False,
             "options": {
-                "temperature": temperature if temperature is not None else self.temperature,
-                "top_p": self.top_p,
-                "top_k": self.top_k,
-                "num_predict": max_tokens if max_tokens is not None else self.max_tokens,
-                "repeat_penalty": self.repeat_penalty,
+                "temperature": self.config.temperature,
+                "top_p": self.config.top_p,
+                "top_k": self.config.top_k,
+                "num_predict": self.config.max_tokens,
+                "repeat_penalty": self.config.repeat_penalty,
             },
+            "messages": [],
         }
+        if system:
+            payload["messages"].append({"role": "system", "content": system})
+        payload["messages"].append({"role": "user", "content": prompt})
         if require_json:
             payload["format"] = "json"
 
-        # HTTP-запрос
+        req_timeout = aiohttp.ClientTimeout(total=timeout or self.config.timeout)
+
         try:
-            session = await self._get_session()
-            async with session.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    message = data.get("message", {})
-                    content = message.get("content", "")
-                    self.circuit_breaker.record_success()
-                    return content
-                else:
-                    error_text = await response.text()
-                    self.circuit_breaker.record_failure()
+            async with self._session.post(url, json=payload, timeout=req_timeout) as resp:
+                # HTTP-ошибки
+                if resp.status >= 400:
+                    body = await resp.text()
+                    self._breaker.record_failure()
                     raise LeyaLLMError(
-                        f"Ollama вернул статус {response.status}",
-                        context={"status": response.status, "body": error_text[:500]},
+                        f"LLM вернул HTTP {resp.status}",
+                        context={"status": resp.status, "body": body[:500]}
                     )
 
-        except asyncio.TimeoutError as exc:
-            self.circuit_breaker.record_failure()
+                # Парсинг JSON-ответа Ollama
+                try:
+                    data = await resp.json(content_type=None)
+                except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
+                    self._breaker.record_failure()
+                    raise LeyaJSONParseError(
+                        "Не удалось распарсить JSON-ответ от Ollama",
+                        context={"detail": str(e)}
+                    ) from e
+
+                message = data.get("message", {})
+                content = message.get("content", "")
+                if not content:
+                    self._breaker.record_failure()
+                    raise LeyaLLMError(
+                        "Пустой ответ от LLM",
+                        context={"data_keys": list(data.keys())}
+                    )
+
+                # Дополнительная проверка JSON, если требуется
+                if require_json:
+                    try:
+                        json.loads(content)
+                    except json.JSONDecodeError as e:
+                        self._breaker.record_failure()
+                        raise LeyaJSONParseError(
+                            "LLM вернул невалидный JSON в поле message.content",
+                            context={"content_preview": content[:200], "detail": str(e)}
+                        ) from e
+
+                self._breaker.record_success()
+                return content
+
+        # --- Конкретные исключения ---
+        except asyncio.TimeoutError as e:
+            self._breaker.record_failure()
             raise LeyaLLMTimeoutError(
-                f"Превышен таймаут {self.timeout}с",
-                context={"timeout": self.timeout},
-            ) from exc
+                "Таймаут запроса к LLM",
+                context={"timeout": req_timeout.total, "url": url}
+            ) from e
 
-        except aiohttp.ClientError as exc:
-            self.circuit_breaker.record_failure()
-            raise LeyaLLMUnavailableError(
-                "Ошибка подключения к Ollama",
-                context={"error": str(exc), "base_url": self.base_url},
-            ) from exc
+        except aiohttp.ClientError as e:
+            # Включает ClientConnectionError, ServerDisconnectedError, ClientPayloadError и т.д.
+            self._breaker.record_failure()
+            raise LeyaLLMConnectionError(
+                "Ошибка соединения с LLM",
+                context={"error_type": type(e).__name__, "detail": str(e), "url": url}
+            ) from e
 
-        except LeyaLLMError:
-            # Пробрасываем наши исключения
+        # Наши обёрнутые исключения — пробрасываем как есть
+        except (LeyaLLMError, LeyaJSONParseError):
             raise
 
-        except Exception as exc:
-            self.circuit_breaker.record_failure()
+        # Last-resort: неожиданная ошибка оборачивается с сохранением __cause__
+        except Exception as e:
+            logger.error(
+                f"Неожиданная ошибка в LLM client: {e}",
+                exc_info=True,
+                extra={"context": {"url": url, "model": self.config.model}}
+            )
+            self._breaker.record_failure()
             raise LeyaLLMError(
-                "Неожиданная ошибка вызова LLM",
-                context={"error": str(exc)},
-            ) from exc
+                f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
+                context={"error_type": type(e).__name__, "detail": str(e)}
+            ) from e
 
     async def __aenter__(self) -> OllamaClient:
         return self

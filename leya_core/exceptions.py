@@ -11,19 +11,17 @@ from __future__ import annotations
 
 
 class LeyaError(Exception):
-    """Базовое исключение для всех ошибок LeyaOS."""
-
-    def __init__(self, message: str, *, context: dict | None = None) -> None:
+    """Базовое исключение для всех ошибок системы Леи."""
+    def __init__(self, message: str, context: dict | None = None):
         super().__init__(message)
         self.message = message
         self.context = context or {}
 
     def __str__(self) -> str:
-        base = self.message
         if self.context:
             ctx = ", ".join(f"{k}={v!r}" for k, v in self.context.items())
-            return f"{base} [{ctx}]"
-        return base
+            return f"{self.message} [{ctx}]"
+        return self.message
 
 
 # --- Persistence ---
@@ -47,6 +45,11 @@ class LeyaAtomicWriteError(LeyaPersistenceError):
 class LeyaMemoryError(LeyaError):
     """Базовое исключение для ошибок памяти (ChromaDB, engrams, synapses)."""
 
+class LeyaAtomicWriteError(LeyaMemoryError):
+    """Ошибка атомарной записи состояния (OSError, JSON, HMAC)."""
+
+class LeyaMemoryLoadError(LeyaMemoryError):
+    """Ошибка загрузки состояния (повреждение, несовпадение HMAC, версия)."""
 
 class LeyaEmbeddingError(LeyaMemoryError):
     """Не удалось получить эмбеддинг (сбой sentence-transformers / to_thread)."""
@@ -60,6 +63,8 @@ class LeyaEngramNotFoundError(LeyaMemoryError):
 class LeyaLLMError(LeyaError):
     """Базовое исключение для ошибок взаимодействия с LLM."""
 
+class LeyaLLMConnectionError(LeyaLLMError):
+    """Ошибка сети/соединения с LLM (aiohttp.ClientError и подклассы)."""
 
 class LeyaLLMTimeoutError(LeyaLLMError):
     """Таймаут при обращении к Ollama."""
@@ -111,9 +116,15 @@ class LeyaInsightError(LeyaReflectionError):
 
 
 # --- Tools ---
+
+class LeyaShutdownError(LeyaError):
+    """Ошибка в процессе graceful shutdown."""
+
 class LeyaToolError(LeyaError):
     """Ошибка выполнения инструмента."""
 
+class LeyaConstitutionalViolation(LeyaError):
+    """Нарушение конституционального правила."""
 
 class LeyaToolNotFoundError(LeyaToolError):
     """Инструмент не найден в реестре."""
