@@ -155,37 +155,7 @@ class IMemorySystem(Protocol):
 
     async def consolidate_memories(self) -> dict[str, Any]: ...
 
-    async def update_self_model(self, reflection_text: str) -> None:
-        """
-        Обновляет само-модель на основе рефлексии.
-
-        Args:
-            reflection_text: Текст рефлексии/инсайта для добавления в self_model
-        """
-        if not reflection_text or not reflection_text.strip():
-            logger.warning("MemorySystem: Пустой reflection_text, обновление пропущено.")
-            return
-
-        timestamp = datetime.now().isoformat()
-        entry = f"[{timestamp}] {reflection_text.strip()}"
-
-        if self.self_model:
-            # Ограничиваем размер self_model (последние 50 записей)
-            lines = self.self_model.split("\n")
-            if len(lines) >= 50:
-                lines = lines[-49:]
-            lines.append(entry)
-            self.self_model = "\n".join(lines)
-        else:
-            self.self_model = entry
-
-        logger.info(f"MemorySystem: Self-model обновлён (+{len(reflection_text)} символов)")
-
-        # Сохранение состояния
-        try:
-            await self._save_state()
-        except Exception as exc:
-            logger.error(f"MemorySystem: Ошибка сохранения после update_self_model: {exc}")
+    async def get_self_model_context(self) -> str: ...
 
     async def get_self_model_context(self) -> str: ...
 
