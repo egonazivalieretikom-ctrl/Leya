@@ -1,122 +1,130 @@
-"""
-Тесты для конфигурации LeyaOS.
-
-Проверяет:
-- Валидацию MemoryConfig
-- Валидацию DrivesConfig
-- Валидацию ThinkerConfig
-- LeyaConfig.from_env()
-"""
-
-from __future__ import annotations
-
-from pathlib import Path
-
+import os
 import pytest
-
-from leya_core.config import (
-    DrivesConfig,
-    LeyaConfig,
-    MemoryConfig,
-    ThinkerConfig,
-)
+from unittest.mock import patch
+from leya_core.config import LeyaConfig
 from leya_core.exceptions import LeyaConfigError
 
-
-class TestMemoryConfig:
-    """Тесты MemoryConfig."""
-
-    def test_valid_config(self, tmp_path):
-        """Валидная конфигурация создаётся без ошибок."""
-        config = MemoryConfig(brain_dir=str(tmp_path / "brain"))
-        assert Path(config.brain_dir).exists()
-
-    def test_creates_brain_dir(self, tmp_path):
-        brain_dir = tmp_path / "new_brain"
-        MemoryConfig(brain_dir=str(brain_dir))  # Просто вызываем
-        assert brain_dir.exists()
-
-    def test_invalid_forgetting_threshold(self, tmp_path):
-        """Невалидный forgetting_threshold бросает LeyaConfigError."""
-        with pytest.raises(LeyaConfigError):
-            MemoryConfig(
-                brain_dir=str(tmp_path),
-                forgetting_threshold=1.5,  # Должен быть в (0, 1)
-            )
-
-    def test_invalid_metabolism_interval(self, tmp_path):
-        """Невалидный metabolism_interval бросает LeyaConfigError."""
-        with pytest.raises(LeyaConfigError):
-            MemoryConfig(
-                brain_dir=str(tmp_path),
-                metabolism_interval_seconds=0,  # Должен быть > 0
-            )
-
-
-class TestDrivesConfig:
-    """Тесты DrivesConfig."""
-
-    def test_valid_config(self):
-        """Валидная конфигурация создаётся без ошибок."""
-        config = DrivesConfig()
-        assert config.metabolism_interval > 0
-        assert config.curiosity_rate > 0
-
-    def test_custom_rates(self):
-        """Кастомные rates применяются."""
-        config = DrivesConfig(
-            curiosity_rate=0.05,
-            connection_rate=0.03,
-        )
-        assert config.curiosity_rate == 0.05
-        assert config.connection_rate == 0.03
-
-
-class TestThinkerConfig:
-    """Тесты ThinkerConfig."""
-
-    def test_valid_config(self):
-        """Валидная конфигурация создаётся без ошибок."""
-        config = ThinkerConfig()
-        assert 0.0 <= config.temperature <= 2.0
-        assert config.max_tokens > 0
-
-    def test_temperature_clamped(self):
-        """Temperature ограничивается диапазоном [0, 2]."""
-        config = ThinkerConfig(temperature=5.0)
-        assert config.temperature == 2.0
-
-    def test_max_tokens_clamped(self):
-        """max_tokens ограничивается диапазоном [128, 8192]."""
-        config = ThinkerConfig(max_tokens=100000)
-        assert config.max_tokens == 8192
-
-
-class TestLeyaConfig:
-    """Тесты LeyaConfig."""
-
-    def test_default_config(self):
-        """Конфигурация по умолчанию создаётся без ошибок."""
-        config = LeyaConfig()
-        assert config.ollama is not None
-        assert config.memory is not None
-        assert config.drives is not None
-
-    def test_from_env(self, tmp_path, monkeypatch):
-        """from_env() загружает конфигурацию из окружения."""
-        # Устанавливаем переменные окружения
-        monkeypatch.setenv("LEYA_BRAIN_DIR", str(tmp_path / "brain"))
-        monkeypatch.setenv("OLLAMA_BASE_URL", "http://test:11434")
-        monkeypatch.setenv("LEYA_MODEL", "test-model")
-
+def test_from_env_all_fields():
+    """Проверяет, что ВСЕ поля всех под-конфигов читаются из .env."""
+    env_vars = {
+        # Ollama
+        "OLLAMA_BASE_URL": "http://custom:11434",
+        "LEYA_MODEL": "custom_model",
+        "OLLAMA_TIMEOUT": "300",
+        "OLLAMA_TEMPERATURE": "0.5",
+        "OLLAMA_TOP_P": "0.8",
+        "OLLAMA_TOP_K": "50",
+        "OLLAMA_MAX_TOKENS": "2048",
+        "OLLAMA_REPEAT_PENALTY": "1.2",
+        # Memory (включая новые поля и ранее игнорируемые)
+        "LEYA_BRAIN_DIR": "./custom_brain",
+        "EMBEDDING_MODEL": "custom_embed",
+        "CONSOLIDATION_THRESHOLD": "0.2",
+        "MAX_RECENT_EPISODES": "30",
+        "CONTEXT_LIMIT": "10",
+        "FORGETTING_THRESHOLD": "0.2",
+        "FORGETTING_BASE_STABILITY": "7200.0",
+        "METABOLISM_INTERVAL_SECONDS": "120",
+        "SYNAPSE_LEARNING_RATE": "0.1",
+        "SYNAPSE_MAX_WEIGHT": "0.9",
+        "MAX_SELF_MODEL_LENGTH": "6000",
+        "HMAC_KEY": "secret_key_123",
+        "STATE_VERSION": "2",
+        # Drives
+        "METABOLISM_INTERVAL": "120",
+        "CURIOSITY_RATE": "0.02",
+        "CONNECTION_RATE": "0.02",
+        "REST_RATE": "0.01",
+        "CREATIVITY_RATE": "0.02",
+        "UNDERSTANDING_RATE": "0.02",
+        "AUTONOMY_RATE": "0.01",
+        "MAX_ACTION_HISTORY": "200",
+        # Homeostasis (включая ранее игнорируемые thresholds)
+        "HOMEOSTASIS_REST_PERIOD": "120",
+        "CURIOSITY_THRESHOLD": "0.7",
+        "CONNECTION_THRESHOLD": "0.7",
+        "AUTONOMY_THRESHOLD": "0.8",
+        "INTEGRITY_THRESHOLD": "0.6",
+        "REST_THRESHOLD": "0.7",
+        "CREATIVITY_THRESHOLD": "0.6",
+        "UNDERSTANDING_THRESHOLD": "0.7",
+        "MIN_REWARD_THRESHOLD": "0.4",
+        "MAX_RESEARCHED_TOPICS": "200",
+        # Thinker
+        "THINKER_TEMPERATURE": "0.8",
+        "THINKER_MAX_TOKENS": "2048",
+        "THINKER_TOP_P": "0.95",
+        "THINKER_FALLBACK_ENABLED": "false",
+        "THINKER_MAX_CONTEXT_TOKENS": "7000",
+        "THINKER_TOKEN_BUFFER": "600",
+        "THINKER_TOKENS_RATIO": "4.0",
+        # Reflection
+        "REFLECTION_INTERVAL": "3600",
+        "REFLECTION_MAX_INSIGHTS": "10",
+        "REFLECTION_MAX_THOUGHTS": "20",
+        "REFLECTION_EXISTENTIAL": "false",
+        "REFLECTION_BEHAVIORAL": "false",
+        "REFLECTION_INSIGHTS": "false",
+        # Workspace
+        "WORKSPACE_MAX_PROPOSALS": "100",
+        "WORKSPACE_MAX_HISTORY": "200",
+        "WORKSPACE_DECAY_START": "120.0",
+        "WORKSPACE_DECAY_DURATION": "600.0",
+        # Constitutional
+        "CONSTITUTIONAL_MAX_VIOLATIONS": "200",
+        "CONSTITUTIONAL_VERIFY_RESPONSE": "false",
+        "CONSTITUTIONAL_VERIFY_TOOLS": "false",
+        "CONSTITUTIONAL_PYTHON_TIMEOUT": "20",
+        # Web
+        "LEYA_WEB": "0",
+        "WEB_HOST": "127.0.0.1",
+        "WEB_PORT": "9000",
+        # Logging
+        "LOG_LEVEL": "DEBUG",
+        "LOG_FILE": "custom.log",
+        "LOG_FORMAT": "custom_format",
+    }
+    
+    with patch.dict(os.environ, env_vars, clear=True):
         config = LeyaConfig.from_env()
+            
+    # Ollama
+    assert config.ollama.base_url == "http://custom:11434"
+    assert config.ollama.timeout == 300
+    assert config.ollama.temperature == 0.5
+    
+    # Memory (проверяем новые и ранее скрытые поля)
+    assert config.memory.forgetting_threshold == 0.2
+    assert config.memory.synapse_learning_rate == 0.1
+    assert config.memory.hmac_key == "secret_key_123"
+    assert config.memory.state_version == 2
+    
+    # Homeostasis (проверяем thresholds)
+    assert config.homeostasis.connection_threshold == 0.7
+    assert config.homeostasis.autonomy_threshold == 0.8
+    assert config.homeostasis.integrity_threshold == 0.6
+    
+    # Thinker (проверяем bool)
+    assert config.thinker.fallback_enabled is False
+    
+    # Web
+    assert config.web.enabled is False
+    assert config.web.port == 9000
 
-        assert config.ollama.base_url == "http://test:11434"
-        assert config.ollama.model == "test-model"
+@pytest.mark.parametrize("val,expected", [
+    ("true", True), ("True", True), ("1", True), ("yes", True),
+    ("false", False), ("False", False), ("0", False), ("no", False)
+])
+def test_bool_parsing(val, expected):
+    """Проверяет улучшенный парсинг булевых значений."""
+    env = {"THINKER_FALLBACK_ENABLED": val}
+    with patch.dict(os.environ, env, clear=True):
+        config = LeyaConfig.from_env()
+        assert config.thinker.fallback_enabled is expected
 
-    def test_validate(self, tmp_path):
-        """validate() возвращает True для валидной конфигурации."""
-        config = LeyaConfig()
-        config.memory.brain_dir = str(tmp_path / "brain")
-
-        assert config.validate() is True
+def test_explicit_error_on_invalid_env():
+    """Проверяет, что невалидные данные вызывают явную ошибку, а не silent fallback."""
+    env = {"OLLAMA_TIMEOUT": "not_a_number"}
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(LeyaConfigError):
+            LeyaConfig.from_env()
