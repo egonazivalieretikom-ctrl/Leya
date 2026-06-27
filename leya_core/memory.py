@@ -426,7 +426,7 @@ class MemorySystem:
         candidates.sort(key=lambda e: e.timestamp, reverse=True)
         return candidates[:limit]
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> list[Engram]:
+    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
         """Получить недавние спонтанные мысли (помеченные в metadata)."""
         thoughts = [
             e

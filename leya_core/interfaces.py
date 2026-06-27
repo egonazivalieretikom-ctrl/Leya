@@ -148,60 +148,100 @@ class IMemorySystem(Protocol):
     ) -> Engram: ...
 
     async def retrieve_context(
-        self, query: str, max_results: int=5, min_retention: float=0.1
+    self, query: str, max_results: int = 5, min_retention: float = 0.1
     ) -> list[Engram]: ...
 
     async def store_fact(self, content: str, metadata: dict[str, Any] | None=None) -> Engram: ...
 
-    async def consolidate_memories(self) -> None: ...
+    async def consolidate_memories(self) -> dict[str, Any]: ...
 
-    async def update_self_model(self, reflection_text: str) -> None: ...
+    async def update_self_model(self, reflection_text: str) -> None:
+        """
+        Обновляет само-модель на основе рефлексии.
+
+        Args:
+            reflection_text: Текст рефлексии/инсайта для добавления в self_model
+        """
+        if not reflection_text or not reflection_text.strip():
+            logger.warning("MemorySystem: Пустой reflection_text, обновление пропущено.")
+            return
+
+        timestamp = datetime.now().isoformat()
+        entry = f"[{timestamp}] {reflection_text.strip()}"
+
+        if self.self_model:
+            # Ограничиваем размер self_model (последние 50 записей)
+            lines = self.self_model.split("\n")
+            if len(lines) >= 50:
+                lines = lines[-49:]
+            lines.append(entry)
+            self.self_model = "\n".join(lines)
+        else:
+            self.self_model = entry
+
+        logger.info(f"MemorySystem: Self-model обновлён (+{len(reflection_text)} символов)")
+
+        # Сохранение состояния
+        try:
+            await self._save_state()
+        except Exception as exc:
+            logger.error(f"MemorySystem: Ошибка сохранения после update_self_model: {exc}")
 
     async def get_self_model_context(self) -> str: ...
 
-    async def get_recent_spontaneous_thoughts(self, limit: int=10) -> list[Engram]: ...
+    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]: ...
 
     async def get_recent_episodes(self, limit: int=10) -> list[Engram]: ...
 
-    async def forget_weak_memories(self, threshold: float=0.1) -> int:
+    async def forget_weak_memories(self, threshold: float = 0.1) -> int:
         """
-        Забывает слабые воспоминания.
+        Удаляет энграммы с retention_strength ниже порога.
 
         Args:
             threshold: Порог retention_strength
 
         Returns:
-            Количество забытых воспоминаний
+            Количество удалённых энграмм
         """
         ...
 
     async def get_memory_graph_data(
         self,
-        min_retention: float=0.1,
-        max_nodes: int=100,
-        include_synapses: bool=True,
+        min_retention: float = 0.1,
+        max_nodes: int = 100,
+        include_synapses: bool = True,
     ) -> dict[str, Any]:
         """
         Возвращает данные для визуализации графа памяти.
-        Вся логика фильтрации, сортировки и построения nodes/edges
-        инкапсулирована здесь.
 
         Args:
-            min_retention: минимальный retention_strength для включения
-            max_nodes: максимальное количество узлов
-            include_synapses: включать ли рёбра (synapses)
+            min_retention: Минимальный retention_strength для включения узла
+            max_nodes: Максимальное количество узлов в графе
+            include_synapses: Включать ли рёбра (synapses)
 
         Returns:
-            dict с ключами:
-            "nodes": list[dict] — узлы графа
-            "edges": list[dict] — рёбра графа
-            "total_engrams": int
-            "total_synapses": int
+            {
+                "nodes": list[dict],
+                "edges": list[dict],
+                "total_engrams": int,
+                "total_synapses": int,
+            }
         """
         ...
 
-    async def _save_state(self) -> None: ...
-    async def _load_state(self) -> None: ...
+    async def _save_state(self) -> None:
+        """
+        Атомарное сохранение состояния памяти (engrams, synapses, self_model)
+        в JSON с HMAC-подписью.
+        """
+        ...
+
+    async def _load_state(self) -> None:
+        """
+        Загрузка состояния памяти из JSON с проверкой HMAC и версии.
+        При отсутствии файла — инициализация пустого состояния.
+        """
+        ...
 
 
 # =============================================================================

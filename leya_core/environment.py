@@ -63,32 +63,93 @@ class Tool:
 
 
 class BaseEnvironment(ABC):
-    """Базовый интерфейс окружения. Все broadcast-методы должны быть явно реализованы."""
+    """
+    Базовый абстрактный класс окружения Леи.
+
+    Определяет контракт для всех реализаций (Web, CLI, Voice и т.д.).
+    Broadcast-методы в базовом классе являются no-op с явным логированием —
+    это позволяет запускать систему без полноценного UI для тестирования,
+    при этом в логах видно, какие данные не были доставлены.
+
+    Реализации (WebEnvironment, CLIEnvironment) ДОЛЖНЫ переопределять
+    broadcast-методы для реальной доставки данных клиенту.
+    """
 
     @abstractmethod
-    async def listen(self) -> None: ...
-    
+    async def listen(self) -> None:
+        """Слушает внешние стимулы (пользователь, события)."""
+        ...
+
     @abstractmethod
-    async def send_message(self, text: str) -> None: ...
+    async def send_message(self, text: str) -> None:
+        """Отправляет финальный ответ Леи во внешний мир."""
+        ...
 
     def broadcast_thought(self, thought_type: str, content: str) -> None:
-        """Базовая заглушка. Переопределите в WebEnvironment/CLIEnvironment."""
-        logger.warning(f"[No-Op] broadcast_thought({thought_type}) вызван, но не реализован в этом окружении.")
+        """
+        Транслирует внутреннюю мысль Леи (спонтанная, рефлексия, workspace).
+
+        No-op в базовом классе. Переопределите в WebEnvironment/CLIEnvironment.
+        """
+        logger.debug(
+            f"[Environment No-Op] broadcast_thought(type={thought_type!r}, "
+            f"len={len(content)}) — не реализовано в {type(self).__name__}"
+        )
 
     def update_drives(self, drive_state: dict[str, float]) -> None:
-        logger.warning(f"[No-Op] update_drives() вызван. Окружение не поддерживает визуализацию драйвов.")
+        """
+        Транслирует текущее состояние драйвов в UI.
+
+        No-op в базовом классе. Переопределите для визуализации драйвов.
+        """
+        logger.debug(
+            f"[Environment No-Op] update_drives({len(drive_state)} drives) — "
+            f"не реализовано в {type(self).__name__}"
+        )
 
     def update_self_model(self, model_text: str) -> None:
-        logger.warning(f"[No-Op] update_self_model() вызван. Данные утеряны в данном окружении.")
+        """
+        Транслирует обновлённую само-модель Леи.
+
+        No-op в базовом классе. Данные будут утеряны, если не переопределено.
+        """
+        logger.debug(
+            f"[Environment No-Op] update_self_model(len={len(model_text)}) — "
+            f"не реализовано в {type(self).__name__}"
+        )
 
     def broadcast_state(self, state: dict[str, Any]) -> None:
-        logger.debug(f"[No-Op] broadcast_state() проигнорирован.")
-        
+        """
+        Транслирует полное состояние системы (для dashboard).
+
+        No-op в базовом классе.
+        """
+        logger.debug(
+            f"[Environment No-Op] broadcast_state(keys={list(state.keys())}) — "
+            f"не реализовано в {type(self).__name__}"
+        )
+
     def update_memory(self, memory_info: dict[str, Any]) -> None:
-        logger.warning(f"[No-Op] update_memory() проигнорирован.")
-        
+        """
+        Транслирует информацию о памяти (новые энграммы, консолидация).
+
+        No-op в базовом классе.
+        """
+        logger.debug(
+            f"[Environment No-Op] update_memory(keys={list(memory_info.keys())}) — "
+            f"не реализовано в {type(self).__name__}"
+        )
+
     def broadcast_soul_update(self, soul_files: list[str]) -> None:
-        logger.warning(f"[No-Op] broadcast_soul_update() проигнорирован.")
+        """
+        Транслирует обновление файлов души (personality, rules, values).
+
+        No-op в базовом классе.
+        """
+        logger.debug(
+            f"[Environment No-Op] broadcast_soul_update({len(soul_files)} files) — "
+            f"не реализовано в {type(self).__name__}"
+        )
 
 
 class ToolRegistry:
