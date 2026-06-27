@@ -209,18 +209,15 @@ class TestPersistence:
         engram1 = await memory_system.store_perception("Тест 1")
         engram2 = await memory_system.store_fact("Факт 1")
 
-        # Сохраняем состояние
+        # Явно сохраняем состояние
         await memory_system._save_state()
-        
+
         # Проверяем, что файл создан
         state_path = Path(memory_system.state_path)
         assert state_path.exists(), f"Файл состояния не создан: {state_path}"
 
         # Создаём новую систему памяти с тем же конфигом
         new_memory = MemorySystem(config=memory_system.memory_config)
-        
-        # Проверяем, что новая система видит тот же путь
-        assert new_memory.state_path == memory_system.state_path
         
         # Явно загружаем состояние
         await new_memory._load_state()

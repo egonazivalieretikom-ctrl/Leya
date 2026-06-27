@@ -394,9 +394,12 @@ class IHomeostasisEngine(Protocol):
     """
     Интерфейс движка гомеостаза.
     Реализация: leya_core.homeostasis_engine.HomeostasisEngine
+
+    Автономная генерация целей на основе дисбаланса драйвов,
+    предсказанного состояния и недавних эпизодов.
     """
-    
-    # Атрибуты состояния (обычные поля, не @property)
+
+    # Атрибуты состояния (в реализации это обычные поля экземпляра, а не @property)
     current_goal: dict[str, Any] | None
     last_action_time: float
 
@@ -404,10 +407,21 @@ class IHomeostasisEngine(Protocol):
         self,
         drive_state: dict[str, float],
         predicted_state: dict[str, float] | None = None,
-        recent_episodes: list[Any] | None = None,  # Исправлено: list[Any] вместо list[dict[str, Any]]
+        recent_episodes: list[Any] | None = None,  # ИСПРАВЛЕНО: list[Any] вместо list[dict[str, Any]]
         action_values: dict[str, float] | None = None,
     ) -> dict[str, Any] | None:
-        """Генерирует цель на основе дисбаланса драйвов."""
+        """
+        Генерирует цель на основе дисбаланса драйвов.
+
+        Args:
+            drive_state: Текущее состояние драйвов
+            predicted_state: Предсказанное состояние
+            recent_episodes: Недавние эпизоды
+            action_values: Ценности действий
+
+        Returns:
+            dict с информацией о цели или None
+        """
         ...
 
     async def generate_goal_from_gap(
@@ -415,11 +429,35 @@ class IHomeostasisEngine(Protocol):
         gap: dict[str, float],
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Генерирует цель на основе разрыва (gap)."""
+        """
+        Генерирует цель на основе разрыва (gap) между текущим и желаемым состоянием.
+
+        Args:
+            gap: Разрыв между состояниями
+            context: Дополнительный контекст
+
+        Returns:
+            dict с информацией о цели или None
+        """
         ...
 
-    def mark_as_researched(self, topic: str) -> None: ...
-    def add_dynamic_keywords(self, keywords: list[str]) -> None: ...
+    def mark_as_researched(self, topic: str) -> None:
+        """
+        Отмечает тему как исследованную.
+
+        Args:
+            topic: Тема для отметки
+        """
+        ...
+
+    def add_dynamic_keywords(self, keywords: list[str]) -> None:
+        """
+        Добавляет динамические ключевые слова для поиска.
+
+        Args:
+            keywords: Список ключевых слов
+        """
+        ...
 
     @property
     def rest_period(self) -> float:

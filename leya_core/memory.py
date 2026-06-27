@@ -852,20 +852,13 @@ class MemorySystem:
 
     async def _save_state(self) -> None:
         """
-        Атомарное сохранение состояния памяти в JSON формате с HMAC-подписью.
+        Атомарное сохранение состояния памяти с HMAC-подписью.
         
-        Миграция с pickle на JSON (Этап 3.1):
-        - Безопасность: нет arbitrary code execution
-        - Читаемость: JSON можно открыть и проверить вручную
-        - Миграция: легче изменять структуру данных
-        
-        Формат: {'__version__': N, 'data': {'engrams': {...}, 'synapses': {...}, 'self_model': str}}
+        Формат: pickle (для совместимости с текущей реализацией).
+        Путь: memory_state.pkl (или .json, если изменён в __init__).
         """
         state_path = Path(self.state_path).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Изменяем расширение на .json
-        json_state_path = state_path.with_suffix('.json')
 
         payload = {
             "__version__": MEMORY_STATE_VERSION,
@@ -878,79 +871,55 @@ class MemorySystem:
 
         # Временный файл в той же ФС для атомарности os.replace
         fd, tmp_path_str = tempfile.mkstemp(
-            prefix=json_state_path.name + ".",
+            prefix=state_path.name + ".",
             suffix=".tmp",
-            dir=str(json_state_path.parent),
+            dir=str(state_path.parent),
         )
         tmp_path = Path(tmp_path_str)
 
         try:
-            # Запись JSON с красивым форматированием
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+            # Определяем формат по расширению
+            if state_path.suffix == ".json":
+                import json
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            else:
+                with os.fdopen(fd, "wb") as f:
+                    pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
             # HMAC-подпись
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
-            hmac_path = json_state_path.with_suffix(json_state_path.suffix + ".hmac")
+            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
             # Атомарная замена
             try:
-                os.replace(tmp_path, json_state_path)
-                
-                # Удаление старого pickle-файла (если существует)
-                if state_path.exists():
-                    with contextlib.suppress(OSError):
-                        state_path.unlink()
-                    # Удаление старого HMAC для pickle
-                    old_hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
-                    if old_hmac_path.exists():
-                        with contextlib.suppress(OSError):
-                            old_hmac_path.unlink()
-                            
+                os.replace(tmp_path, state_path)
             except OSError as exc:
                 raise LeyaAtomicWriteError(
                     "Атомарная замена memory_state не удалась",
-                    context={"path": str(json_state_path), "error": str(exc)},
+                    context={"path": str(state_path), "error": str(exc)},
                 ) from exc
         except LeyaMemoryError:
             raise
         except Exception as exc:
             raise LeyaMemoryError(
                 "Сбой при сохранении состояния памяти",
-                context={"path": str(json_state_path), "error": str(exc)},
+                context={"path": str(state_path), "error": str(exc)},
             ) from exc
         finally:
             if tmp_path.exists():
                 with contextlib.suppress(OSError):
                     tmp_path.unlink()
 
-        # Обновляем state_path для последующих операций
-        self.state_path = json_state_path
-
     async def _load_state(self) -> None:
         """
         Загрузка состояния памяти с проверкой HMAC и версии.
-        
-        Поддерживает миграцию с pickle (версия 2) на JSON (версия 3).
-        Если файл отсутствует — инициализирует пустые структуры.
+        Поддерживает как pickle, так и JSON формат.
         """
-        # Пробуем загрузить JSON (новая версия)
-        json_state_path = Path(self.state_path).with_suffix('.json').expanduser().resolve()
-        pickle_state_path = Path(self.state_path).expanduser().resolve()
-        
-        state_path = None
-        is_pickle = False
-        
-        if json_state_path.exists():
-            state_path = json_state_path
-            is_pickle = False
-        elif pickle_state_path.exists():
-            state_path = pickle_state_path
-            is_pickle = True
-        else:
-            # Файл отсутствует — инициализируем пустые структуры
+        state_path = Path(self.state_path).expanduser().resolve()
+        if not state_path.exists():
             self.engrams = {}
             self.synapses = {}
             self.self_model = ""
@@ -976,14 +945,13 @@ class MemorySystem:
 
         # Десериализация
         try:
-            if is_pickle:
-                # Загрузка из pickle (старая версия)
-                with state_path.open("rb") as f:
-                    raw = pickle.load(f)
-            else:
-                # Загрузка из JSON (новая версия)
+            if state_path.suffix == ".json":
+                import json
                 with state_path.open("r", encoding="utf-8") as f:
                     raw = json.load(f)
+            else:
+                with state_path.open("rb") as f:
+                    raw = pickle.load(f)
         except (pickle.PickleError, EOFError, ValueError, json.JSONDecodeError) as exc:
             raise LeyaStateCorruptedError(
                 "Повреждён memory_state",
@@ -991,7 +959,7 @@ class MemorySystem:
             ) from exc
 
         # Проверка версии
-        if not isinstance(raw, dict) or raw.get("__version__") not in (2, 3):
+        if not isinstance(raw, dict) or raw.get("__version__") != MEMORY_STATE_VERSION:
             raise LeyaStateVersionMismatchError(
                 "Несовместимая версия memory_state",
                 context={
@@ -1003,29 +971,13 @@ class MemorySystem:
 
         # Восстановление состояния
         data = raw.get("data", {})
-
-        # Восстановление энграмм
         self.engrams = {k: Engram.from_dict(v) for k, v in data.get("engrams", {}).items()}
-
-        # Восстановление синапсов
         self.synapses = {k: Synapse.from_dict(v) for k, v in data.get("synapses", {}).items()}
-
-        # Восстановление само-модели
         self.self_model = data.get("self_model", "")
 
-        # Обновляем state_path
-        self.state_path = state_path
-
         logger.info(
-            f"Состояние памяти загружено ({'pickle' if is_pickle else 'JSON'}): "
-            f"{len(self.engrams)} энграмм, {len(self.synapses)} синапсов"
+            f"Состояние памяти загружено: {len(self.engrams)} энграмм, {len(self.synapses)} синапсов"
         )
-        
-        # Если загрузили из pickle, конвертируем в JSON
-        if is_pickle:
-            logger.info("Миграция состояния памяти с pickle на JSON...")
-            await self._save_state()
-            logger.info("Миграция завершена успешно")
 
     def _compute_hmac(self, path: Path, key: bytes) -> str:
         """
