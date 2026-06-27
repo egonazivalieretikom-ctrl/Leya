@@ -19,10 +19,12 @@ import asyncio
 import contextlib
 import hashlib
 import hmac
+import json
 import logging
 import math
 import os
 import pickle
+import re 
 import tempfile
 import time
 import uuid
@@ -47,7 +49,7 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 # Версия формата состояния памяти (инкрементировать при несовместимых изменениях)
-MEMORY_STATE_VERSION: int = 2
+MEMORY_STATE_VERSION: int = 3
 
 
 # ============================================================================
@@ -334,7 +336,7 @@ class MemorySystem:
         query: str,
         max_results: int = 5,
         min_retention: float = 0.1,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Engram]:
         """
         Извлечь релевантный контекст из памяти.
 
@@ -453,14 +455,61 @@ class MemorySystem:
 
         # Обновляем текущую само-модель (конкатенация с ограничением длины)
         max_length = self.memory_config.max_self_model_length
-        if len(self.self_model) + len(reflection) > max_length:
-            # Обрезаем старую часть
-            self.self_model = self.self_model[-(max_length - len(reflection)) :] + reflection
-        else:
-            self.self_model += f"\n{reflection}"
+        
+        # Если новая рефлексия уже превышает лимит, обрезаем её
+        if len(reflection) > max_length:
+            reflection = reflection[:max_length]
+        
+        # Конкатенация с проверкой общей длины
+        new_self_model = f"{self.self_model}\n{reflection}".strip() if self.self_model else reflection
+        
+        # Явное ограничение длины
+        if len(new_self_model) > max_length:
+            new_self_model = new_self_model[-max_length:]
+        
+        self.self_model = new_self_model
 
         await self._save_state()
         logger.debug(f"Само-модель обновлена (+{len(reflection)} символов)")
+
+    def _extract_key_topics(self, text: str) -> list[str]:
+        """
+        Извлечение ключевых тем из текста для гранулярного обновления Self-Model.
+        
+        Использует простые эвристики:
+        - Ключевые слова о личности, эмоциях, целях
+        - Частотные существительные
+        
+        Returns:
+            Список ключевых тем (до 5)
+        """
+        text_lower = text.lower()
+        
+        # Ключевые темы и их маркеры
+        topic_markers = {
+            "любопытство": ["любопыт", "интерес", "исслед", "узна", "почем", "зачем"],
+            "эмпатия": ["чувств", "эмпати", "сопережив", "понимаю друг", "сочувств"],
+            "автономия": ["независим", "самостоятельн", "автономи", "свой выбор"],
+            "творчество": ["творч", "креатив", "создаю", "генерирую", "придумыва"],
+            "обучение": ["учусь", "обуча", "развива", "улучшаю", "расту"],
+            "память": ["помню", "забыва", "воспомин", "память", "храню"],
+            "рефлексия": ["думаю о себе", "анализирую", "осознаю", "рефлекс"],
+        }
+        
+        detected_topics = []
+        for topic, markers in topic_markers.items():
+            if any(marker in text_lower for marker in markers):
+                detected_topics.append(topic)
+        
+        # Если не нашли маркеров, используем частотные слова
+        if not detected_topics:
+            # Простая эвристика: слова длиной > 5 символов
+            words = re.findall(r'\b[а-яА-ЯёЁ]{6,}\b', text)
+            # Уникальные слова (до 3)
+            unique_words = list(set(words))[:3]
+            detected_topics = unique_words
+        
+        return detected_topics[:5]  # Макс 5 тем
 
     async def get_self_model_context(self) -> str:
         """Получить текущую само-модель для включения в промпт."""
@@ -803,12 +852,20 @@ class MemorySystem:
 
     async def _save_state(self) -> None:
         """
-        Атомарное сохранение состояния памяти с HMAC-подписью.
-
+        Атомарное сохранение состояния памяти в JSON формате с HMAC-подписью.
+        
+        Миграция с pickle на JSON (Этап 3.1):
+        - Безопасность: нет arbitrary code execution
+        - Читаемость: JSON можно открыть и проверить вручную
+        - Миграция: легче изменять структуру данных
+        
         Формат: {'__version__': N, 'data': {'engrams': {...}, 'synapses': {...}, 'self_model': str}}
         """
         state_path = Path(self.state_path).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Изменяем расширение на .json
+        json_state_path = state_path.with_suffix('.json')
 
         payload = {
             "__version__": MEMORY_STATE_VERSION,
@@ -821,51 +878,79 @@ class MemorySystem:
 
         # Временный файл в той же ФС для атомарности os.replace
         fd, tmp_path_str = tempfile.mkstemp(
-            prefix=state_path.name + ".",
+            prefix=json_state_path.name + ".",
             suffix=".tmp",
-            dir=str(state_path.parent),
+            dir=str(json_state_path.parent),
         )
         tmp_path = Path(tmp_path_str)
 
         try:
-            with os.fdopen(fd, "wb") as f:
-                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            # Запись JSON с красивым форматированием
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
 
             # HMAC-подпись
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
-            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+            hmac_path = json_state_path.with_suffix(json_state_path.suffix + ".hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
             # Атомарная замена
             try:
-                os.replace(tmp_path, state_path)
+                os.replace(tmp_path, json_state_path)
+                
+                # Удаление старого pickle-файла (если существует)
+                if state_path.exists():
+                    with contextlib.suppress(OSError):
+                        state_path.unlink()
+                    # Удаление старого HMAC для pickle
+                    old_hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+                    if old_hmac_path.exists():
+                        with contextlib.suppress(OSError):
+                            old_hmac_path.unlink()
+                            
             except OSError as exc:
                 raise LeyaAtomicWriteError(
                     "Атомарная замена memory_state не удалась",
-                    context={"path": str(state_path), "error": str(exc)},
+                    context={"path": str(json_state_path), "error": str(exc)},
                 ) from exc
         except LeyaMemoryError:
             raise
         except Exception as exc:
             raise LeyaMemoryError(
                 "Сбой при сохранении состояния памяти",
-                context={"path": str(state_path), "error": str(exc)},
+                context={"path": str(json_state_path), "error": str(exc)},
             ) from exc
-
         finally:
             if tmp_path.exists():
                 with contextlib.suppress(OSError):
                     tmp_path.unlink()
 
+        # Обновляем state_path для последующих операций
+        self.state_path = json_state_path
+
     async def _load_state(self) -> None:
         """
         Загрузка состояния памяти с проверкой HMAC и версии.
-
+        
+        Поддерживает миграцию с pickle (версия 2) на JSON (версия 3).
         Если файл отсутствует — инициализирует пустые структуры.
         """
-        state_path = Path(self.state_path).expanduser().resolve()
-        if not state_path.exists():
+        # Пробуем загрузить JSON (новая версия)
+        json_state_path = Path(self.state_path).with_suffix('.json').expanduser().resolve()
+        pickle_state_path = Path(self.state_path).expanduser().resolve()
+        
+        state_path = None
+        is_pickle = False
+        
+        if json_state_path.exists():
+            state_path = json_state_path
+            is_pickle = False
+        elif pickle_state_path.exists():
+            state_path = pickle_state_path
+            is_pickle = True
+        else:
+            # Файл отсутствует — инициализируем пустые структуры
             self.engrams = {}
             self.synapses = {}
             self.self_model = ""
@@ -891,16 +976,22 @@ class MemorySystem:
 
         # Десериализация
         try:
-            with state_path.open("rb") as f:
-                raw = pickle.load(f)
-        except (pickle.PickleError, EOFError, ValueError) as exc:
+            if is_pickle:
+                # Загрузка из pickle (старая версия)
+                with state_path.open("rb") as f:
+                    raw = pickle.load(f)
+            else:
+                # Загрузка из JSON (новая версия)
+                with state_path.open("r", encoding="utf-8") as f:
+                    raw = json.load(f)
+        except (pickle.PickleError, EOFError, ValueError, json.JSONDecodeError) as exc:
             raise LeyaStateCorruptedError(
-                "Повреждён memory_state.pkl",
+                "Повреждён memory_state",
                 context={"path": str(state_path), "error": str(exc)},
             ) from exc
 
         # Проверка версии
-        if not isinstance(raw, dict) or raw.get("__version__") != MEMORY_STATE_VERSION:
+        if not isinstance(raw, dict) or raw.get("__version__") not in (2, 3):
             raise LeyaStateVersionMismatchError(
                 "Несовместимая версия memory_state",
                 context={
@@ -922,21 +1013,43 @@ class MemorySystem:
         # Восстановление само-модели
         self.self_model = data.get("self_model", "")
 
-        logger.info(
-            f"Состояние памяти загружено: {len(self.engrams)} энграмм, {len(self.synapses)} синапсов"
-        )
+        # Обновляем state_path
+        self.state_path = state_path
 
-    def _get_hmac_key(self) -> bytes:
-        """Получение ключа HMAC из окружения или fallback."""
-        key = os.environ.get("LEYA_STATE_HMAC_KEY")
-        if key:
-            return key.encode("utf-8")
-        return b"leya-dev-key-change-me-in-production"
+        logger.info(
+            f"Состояние памяти загружено ({'pickle' if is_pickle else 'JSON'}): "
+            f"{len(self.engrams)} энграмм, {len(self.synapses)} синапсов"
+        )
+        
+        # Если загрузили из pickle, конвертируем в JSON
+        if is_pickle:
+            logger.info("Миграция состояния памяти с pickle на JSON...")
+            await self._save_state()
+            logger.info("Миграция завершена успешно")
 
     def _compute_hmac(self, path: Path, key: bytes) -> str:
-        """Вычисление HMAC-SHA256 для файла."""
+        """
+        Вычисление HMAC-SHA256 для файла.
+        
+        Примечание: Файл всегда открывается в бинарном режиме ("rb"), 
+        чтобы избежать проблем с хешем из-за конвертации переносов строк 
+        (CRLF/LF) между разными ОС при работе с текстовыми (JSON) файлами.
+        """
         h = hmac.new(key, digestmod=hashlib.sha256)
         with path.open("rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 h.update(chunk)
         return h.hexdigest()
+
+    def _get_hmac_key(self) -> bytes:
+        """
+        Получение ключа HMAC из окружения или fallback.
+        
+        Returns:
+            Ключ HMAC в виде bytes
+        """
+        key = os.environ.get("LEYA_STATE_HMAC_KEY")
+        if key:
+            return key.encode("utf-8")
+        # Fallback для разработки (в production должен быть установлен через .env)
+        return b"leya-dev-key-change-me-in-production"

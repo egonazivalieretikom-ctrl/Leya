@@ -187,17 +187,22 @@ class LeyaOS:
             self.tools_description = ""
 
         # Генератор инструментов
-        try:
-            self.tool_generator = ToolGenerator(
-                tool_registry=self.env.tool_registry,
-                llm_client=self._llm_call,
-            )
-        except LeyaToolError as exc:
-            logger.warning(f"Не удалось инициализировать ToolGenerator: {exc}")
-            self.tool_generator = None
-        except Exception as exc:
-            logger.error(f"Неожиданная ошибка ToolGenerator: {exc}", exc_info=True)
-            self.tool_generator = None
+        self.tool_generator = None
+        if hasattr(self.env, "tool_registry") and self.env.tool_registry is not None:
+            try:
+                self.tool_generator = ToolGenerator(
+                    tool_registry=self.env.tool_registry,
+                    llm_client=self._llm_call,
+                )
+                logger.info("ToolGenerator инициализирован успешно")
+            except LeyaToolError as exc:
+                logger.warning(f"Не удалось инициализировать ToolGenerator: {exc}")
+                self.tool_generator = None
+            except Exception as exc:
+                logger.error(f"Неожиданная ошибка ToolGenerator: {exc}", exc_info=True)
+                self.tool_generator = None
+        else:
+            logger.warning("tool_registry недоступен, ToolGenerator не будет инициализирован")
 
         # Состояние
         self.self_model = ""
@@ -286,6 +291,7 @@ class LeyaOS:
             self.env.soul_manager, "update_secret_key"
         ):
             try:
+                # ИСПРАВЛЕНИЕ: Унификация ключей drive_state — используем строки
                 leya_state = {
                     "self_model": self.self_model[:500] if self.self_model else "",
                     "drives": {d.type.value: d.current for d in self.drives.drives.values()},
@@ -493,6 +499,11 @@ class LeyaOS:
         """
         tool_context = ""
 
+        # ИСПРАВЛЕНИЕ: Проверка наличия tool_registry перед использованием
+        if not hasattr(self.env, "tool_registry") or self.env.tool_registry is None:
+            logger.warning("tool_registry недоступен, пропускаем обработку инструмента")
+            return tool_context
+
         # Проверка необходимости поиска
         search_keywords = [
             "найди",
@@ -578,7 +589,9 @@ class LeyaOS:
             try:
                 # Извлечение контекста из памяти
                 stimulus_content = stimulus.get("content", "")
-                memory_context = await self.memory.retrieve_context(query=stimulus_content, max_results=5)
+                memory_context = await self.memory.retrieve_context(
+                    query=stimulus_content, max_results=5
+                )
 
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 self_model_dict = {"self_model": self.self_model}
@@ -697,6 +710,11 @@ class LeyaOS:
         """
         import json
 
+        # ИСПРАВЛЕНИЕ: Проверка наличия tool_registry перед использованием
+        if not hasattr(self.env, "tool_registry") or self.env.tool_registry is None:
+            logger.warning("tool_registry недоступен, невозможно выполнить инструмент")
+            return
+
         try:
             tool_data = json.loads(tool_call) if isinstance(tool_call, str) else tool_call
             tool_name = tool_data.get("tool", "")
@@ -745,7 +763,9 @@ class LeyaOS:
             try:
                 await asyncio.sleep(self.config.homeostasis.rest_period)
 
-                drive_state = {d.type: d.current for d in self.drives.drives.values()}
+                # ИСПРАВЛЕНИЕ: Унификация ключей drive_state — используем строки (d.type.value)
+                # для согласованности с HomeostasisEngine и другими частями системы
+                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 predicted_state = self.drives.get_predicted_disbalance()
                 recent_episodes = await self.memory.get_recent_episodes(limit=5)
 
@@ -784,15 +804,36 @@ class LeyaOS:
                 await asyncio.sleep(10)
 
     async def _workspace_loop(self) -> None:
-        """Фоновый цикл Global Workspace."""
+        """
+        Фоновый цикл Global Workspace.
+        
+        МЕХАНИЗМ ТОРМОЖЕНИЯ (Inhibition):
+        Если идёт активный диалог с пользователем (менее 30 секунд с последнего взаимодействия),
+        внутренние proposals от homeostasis получают понижение приоритета,
+        чтобы не перебивать активный когнитивный цикл.
+        """
         logger.info("Workspace loop запущен.")
         while self.running:
             try:
                 await asyncio.sleep(5)
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-                winner = self.workspace.select_winner(drive_state)
+                
+                # МЕХАНИЗМ ТОРМОЖЕНИЯ: проверка времени последнего взаимодействия
+                time_since_interaction = datetime.now().timestamp() - self._last_interaction_time
+                active_dialogue = time_since_interaction < 30.0  # 30 секунд
+                
+                # Передаём флаг активного диалога в select_winner
+                winner = self.workspace.select_winner(drive_state, inhibit_internal=active_dialogue)
 
                 if winner:
+                    # Если это внутренняя proposal и идёт активный диалог, логируем торможение
+                    if active_dialogue and winner.source in ("homeostasis", "meta_cognition"):
+                        logger.debug(
+                            f"Workspace: Внутренняя proposal от {winner.source} "
+                            f"тормозится из-за активного диалога "
+                            f"(содержание: {winner.content[:50]}...)"
+                        )
+                    
                     await self.perceive(
                         {
                             "type": "workspace_focus",

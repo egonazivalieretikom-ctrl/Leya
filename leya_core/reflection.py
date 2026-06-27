@@ -97,8 +97,6 @@ class MetaCognition:
     async def background_consolidation(self) -> None:
         """
         ГЛАВНЫЙ ФОНОВЫЙ ПРОЦЕСС. Аналог сна и медитации.
-
-        Защита от падения: обёрнут в try/except с автоматическим рестартом.
         """
         logger.info("MetaCognition: Фоновый цикл саморефлексии запущен.")
 
@@ -121,7 +119,8 @@ class MetaCognition:
                     # 1.5. ГЕНЕРАЦИЯ НОВЫХ ИНСТРУМЕНТОВ
                     if hasattr(self.leya, "tool_generator") and self.leya.tool_generator:
                         try:
-                            recent_episodes = await self.leya._get_recent_episodes(limit=20)
+                            # ИСПРАВЛЕНИЕ: Используем публичный API памяти вместо приватного метода LeyaOS
+                            recent_episodes = await self.leya.memory.get_recent_episodes(limit=20)
                             drive_state = {
                                 d.type.value: d.current for d in self.leya.drives.drives.values()
                             }
@@ -181,7 +180,7 @@ class MetaCognition:
                 logger.error(
                     f"MetaCognition: Критическая ошибка в фоновом цикле: {exc}", exc_info=True
                 )
-                await asyncio.sleep(60)  # Пауза перед рестартом
+                await asyncio.sleep(60)
 
     async def _analyze_behavioral_patterns(self) -> None:
         """
@@ -538,34 +537,19 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
 
     def _safe_parse_json(self, response: str) -> dict[str, Any]:
         """
-        Безопасный парсинг JSON с учётом markdown-блоков LLM.
-
+        Безопасный парсинг JSON с использованием repair_json из thinker.
+        Устраняет дублирование логики очистки markdown и поиска JSON-блоков (DRY).
+        
         Raises:
             LeyaJSONParseError: если не удалось распарсить
         """
         if not response:
             return {}
 
-        # Очистка от markdown
-        cleaned = response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        # Поиск JSON-блока
-        json_match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(0))
-            except json.JSONDecodeError:
-                pass
-
-        # Попытка парсинга как есть
         try:
+            cleaned = repair_json(response)
+            if cleaned == "{}":
+                return {}
             return json.loads(cleaned)
         except json.JSONDecodeError as exc:
             raise LeyaJSONParseError(

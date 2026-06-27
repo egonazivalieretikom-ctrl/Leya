@@ -90,16 +90,15 @@ class GlobalWorkspace:
         self.config = config or WorkspaceConfig()
 
         self.proposals: list[WorkspaceProposal] = []
+        self.focus: WorkspaceProposal | None = None
         self.history: list[WorkspaceProposal] = []
         self.current_focus: WorkspaceProposal | None = None
 
         # Статистика
         self.total_submissions = 0
-        self.total_selections = 0
+        self.total_selections: int = 0  # Счётчик выборов победителя
 
-        logger.info(
-            f"GlobalWorkspace инициализирован: " f"max_proposals={self.config.max_proposals}"
-        )
+        logger.info(f"GlobalWorkspace инициализирован: max_proposals={self.config.max_proposals}")
 
     def submit(self, proposal: WorkspaceProposal) -> None:
         """
@@ -145,46 +144,84 @@ class GlobalWorkspace:
         if removed:
             logger.debug(f"GlobalWorkspace: Удалено {len(removed)} устаревших proposals")
 
-    def select_winner(self, drive_state: dict[str, float]) -> WorkspaceProposal | None:
+    def select_winner(self, drive_state: dict[str, float] | None = None, inhibit_internal: bool = False) -> WorkspaceProposal | None:
         """
-        Выбрать победителя среди proposals.
-
-        Args:
-            drive_state: Текущее состояние драйвов для учёта relevance
-
-        Returns:
-            WorkspaceProposal-победитель или None
+        Выбор победителя из proposals.
         """
+        # Увеличение счётчика выборов
+        self.total_selections += 1
+
         if not self.proposals:
             return None
 
-        # Удаление устаревших
+        # Очистка устаревших proposals
         self.clear_expired()
 
         if not self.proposals:
             return None
 
-        # Вычисление score для каждого
-        scored = [(p, p.compute_score(drive_state)) for p in self.proposals]
-        scored.sort(key=lambda x: x[1], reverse=True)
+        # Применение торможения для внутренних proposals
+        adjusted_proposals = []
+        for proposal in self.proposals:
+            adjusted = proposal
+            
+            if inhibit_internal and proposal.source in ("homeostasis", "meta_cognition"):
+                # Понижение приоритета на 1 уровень
+                priority_map = {
+                    Priority.LOW: Priority.LOW,
+                    Priority.MEDIUM: Priority.LOW,
+                    Priority.HIGH: Priority.MEDIUM,
+                    Priority.CRITICAL: Priority.HIGH,
+                }
+                adjusted = WorkspaceProposal(
+                    source=proposal.source,
+                    content=proposal.content,
+                    action_type=proposal.action_type,
+                    priority=priority_map.get(proposal.priority, proposal.priority),
+                    urgency=proposal.urgency * 0.7,
+                    drive_relevance=proposal.drive_relevance,
+                    metadata=proposal.metadata,
+                )
+            
+            adjusted_proposals.append(adjusted)
 
-        winner, score = scored[0]
+        # Вычисление scores
+        for proposal in adjusted_proposals:
+            score = 0.0
 
-        # Перемещение в историю
-        self.proposals.remove(winner)
-        self.history.append(winner)
-        self.total_selections += 1
+            # Priority score
+            priority_scores = {
+                Priority.LOW: 0.2,
+                Priority.MEDIUM: 0.5,
+                Priority.HIGH: 0.8,
+                Priority.CRITICAL: 1.0,
+            }
+            score += priority_scores.get(proposal.priority, 0.5) * 0.4
+
+            # Urgency score
+            score += proposal.urgency * 0.3
+
+            # Drive relevance score
+            if drive_state and proposal.drive_relevance > 0:
+                avg_tension = sum(drive_state.values()) / len(drive_state) if drive_state else 0.5
+                score += proposal.drive_relevance * avg_tension * 0.3
+
+            proposal.score = score
+
+        # Сортировка по score
+        adjusted_proposals.sort(key=lambda p: p.score, reverse=True)
+
+        # Выбор победителя
+        winner = adjusted_proposals[0]
+        self.focus = winner
+
+        # ПЕРЕМЕЩЕНИЕ В ИСТОРИЮ: очищаем proposals и сохраняем в history
+        self.history.extend(self.proposals)  # Сохраняем оригинальные proposals
+        self.proposals.clear()  # Очищаем текущие proposals
 
         # Ограничение истории
-        if len(self.history) > self.config.max_history:
-            self.history = self.history[-self.config.max_history :]
-
-        self.current_focus = winner
-
-        logger.info(
-            f"GlobalWorkspace: Победитель — {winner.source} "
-            f"(score={score:.3f}, content={winner.content[:50]}...)"
-        )
+        if len(self.history) > 100:
+            self.history = self.history[-100:]
 
         return winner
 

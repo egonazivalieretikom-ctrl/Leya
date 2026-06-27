@@ -96,25 +96,125 @@ class HomeostasisEngine:
     ) -> dict[str, Any] | None:
         """
         Генерация цели на основе дисбаланса драйвов.
+        
+        ЭМОЦИОНАЛЬНАЯ СВЯЗНОСТЬ:
+        Учитывает средний emotional_boost недавних эпизодов для корректировки urgency.
+        """
+        # Проверка rest period
+        time_since_last_action = time.time() - self.last_action_time
+        if time_since_last_action < self.config.rest_period:
+            logger.debug(
+                f"HomeostasisEngine: Rest period "
+                f"({self.config.rest_period - time_since_last_action:.1f}с осталось)"
+            )
+            return None
 
-        Алгоритм:
-        1. Проверка rest period (не генерируем цели слишком часто)
-        2. Вычисление дисбаланса для каждого драйва:
-           - Текущее отклонение от порога
-           - Предсказанное отклонение (с меньшим весом)
-        3. Выбор драйва с максимальным дисбалансом
-        4. Генерация цели для этого драйва
-        5. RPE feedback: если предыдущая цель не удалась, корректируем
+        # ЭМОЦИОНАЛЬНАЯ СВЯЗНОСТЬ: вычисление среднего emotional_boost
+        avg_emotional_boost = 0.0
+        if recent_episodes:
+            emotional_values = [
+                getattr(ep, "emotional_boost", 0.0)
+                for ep in recent_episodes
+                if hasattr(ep, "emotional_boost")
+            ]
+            if emotional_values:
+                avg_emotional_boost = sum(emotional_values) / len(emotional_values)
+                logger.debug(
+                    f"HomeostasisEngine: Средний emotional_boost = {avg_emotional_boost:.2f}"
+                )
 
-        Args:
-            drive_state: Текущие значения драйвов {DriveType: current_value}
-            predicted_state: Предсказанные значения драйвов
-            recent_episodes: Недавние эпизоды из памяти (для контекста)
-            action_values: Ценности действий из DriveSystem (для RPE)
+        # Вычисление дисбаланса для каждого драйва
+        max_disbalance = 0.0
+        target_drive: DriveType | None = None
 
-        Returns:
-            Goal dict с полями: name, tool_name, reasoning, urgency, drive_relevance
-            или None, если дисбаланс недостаточен
+        for drive_type_raw, current_value in drive_state.items():
+            # Унификация ключей: поддерживаем как DriveType, так и строковые значения
+            if isinstance(drive_type_raw, str):
+                try:
+                    drive_type = DriveType(drive_type_raw)
+                except ValueError:
+                    logger.warning(f"HomeostasisEngine: Неизвестный тип драйва в drive_state: {drive_type_raw}")
+                    continue
+            else:
+                drive_type = drive_type_raw
+
+            threshold = self.thresholds.get(drive_type, 0.6)
+            predicted_value = predicted_state.get(drive_type_raw, current_value) if predicted_state else current_value
+
+            # Дисбаланс = отклонение от порога + предсказание (с меньшим весом)
+            current_disbalance = max(0.0, current_value - threshold)
+            predicted_disbalance = max(0.0, predicted_value - threshold) * 0.5
+            total_disbalance = current_disbalance + predicted_disbalance
+
+            if total_disbalance > max_disbalance:
+                max_disbalance = total_disbalance
+                target_drive = drive_type
+
+        # Проверка минимального порога
+        if max_disbalance < self.config.min_reward_threshold:
+            logger.debug(
+                f"HomeostasisEngine: Дисбаланс недостаточен "
+                f"({max_disbalance:.3f} < {self.config.min_reward_threshold})"
+            )
+            return None
+
+        # RPE feedback: корректируем urgency на основе предыдущего опыта
+        urgency_adjustment = self._calculate_rpe_adjustment(action_values)
+        
+        # ЭМОЦИОНАЛЬНАЯ СВЯЗНОСТЬ: корректировка urgency на основе emotional_boost
+        emotional_adjustment = avg_emotional_boost * 0.2  # Макс +0.2 при boost=1.0
+
+        # Генерация цели для выбранного драйва
+        if target_drive:
+            goal = self._generate_goal_for_drive(
+                drive_type=target_drive,
+                recent_episodes=recent_episodes,
+                action_values=action_values,
+                urgency_adjustment=urgency_adjustment + emotional_adjustment,
+            )
+
+            if goal:
+                self.current_goal = goal
+                self.last_action_time = time.time()
+
+                # Сохранение в историю (безопасное извлечение value для ключей)
+                self.action_history.append(
+                    {
+                        "goal": goal,
+                        "timestamp": time.time(),
+                        "drive_state": {
+                            (k.value if hasattr(k, 'value') else k): v 
+                            for k, v in drive_state.items()
+                        },
+                        "avg_emotional_boost": avg_emotional_boost,
+                    }
+                )
+
+                # Ограничение истории
+                if len(self.action_history) > self.max_action_history:
+                    self.action_history = self.action_history[-self.max_action_history:]
+
+                logger.info(
+                    f"HomeostasisEngine: Сгенерирована цель для {target_drive.value}: "
+                    f"{goal.get('name', 'unknown')} "
+                    f"(urgency={goal.get('urgency', 0.5):.2f}, "
+                    f"disbalance={max_disbalance:.3f}, "
+                    f"emotional_adjustment={emotional_adjustment:.2f})"
+                )
+
+                return goal
+
+        return None
+
+    async def generate_goal(
+        self,
+        drive_state: dict[str, float],
+        predicted_state: dict[str, float] | None = None,
+        recent_episodes: list[Any] | None = None,
+        action_values: dict[str, float] | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Генерация цели на основе дисбаланса драйвов.
         """
         # Проверка rest period
         time_since_last_action = time.time() - self.last_action_time
@@ -129,9 +229,20 @@ class HomeostasisEngine:
         max_disbalance = 0.0
         target_drive: DriveType | None = None
 
-        for drive_type, current_value in drive_state.items():
+        for drive_type_raw, current_value in drive_state.items():
+            # Унификация ключей: поддерживаем как DriveType, так и строковые значения
+            if isinstance(drive_type_raw, str):
+                try:
+                    drive_type = DriveType(drive_type_raw)
+                except ValueError:
+                    logger.warning(f"HomeostasisEngine: Неизвестный тип драйва в drive_state: {drive_type_raw}")
+                    continue
+            else:
+                drive_type = drive_type_raw
+
             threshold = self.thresholds.get(drive_type, 0.6)
-            predicted_value = predicted_state.get(drive_type, current_value)
+            # predicted_state может использовать те же ключи, что и drive_state
+            predicted_value = predicted_state.get(drive_type_raw, current_value) if predicted_state else current_value
 
             # Дисбаланс = отклонение от порога + предсказание (с меньшим весом)
             current_disbalance = max(0.0, current_value - threshold)
@@ -166,18 +277,21 @@ class HomeostasisEngine:
                 self.current_goal = goal
                 self.last_action_time = time.time()
 
-                # Сохранение в историю
+                # Сохранение в историю (безопасное извлечение value для ключей)
                 self.action_history.append(
                     {
                         "goal": goal,
                         "timestamp": time.time(),
-                        "drive_state": {k.value: v for k, v in drive_state.items()},
+                        "drive_state": {
+                            (k.value if hasattr(k, 'value') else k): v 
+                            for k, v in drive_state.items()
+                        },
                     }
                 )
 
                 # Ограничение истории
                 if len(self.action_history) > self.max_action_history:
-                    self.action_history = self.action_history[-self.max_action_history :]
+                    self.action_history = self.action_history[-self.max_action_history:]
 
                 logger.info(
                     f"HomeostasisEngine: Сгенерирована цель для {target_drive.value}: "
@@ -189,51 +303,6 @@ class HomeostasisEngine:
                 return goal
 
         return None
-
-    async def generate_goal_from_gap(
-        self,
-        gap: dict[str, float],
-        context: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        """Реализация метода из интерфейса."""
-        # Логика генерации цели на основе конкретного разрыва драйвов
-        return None
-
-    def _calculate_rpe_adjustment(self, action_values: dict[str, float]) -> float:
-        """
-        Вычисление корректировки urgency на основе RPE.
-
-        Если последние действия были успешными (высокий RPE), увеличиваем urgency.
-        Если неудачными (низкий RPE), уменьшаем.
-
-        Args:
-            action_values: Ценности действий из DriveSystem
-
-        Returns:
-            Корректировка urgency (-0.2 до +0.2)
-        """
-        if not self.action_history:
-            return 0.0
-
-        # Берём последние 3 действия
-        recent_actions = self.action_history[-3:]
-
-        # Вычисляем средний RPE
-        total_rpe = 0.0
-        for action in recent_actions:
-            tool_name = action.get("goal", {}).get("tool_name", "")
-            if tool_name in action_values:
-                total_rpe += action_values[tool_name]
-
-        avg_rpe = total_rpe / len(recent_actions) if recent_actions else 0.0
-
-        # Корректировка: положительный RPE → +urgency, отрицательный → -urgency
-        adjustment = max(-0.2, min(0.2, avg_rpe * 0.3))
-
-        logger.debug(
-            f"HomeostasisEngine: RPE adjustment = {adjustment:.3f} (avg_rpe={avg_rpe:.3f})"
-        )
-        return adjustment
 
     def _generate_goal_for_drive(
         self,
@@ -326,27 +395,68 @@ class HomeostasisEngine:
 
         return None
 
-    def _generate_search_parameters(self, recent_episodes: list[Any]) -> dict[str, Any]:
+    def _calculate_rpe_adjustment(self, action_values: dict[str, float] | None) -> float:
+        """
+        Вычисление корректировки urgency на основе RPE (Reward Prediction Error).
+        
+        Если последние действия были успешными (высокий RPE), увеличиваем urgency.
+        Если неудачными (низкий RPE), уменьшаем.
+        
+        Args:
+            action_values: Ценности действий из DriveSystem
+            
+        Returns:
+            Корректировка urgency (-0.2 до +0.2)
+        """
+        if not action_values or not self.action_history:
+            return 0.0
+
+        # Берём последние 3 действия
+        recent_actions = self.action_history[-3:]
+
+        # Вычисляем средний RPE
+        total_rpe = 0.0
+        count = 0
+        for action in recent_actions:
+            tool_name = action.get("goal", {}).get("tool_name", "")
+            if tool_name in action_values:
+                total_rpe += action_values[tool_name]
+                count += 1
+
+        avg_rpe = total_rpe / count if count > 0 else 0.0
+
+        # Корректировка: положительный RPE → +urgency, отрицательный → -urgency
+        adjustment = max(-0.2, min(0.2, avg_rpe * 0.3))
+
+        logger.debug(
+            f"HomeostasisEngine: RPE adjustment = {adjustment:.3f} (avg_rpe={avg_rpe:.3f})"
+        )
+        return adjustment
+
+    def _generate_search_parameters(self, recent_episodes: list[Any] | None) -> dict[str, Any]:
         """
         Генерация параметров для wikipedia_search на основе недавних эпизодов.
 
         Избегает повторения недавно исследованных тем.
 
         Args:
-            recent_episodes: Недавние эпизоды из памяти
+            recent_episodes: Недавние эпизоды из памяти (может быть None)
 
         Returns:
             Параметры для инструмента {"query": str, "lang": str}
         """
         # Извлечение тем из недавних эпизодов
         recent_topics = set()
-        for episode in recent_episodes[-10:]:  # Последние 10 эпизодов
-            content = (
-                getattr(episode, "content", "") if hasattr(episode, "content") else str(episode)
-            )
-            # Простая эвристика: извлекаем ключевые слова
-            words = re.findall(r"\b[A-Za-zА-Яа-яЁё]{4,}\b", content)
-            recent_topics.update(words[:3])  # Первые 3 слова из каждого эпизода
+        
+        # Обработка None
+        if recent_episodes:
+            for episode in recent_episodes[-10:]:  # Последние 10 эпизодов
+                content = (
+                    getattr(episode, "content", "") if hasattr(episode, "content") else str(episode)
+                )
+                # Простая эвристика: извлекаем ключевые слова
+                words = re.findall(r"\b[A-Za-zА-Яа-яЁё]{4,}\b", content)
+                recent_topics.update(words[:3])  # Первые 3 слова из каждого эпизода
 
         # Добавляем недавно исследованные темы
         recent_topics.update(self.recently_researched[-5:])

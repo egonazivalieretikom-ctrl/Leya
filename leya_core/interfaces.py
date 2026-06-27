@@ -29,7 +29,7 @@ class IDriveSystem(Protocol):
     tension, target и reward prediction error (RPE).
     """
 
-    def evaluate_stimulus(self, stimulus: Any) -> dict[str, float]:
+    async def evaluate_stimulus(self, stimulus: str, context: str = " ") -> dict[str, float]:
         """
         Оценивает стимул и возвращает влияние на драйвы.
 
@@ -50,7 +50,7 @@ class IDriveSystem(Protocol):
         """
         ...
 
-    def apply_satisfaction(self, drive_type: str, amount: float) -> None:
+    def apply_satisfaction(self, drive_type: str, base_amount: float, rpe: float) -> None:
         """
         Удовлетворяет драйв (после успешного действия).
 
@@ -60,7 +60,7 @@ class IDriveSystem(Protocol):
         """
         ...
 
-    def calculate_rpe(self, drive_type: str, actual_reward: float) -> float:
+    def calculate_rpe(self, action_key: str, actual_outcome: float) -> float:
         """
         Вычисляет Reward Prediction Error.
 
@@ -146,7 +146,6 @@ class IMemorySystem(Protocol):
     async def store_perception(
         self,
         content: str,
-        memory_type: str = "episodic",
         emotional_boost: float = 0.0,
         metadata: dict[str, Any] | None = None,
     ) -> str:
@@ -167,9 +166,9 @@ class IMemorySystem(Protocol):
     async def retrieve_context(
         self,
         query: str,
-        max_results: int = 10,
+        max_results: int = 5,
         min_retention: float = 0.1,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Any]:
         """
         Извлекает контекст из памяти по запросу.
 
@@ -187,7 +186,7 @@ class IMemorySystem(Protocol):
         self,
         content: str,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> Any:
         """
         Сохраняет семантический факт.
 
@@ -227,7 +226,7 @@ class IMemorySystem(Protocol):
         """
         ...
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> list[str]:
+    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Any]:
         """
         Возвращает недавние спонтанные мысли.
 
@@ -394,32 +393,21 @@ class IGlobalWorkspace(Protocol):
 class IHomeostasisEngine(Protocol):
     """
     Интерфейс движка гомеостаза.
-
     Реализация: leya_core.homeostasis_engine.HomeostasisEngine
-
-    Автономная генерация целей на основе дисбаланса драйвов,
-    предсказанного состояния и недавних эпизодов.
     """
+    
+    # Атрибуты состояния (обычные поля, не @property)
+    current_goal: dict[str, Any] | None
+    last_action_time: float
 
     async def generate_goal(
         self,
         drive_state: dict[str, float],
         predicted_state: dict[str, float] | None = None,
-        recent_episodes: list[dict[str, Any]] | None = None,
+        recent_episodes: list[Any] | None = None,  # Исправлено: list[Any] вместо list[dict[str, Any]]
         action_values: dict[str, float] | None = None,
     ) -> dict[str, Any] | None:
-        """
-        Генерирует цель на основе дисбаланса драйвов.
-
-        Args:
-            drive_state: Текущее состояние драйвов
-            predicted_state: Предсказанное состояние
-            recent_episodes: Недавние эпизоды
-            action_values: Ценности действий
-
-        Returns:
-            dict с информацией о цели или None
-        """
+        """Генерирует цель на основе дисбаланса драйвов."""
         ...
 
     async def generate_goal_from_gap(
@@ -427,51 +415,16 @@ class IHomeostasisEngine(Protocol):
         gap: dict[str, float],
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """
-        Генерирует цель на основе разрыва (gap) между текущим и желаемым состоянием.
-
-        Args:
-            gap: Разрыв между состояниями
-            context: Дополнительный контекст
-
-        Returns:
-            dict с информацией о цели или None
-        """
+        """Генерирует цель на основе разрыва (gap)."""
         ...
 
-    def mark_as_researched(self, topic: str) -> None:
-        """
-        Отмечает тему как исследованную.
-
-        Args:
-            topic: Тема для отметки
-        """
-        ...
-
-    def add_dynamic_keywords(self, keywords: list[str]) -> None:
-        """
-        Добавляет динамические ключевые слова для поиска.
-
-        Args:
-            keywords: Список ключевых слов
-        """
-        ...
-
-    @property
-    def current_goal(self) -> dict[str, Any] | None:
-        """Текущая активная цель."""
-        ...
-
-    @property
-    def last_action_time(self) -> float:
-        """Время последнего действия."""
-        ...
+    def mark_as_researched(self, topic: str) -> None: ...
+    def add_dynamic_keywords(self, keywords: list[str]) -> None: ...
 
     @property
     def rest_period(self) -> float:
         """Период отдыха в секундах."""
         ...
-
 
 # =============================================================================
 # Thinker Interfaces

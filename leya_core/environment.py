@@ -268,8 +268,9 @@ class ToolRegistry:
     async def _duckduckgo_search(self, query: str, max_results: int = 5) -> str:
         """Поиск в DuckDuckGo с защитой от Ratelimit."""
         try:
-            from duckduckgo_search import DDGS
             import asyncio
+
+            from duckduckgo_search import DDGS
 
             # Запускаем в потоке, так как библиотека синхронная
             def search():
@@ -282,14 +283,14 @@ class ToolRegistry:
                     return results
 
             results = await asyncio.to_thread(search)
-            
+
             if not results:
                 return "Результаты не найдены"
-                
+
             output = []
             for r in results:
-                title = r.get('title', 'Без названия')
-                body = r.get('body', r.get('snippet', '')) # Добавлена проверка на snippet
+                title = r.get("title", "Без названия")
+                body = r.get("body", r.get("snippet", ""))  # Добавлена проверка на snippet
                 output.append(f"- {title}: {body}")
             return "\n".join(output)
 
