@@ -148,18 +148,17 @@ class IMemorySystem(Protocol):
         content: str,
         emotional_boost: float = 0.0,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> Any:  # Изменено с str на Any (фактически возвращает Engram)
         """
         Сохраняет восприятие как энграмму.
 
         Args:
             content: Содержание восприятия
-            memory_type: Тип памяти ("episodic" или "semantic")
             emotional_boost: Эмоциональное усиление (0.0-1.0)
             metadata: Дополнительные метаданные
 
         Returns:
-            ID созданной энграммы
+            Объект Engram (или Any для избежания циклического импорта)
         """
         ...
 

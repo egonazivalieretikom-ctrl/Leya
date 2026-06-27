@@ -26,7 +26,7 @@ import logging
 import re
 from collections.abc import Callable
 from typing import Any
-
+from .interfaces import IMetaCognition
 from .config import ReflectionConfig
 from .exceptions import (
     LeyaDriveNotFoundError,
@@ -43,7 +43,7 @@ from .thinker import repair_json
 logger = logging.getLogger(__name__)
 
 
-class MetaCognition:
+class MetaCognition(IMetaCognition):
     """
     Наблюдатель. Фоновый процесс саморефлексии.
 
@@ -250,7 +250,8 @@ class MetaCognition:
 
         try:
             response = await self.llm_client(prompt)
-            analysis = self._safe_parse_json(response)
+            cleaned = repair_json(response)
+            analysis = json.loads(cleaned) if cleaned != "{}" else {}
 
             if analysis.get("patterns") and analysis["patterns"] != [
                 "Пока мало данных для анализа"
@@ -307,7 +308,8 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
 
         try:
             response = await self.llm_client(prompt)
-            inquiry = self._safe_parse_json(response)
+            cleaned = repair_json(response)
+            inquiry = json.loads(cleaned) if cleaned != "{}" else {}
 
             question = inquiry.get("question", "")
             if question:

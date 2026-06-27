@@ -499,27 +499,21 @@ class LeyaOS:
         """
         tool_context = ""
 
-        # ИСПРАВЛЕНИЕ: Проверка наличия tool_registry перед использованием
-        if not hasattr(self.env, "tool_registry") or self.env.tool_registry is None:
-            logger.warning("tool_registry недоступен, пропускаем обработку инструмента")
-            return tool_context
-
         # Проверка необходимости поиска
         search_keywords = [
-            "найди",
-            "поищи",
-            "узнай",
-            "какая погода",
-            "что такое",
-            "расскажи о",
-            "изучи",
-            "погода",
+            "найди", "поищи", "узнай", "какая погода", "что такое", 
+            "расскажи о", "изучи", "погода",
         ]
         needs_search = any(kw in stimulus_content.lower() for kw in search_keywords)
 
         if needs_search:
             topic = self._extract_topic_from_user(stimulus_content)
             if topic:
+                # Защита от недоступного tool_registry
+                if self.env.tool_registry is None:
+                    tool_context = "⚠️ Инструменты недоступны."
+                    return tool_context
+
                 try:
                     tool_result = await self.env.tool_registry.execute(
                         tool_name="wikipedia_search",
@@ -708,12 +702,12 @@ class LeyaOS:
         Args:
             tool_call: JSON-строка или dict с описанием вызова инструмента
         """
-        import json
-
-        # ИСПРАВЛЕНИЕ: Проверка наличия tool_registry перед использованием
-        if not hasattr(self.env, "tool_registry") or self.env.tool_registry is None:
-            logger.warning("tool_registry недоступен, невозможно выполнить инструмент")
+        # Защита от недоступного ToolGenerator
+        if self.tool_generator is None:
+            logger.warning("ToolGenerator недоступен. Пропускаем выполнение инструмента.")
             return
+
+        import json
 
         try:
             tool_data = json.loads(tool_call) if isinstance(tool_call, str) else tool_call
@@ -763,8 +757,7 @@ class LeyaOS:
             try:
                 await asyncio.sleep(self.config.homeostasis.rest_period)
 
-                # ИСПРАВЛЕНИЕ: Унификация ключей drive_state — используем строки (d.type.value)
-                # для согласованности с HomeostasisEngine и другими частями системы
+                # ИСПРАВЛЕНИЕ: Унификация ключей на d.type.value
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 predicted_state = self.drives.get_predicted_disbalance()
                 recent_episodes = await self.memory.get_recent_episodes(limit=5)

@@ -23,7 +23,6 @@ import json
 import logging
 import math
 import os
-import pickle
 import re 
 import tempfile
 import time
@@ -852,12 +851,13 @@ class MemorySystem:
 
     async def _save_state(self) -> None:
         """
-        Атомарное сохранение состояния памяти с HMAC-подписью.
-        
-        Формат: pickle (для совместимости с текущей реализацией).
-        Путь: memory_state.pkl (или .json, если изменён в __init__).
+        Атомарное сохранение состояния памяти в JSON с HMAC-подписью.
         """
         state_path = Path(self.state_path).expanduser().resolve()
+        # Принудительно используем расширение .json
+        if state_path.suffix != ".json":
+            state_path = state_path.with_suffix(".json")
+    
         state_path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
@@ -878,19 +878,13 @@ class MemorySystem:
         tmp_path = Path(tmp_path_str)
 
         try:
-            # Определяем формат по расширению
-            if state_path.suffix == ".json":
-                import json
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
-            else:
-                with os.fdopen(fd, "wb") as f:
-                    pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
 
             # HMAC-подпись
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
-            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+            hmac_path = state_path.with_suffix(".json.hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
             # Атомарная замена
@@ -915,17 +909,20 @@ class MemorySystem:
 
     async def _load_state(self) -> None:
         """
-        Загрузка состояния памяти с проверкой HMAC и версии.
-        Поддерживает как pickle, так и JSON формат.
+        Загрузка состояния памяти из JSON с проверкой HMAC и версии.
         """
         state_path = Path(self.state_path).expanduser().resolve()
+        # Принудительно используем расширение .json
+        if state_path.suffix != ".json":
+            state_path = state_path.with_suffix(".json")
+        
         if not state_path.exists():
             self.engrams = {}
             self.synapses = {}
             self.self_model = ""
             return
 
-        hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+        hmac_path = state_path.with_suffix(".json.hmac")
         key = self._get_hmac_key()
 
         # Проверка HMAC
@@ -943,16 +940,11 @@ class MemorySystem:
                 context={"path": str(state_path)},
             )
 
-        # Десериализация
+        # Десериализация только из JSON
         try:
-            if state_path.suffix == ".json":
-                import json
-                with state_path.open("r", encoding="utf-8") as f:
-                    raw = json.load(f)
-            else:
-                with state_path.open("rb") as f:
-                    raw = pickle.load(f)
-        except (pickle.PickleError, EOFError, ValueError, json.JSONDecodeError) as exc:
+            with state_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (ValueError, json.JSONDecodeError) as exc:
             raise LeyaStateCorruptedError(
                 "Повреждён memory_state",
                 context={"path": str(state_path), "error": str(exc)},
