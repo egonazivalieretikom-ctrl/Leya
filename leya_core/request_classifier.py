@@ -1,0 +1,406 @@
+# leya_core/request_classifier.py — Классификатор пользовательских запросов.
+# Этап 2.1: Трёхуровневая классификация (эвристика → cache → LLM) с
+# confidence-based routing и graceful degradation.
+
+import asyncio
+import json
+import logging
+import re
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, Any
+
+from pydantic import BaseModel, Field
+
+from .exceptions import LeyaLLMError, LeyaJSONParseError
+
+logger = logging.getLogger("LeyaRequestClassifier")
+
+
+# =================================================================================
+# PYDANTIC MODELS
+# =================================================================================
+
+class UserIntent(str, Enum):
+    """Намерение пользователя."""
+    GREETING = "GREETING"
+    FAREWELL = "FAREWELL"
+    QUESTION = "QUESTION"
+    SEARCH = "SEARCH"
+    REMEMBER = "REMEMBER"
+    FORGET = "FORGET"
+    STATUS = "STATUS"
+    HELP = "HELP"
+    TOOL_REQUEST = "TOOL_REQUEST"
+    PERSONAL = "PERSONAL"
+    UNKNOWN = "UNKNOWN"
+
+
+class IntentClassification(BaseModel):
+    """Результат классификации запроса."""
+    intent: UserIntent = Field(..., description="Намерение пользователя")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Уверенность классификации")
+    topic: Optional[str] = Field(None, description="Извлечённая тема (если есть)")
+    source: str = Field(..., description="Источник классификации: heuristic|cache|llm|fallback")
+    raw_input: str = Field(..., description="Исходный запрос")
+
+    class Config:
+        use_enum_values = True
+
+
+# =================================================================================
+# HEURISTIC PATTERNS (синонимы и regex)
+# =================================================================================
+
+# Словарь паттернов для каждого intent с весами
+HEURISTIC_PATTERNS: dict[UserIntent, list[tuple[str, float]]] = {
+    UserIntent.GREETING: [
+        (r"\b(привет|здравствуй|добрый\s+(день|вечер|утро)|hello|hi|хеллоу|приветствую)\b", 0.95),
+        (r"^(прив|здрав|хай)$", 0.9),
+    ],
+    UserIntent.FAREWELL: [
+        (r"\b(пока|до\s+(свидания|встречи)|увидимся|прощай|всего\s+доброго|bye)\b", 0.95),
+        (r"^(поки|чао)$", 0.9),
+    ],
+    UserIntent.QUESTION: [
+        (r"\b(что\s+такое|кто\s+такой|как\s+(работает|устроен)|почему|зачем|объясни|расскажи\s+про)\b", 0.85),
+        (r"\?$", 0.7),  # вопросительный знак в конце
+    ],
+    UserIntent.SEARCH: [
+        (r"\b(поищи|найди|загугли|поиск|ищу\s+информацию|погугли)\b", 0.9),
+        (r"\b(в\s+интернете|в\s+сети|онлайн)\b", 0.8),
+    ],
+    UserIntent.REMEMBER: [
+        (r"\b(запомни|сохрани|запиши|помни|запиши\s+что)\b", 0.9),
+    ],
+    UserIntent.FORGET: [
+        (r"\b(забудь|удали|стереть|не\s+помни)\b", 0.9),
+    ],
+    UserIntent.STATUS: [
+        (r"\b(как\s+ты|как\s+себя\s+чувствуешь|какое\s+состояние|что\s+делаешь|как\s+дела)\b", 0.85),
+    ],
+    UserIntent.HELP: [
+        (r"\b(помоги|помощь|help|что\s+ты\s+умеешь|как\s+тобой\s+управлять)\b", 0.9),
+    ],
+    UserIntent.TOOL_REQUEST: [
+        (r"\b(используй|запусти|выполни|открой|браузер|калькулятор)\b", 0.8),
+    ],
+    UserIntent.PERSONAL: [
+        (r"\b(ты\s+кто|расскажи\s+о\s+себе|твоё\s+имя|сколько\s+тебе\s+лет|ты\s+живая)\b", 0.85),
+    ],
+}
+
+
+# =================================================================================
+# REQUEST CLASSIFIER
+# =================================================================================
+
+class RequestClassifier:
+    """Трёхуровневый классификатор пользовательских запросов.
+
+    Этап 2.1: defence-in-depth подход.
+    1. Быстрая эвристика (regex + синонимы) — мгновенно
+    2. Semantic cache через memory — если похожий запрос уже был
+    3. LLM-assisted extraction — только если нужно
+
+    Confidence-based routing: если эвристика уверена (≥ threshold),
+    LLM не вызывается. Graceful degradation: если LLM недоступен,
+    fallback на эвристику.
+    """
+
+    def __init__(
+        self,
+        llm_client,
+        memory,
+        use_llm_threshold: float = 0.7,
+        cache_similarity_threshold: float = 0.85,
+    ):
+        """
+        Args:
+            llm_client: LLM клиент для level 3
+            memory: Memory system для semantic cache
+            use_llm_threshold: Порог confidence для вызова LLM
+            cache_similarity_threshold: Порог similarity для cache hit
+        """
+        self.llm_client = llm_client
+        self.memory = memory
+        self.use_llm_threshold = use_llm_threshold
+        self.cache_similarity_threshold = cache_similarity_threshold
+        
+        # Компилируем regex паттерны
+        self._compiled_patterns = {}
+        for intent, patterns in HEURISTIC_PATTERNS.items():
+            self._compiled_patterns[intent] = [
+                (re.compile(pattern, re.IGNORECASE | re.UNICODE), weight)
+                for pattern, weight in patterns
+            ]
+        
+        logger.info(
+            f"✅ RequestClassifier инициализирован "
+            f"(llm_threshold={use_llm_threshold}, cache_threshold={cache_similarity_threshold})"
+        )
+
+    async def classify(self, user_input: str) -> IntentClassification:
+        """Классификация пользовательского запроса.
+
+        Трёхуровневая стратегия:
+        1. Быстрая эвристика
+        2. Semantic cache
+        3. LLM-assisted extraction
+        4. Fallback
+
+        Args:
+            user_input: Текст запроса пользователя
+
+        Returns:
+            IntentClassification с intent, confidence, topic, source
+        """
+        if not user_input or not user_input.strip():
+            return IntentClassification(
+                intent=UserIntent.UNKNOWN,
+                confidence=0.0,
+                topic=None,
+                source="fallback",
+                raw_input=user_input or "",
+            )
+
+        user_input = user_input.strip()
+
+        # Уровень 1: Быстрая эвристика
+        heuristic_result = self._heuristic_classify(user_input)
+        if heuristic_result.confidence >= self.use_llm_threshold:
+            logger.debug(
+                f"Эвристика уверена: {heuristic_result.intent} "
+                f"(confidence={heuristic_result.confidence:.2f})"
+            )
+            return heuristic_result
+
+        # Уровень 2: Semantic cache
+        try:
+            cache_result = await self._cache_lookup(user_input)
+            if cache_result and cache_result.confidence >= self.use_llm_threshold:
+                logger.debug(
+                    f"Cache hit: {cache_result.intent} "
+                    f"(confidence={cache_result.confidence:.2f})"
+                )
+                return cache_result
+        except Exception as e:
+            logger.warning(f"Ошибка semantic cache: {e}", exc_info=True)
+
+        # Уровень 3: LLM-assisted extraction
+        try:
+            llm_result = await self._llm_classify(user_input)
+            if llm_result.confidence >= 0.5:  # LLM результат принимаем даже с низкой уверенностью
+                logger.debug(
+                    f"LLM классификация: {llm_result.intent} "
+                    f"(confidence={llm_result.confidence:.2f})"
+                )
+                return llm_result
+        except Exception as e:
+            logger.warning(f"Ошибка LLM классификации: {e}", exc_info=True)
+
+        # Уровень 4: Fallback — используем лучшую эвристику
+        logger.debug("Fallback на эвристику")
+        return heuristic_result
+
+    def _heuristic_classify(self, user_input: str) -> IntentClassification:
+        """Уровень 1: Быстрая эвристика с regex и весами.
+
+        Проходит по всем паттернам, суммирует веса для каждого intent,
+        возвращает intent с максимальным score.
+        """
+        scores: dict[UserIntent, float] = {}
+
+        for intent, patterns in self._compiled_patterns.items():
+            total_weight = 0.0
+            for pattern, weight in patterns:
+                if pattern.search(user_input):
+                    total_weight += weight
+            
+            if total_weight > 0:
+                # Нормализуем: делим на количество паттернов для этого intent
+                # чтобы не было перекоса в сторону intent с большим количеством паттернов
+                normalized = min(1.0, total_weight / max(1, len(patterns) * 0.5))
+                scores[intent] = normalized
+
+        if not scores:
+            return IntentClassification(
+                intent=UserIntent.UNKNOWN,
+                confidence=0.0,
+                topic=None,
+                source="heuristic",
+                raw_input=user_input,
+            )
+
+        # Находим intent с максимальным score
+        best_intent = max(scores, key=scores.get)
+        confidence = scores[best_intent]
+
+        # Извлекаем тему (простая эвристика — последние слова после ключевых)
+        topic = self._extract_topic_heuristic(user_input, best_intent)
+
+        return IntentClassification(
+            intent=best_intent,
+            confidence=confidence,
+            topic=topic,
+            source="heuristic",
+            raw_input=user_input,
+        )
+
+    def _extract_topic_heuristic(self, user_input: str, intent: UserIntent) -> Optional[str]:
+        """Простая эвристика извлечения темы.
+
+        Для QUESTION/SEARCH — пытаемся извлечь ключевые слова.
+        """
+        if intent not in (UserIntent.QUESTION, UserIntent.SEARCH):
+            return None
+
+        # Удаляем стоп-слова
+        stop_words = {
+            "что", "как", "кто", "почему", "зачем", "где", "когда",
+            "расскажи", "объясни", "поищи", "найди", "мне", "хочу",
+            "узнать", "интересно", "это", "такое", "такой", "работае",
+        }
+        
+        # Токенизация (простая)
+        words = re.findall(r"\b\w+\b", user_input.lower())
+        topic_words = [w for w in words if w not in stop_words and len(w) > 2]
+        
+        if topic_words:
+            # Берём первые 3-5 значимых слов
+            topic = " ".join(topic_words[:5])
+            return topic
+        
+        return None
+
+    async def _cache_lookup(self, user_input: str) -> Optional[IntentClassification]:
+        """Уровень 2: Semantic cache через memory.
+
+        Ищет похожие запросы в памяти. Если similarity ≥ threshold —
+        возвращает кэшированный результат.
+        """
+        if not self.memory:
+            return None
+
+        try:
+            # Ищем похожие запросы в памяти
+            similar = await self.memory.retrieve_context(
+                query=user_input,
+                top_k=3,
+                memory_type="EPISODIC",
+                filters={"type": "user_request"},
+            )
+
+            if not similar:
+                return None
+
+            # Проверяем similarity
+            for item in similar:
+                similarity = item.get("similarity", 0.0)
+                if similarity >= self.cache_similarity_threshold:
+                    metadata = item.get("metadata", {})
+                    cached_intent = metadata.get("intent")
+                    cached_confidence = metadata.get("confidence", 0.0)
+                    cached_topic = metadata.get("topic")
+
+                    if cached_intent and cached_confidence > 0:
+                        return IntentClassification(
+                            intent=UserIntent(cached_intent),
+                            confidence=cached_confidence,
+                            topic=cached_topic,
+                            source="cache",
+                            raw_input=user_input,
+                        )
+
+        except Exception as e:
+            logger.warning(f"Ошибка cache lookup: {e}", exc_info=True)
+
+        return None
+
+    async def _llm_classify(self, user_input: str) -> IntentClassification:
+        """Уровень 3: LLM-assisted extraction.
+
+        Отправляет маленький промпт с require_json=True.
+        """
+        prompt = f"""Проанализируй запрос пользователя и определи намерение.
+
+Запрос: "{user_input}"
+
+Верни СТРОГО JSON в формате:
+{{
+    "intent": "Одно из: GREETING, FAREWELL, QUESTION, SEARCH, REMEMBER, FORGET, STATUS, HELP, TOOL_REQUEST, PERSONAL, UNKNOWN",
+    "confidence": 0.0-1.0,
+    "topic": "Извлечённая тема (если есть, иначе null)"
+}}
+
+ВАЖНО:
+- Ответ ДОЛЖЕН быть валидным JSON
+- intent — одно из перечисленных значений
+- confidence — число от 0.0 до 1.0
+- topic — строка или null
+"""
+
+        try:
+            raw_response = await self.llm_client.chat(
+                prompt=prompt,
+                system="Ты — классификатор намерений. Отвечай СТРОГО в формате JSON.",
+                require_json=True,
+                timeout=10.0,  # короткий timeout для классификации
+            )
+
+            # Парсим JSON
+            try:
+                data = json.loads(raw_response)
+            except json.JSONDecodeError:
+                # Пытаемся repair_json
+                from .thinker import repair_json
+                repaired = repair_json(raw_response)
+                data = json.loads(repaired)
+
+            intent_str = data.get("intent", "UNKNOWN")
+            confidence = float(data.get("confidence", 0.5))
+            topic = data.get("topic")
+
+            # Валидируем intent
+            try:
+                intent = UserIntent(intent_str)
+            except ValueError:
+                logger.warning(f"LLM вернул невалидный intent: {intent_str}")
+                intent = UserIntent.UNKNOWN
+
+            return IntentClassification(
+                intent=intent,
+                confidence=confidence,
+                topic=topic,
+                source="llm",
+                raw_input=user_input,
+            )
+
+        except Exception as e:
+            logger.warning(f"Ошибка LLM классификации: {e}", exc_info=True)
+            raise
+
+    async def save_to_cache(self, classification: IntentClassification) -> None:
+        """Сохранение результата классификации в memory для будущего cache.
+
+        Вызывается после успешной обработки запроса, чтобы следующие
+        похожие запросы могли использовать cache.
+        """
+        if not self.memory:
+            return
+
+        try:
+            await self.memory.store_perception(
+                content=classification.raw_input,
+                memory_type="EPISODIC",
+                metadata={
+                    "type": "user_request",
+                    "intent": classification.intent,
+                    "confidence": classification.confidence,
+                    "topic": classification.topic,
+                    "source": classification.source,
+                },
+            )
+            logger.debug(f"Классификация сохранена в cache: {classification.intent}")
+        except Exception as e:
+            logger.warning(f"Ошибка сохранения в cache: {e}", exc_info=True)

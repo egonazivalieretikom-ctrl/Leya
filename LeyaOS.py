@@ -20,6 +20,7 @@ import asyncio
 import logging
 import signal
 import sys
+from leya_core.request_classifier import RequestClassifier, IntentClassification, UserIntent
 from datetime import datetime
 from typing import Any
 
@@ -128,6 +129,13 @@ class LeyaOS:
             raise TypeError(
                 f"drives должен реализовывать IDriveSystem, получено {type(self.drives)}"
             )
+        # Классификатор пользовательских запросов (этап 2.1)
+        self.request_classifier = RequestClassifier(
+            llm_client=self.llm_client,
+            memory=self.memory,
+            use_llm_threshold=0.7,
+            cache_similarity_threshold=0.85,
+        )
         if not isinstance(self.workspace, IGlobalWorkspace):
             raise TypeError(
                 f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}"
@@ -560,89 +568,172 @@ class LeyaOS:
             ensure_ascii=False,
         )
 
-    async def _handle_user_request(self, stimulus_content: str) -> str:
-        """
-        Обработка пользовательского запроса (возможно, с инструментом).
+    async def _handle_user_request(self, user_input: str) -> dict:
+        """Обработка пользовательского запроса с трёхуровневой классификацией.
 
+        Этап 2.1: заменяет жёсткие ключевые слова на robust классификатор.
+        
+        Стратегия:
+        1. Классифицируем запрос через RequestClassifier
+        2. В зависимости от intent — вызываем соответствующий обработчик
+        3. Сохраняем результат в cache для будущих похожих запросов
+        
         Args:
-            stimulus_content: Текст запроса
-
+            user_input: Текст запроса пользователя
+            
         Returns:
-            Контекст от инструмента (если использовался)
+            dict с результатом обработки (response, intent, metadata)
         """
-        tool_context = ""
+        if not user_input or not user_input.strip():
+            return {
+                "response": "Я не услышала запрос. Повтори, пожалуйста.",
+                "intent": "UNKNOWN",
+                "metadata": {"error": "empty_input"},
+            }
 
-        # Проверка необходимости поиска
-        search_keywords = [
-            "найди", "поищи", "узнай", "какая погода", "что такое",
-            "расскажи о", "изучи", "погода",
+        user_input = user_input.strip()
+        logger.info(f"📥 Новый запрос: {user_input[:100]}...")
+
+        # 1. Классификация
+        try:
+            classification = await self.request_classifier.classify(user_input)
+            logger.info(
+                f"🎯 Классификация: {classification.intent} "
+                f"(confidence={classification.confidence:.2f}, source={classification.source})"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка классификации: {e}", exc_info=True)
+            # Fallback — передаём в thinker как есть
+            return await self._handle_via_thinker(user_input, intent="UNKNOWN")
+
+        # 2. Обработка в зависимости от intent
+        try:
+            if classification.intent == UserIntent.GREETING:
+                response = await self._handle_greeting(classification)
+            elif classification.intent == UserIntent.FAREWELL:
+                response = await self._handle_farewell(classification)
+            elif classification.intent == UserIntent.QUESTION:
+                response = await self._handle_question(classification)
+            elif classification.intent == UserIntent.SEARCH:
+                response = await self._handle_search(classification)
+            elif classification.intent == UserIntent.REMEMBER:
+                response = await self._handle_remember(classification)
+            elif classification.intent == UserIntent.STATUS:
+                response = await self._handle_status(classification)
+            elif classification.intent == UserIntent.HELP:
+                response = await self._handle_help(classification)
+            else:
+                # UNKNOWN или другие — передаём в thinker
+                response = await self._handle_via_thinker(user_input, classification.intent)
+        except Exception as e:
+            logger.error(f"Ошибка обработки intent {classification.intent}: {e}", exc_info=True)
+            response = await self._handle_via_thinker(user_input, classification.intent)
+
+        # 3. Сохраняем в cache (async, не блокируем)
+        try:
+            asyncio.create_task(self.request_classifier.save_to_cache(classification))
+        except Exception as e:
+            logger.warning(f"Не удалось сохранить в cache: {e}")
+
+        return {
+            "response": response,
+            "intent": classification.intent,
+            "confidence": classification.confidence,
+            "topic": classification.topic,
+            "source": classification.source,
+        }
+
+    async def _handle_greeting(self, classification: IntentClassification) -> str:
+        """Обработка приветствия."""
+        # Простой ответ без LLM (экономия ресурсов)
+        greetings = [
+            "Привет! Рада тебя видеть.",
+            "Здравствуй! Как дела?",
+            "Приветствую! Чем могу помочь?",
         ]
-        needs_search = any(kw in stimulus_content.lower() for kw in search_keywords)
+        import random
+        return random.choice(greetings)
 
-        if needs_search:
-            # ГАДР: Защита от недоступного tool_registry
-            if self.env.tool_registry is None:
-                logger.warning("ToolRegistry недоступен. Пропускаем поиск.")
-                return "⚠️ Инструменты недоступны."
-
-            topic = self._extract_topic_from_user(stimulus_content)
-            if topic:
-                try:
-                    tool_result = await self.env.tool_registry.execute(
-                        tool_name="wikipedia_search",
-                        parameters={"query": topic, "lang": "ru"},
-                    )
-
-                    is_error = (
-                        tool_result.startswith("Ошибка")
-                        or "не удалось" in tool_result.lower()
-                        or "не дал ответа" in tool_result.lower()
-                    )
-
-                    if is_error:
-                        tool_context = f"⚠️ Поиск не удался: {tool_result}. Не выдумывай данные."
-                    else:
-                        tool_context = (
-                            f"=== РЕАЛЬНЫЕ ДАННЫЕ ИЗ WIKIPEDIA ===\n{tool_result}\n\n"
-                            "Опирайся только на эти данные."
-                        )
-
-                    logger.info(
-                        f"HomeostasisEngine: Пользовательский запрос → инструмент. "
-                        f"Тема: {topic}"
-                    )
-                except LeyaToolError as exc:
-                    logger.error(f"Ошибка выполнения инструмента: {exc}", exc_info=True)
-                    tool_context = f"⚠️ Инструмент недоступен: {exc}"
-                except Exception as exc:
-                    logger.error(f"Неожиданная ошибка инструмента: {exc}", exc_info=True)
-                    tool_context = "⚠️ Инструмент временно недоступен."
-
-        return tool_context
-
-    def _extract_topic_from_user(self, text: str) -> str | None:
-        """
-        Извлечение темы из пользовательского запроса.
-
-        Args:
-            text: Текст запроса
-
-        Returns:
-            Извлечённая тема или None
-        """
-        keywords = [
-            "найди",
-            "поищи",
-            "узнай",
-            "расскажи о",
-            "изучи",
-            "что такое",
-            "какая погода",
+    async def _handle_farewell(self, classification: IntentClassification) -> str:
+        """Обработка прощания."""
+        farewells = [
+            "До свидания! Было приятно пообщаться.",
+            "Пока! Возвращайся, если захочешь поговорить.",
+            "Всего доброго! Буду ждать нашей следующей встречи.",
         ]
-        for kw in keywords:
-            text = text.replace(kw, "")
-        topic = text.strip().strip("?!.,")
-        return topic if len(topic) > 2 else None
+        import random
+        return random.choice(farewells)
+
+    async def _handle_question(self, classification: IntentClassification) -> str:
+        """Обработка вопроса — передаём в thinker с контекстом."""
+        return await self._handle_via_thinker(classification.raw_input, classification.intent)
+
+    async def _handle_search(self, classification: IntentClassification) -> str:
+        """Обработка запроса на поиск."""
+        topic = classification.topic or "неизвестная тема"
+        # Передаём в thinker, который решит, использовать ли инструмент поиска
+        return await self._handle_via_thinker(classification.raw_input, classification.intent)
+
+    async def _handle_remember(self, classification: IntentClassification) -> str:
+        """Обработка запроса на запоминание."""
+        # Передаём в thinker, который извлечёт факт и сохранит в память
+        return await self._handle_via_thinker(classification.raw_input, classification.intent)
+
+    async def _handle_status(self, classification: IntentClassification) -> str:
+        """Обработка запроса о состоянии."""
+        # Получаем состояние драйвов
+        try:
+            drives_state = self.drives.get_drives_state()
+            # Формируем ответ на основе состояния
+            dominant_drive = max(drives_state.items(), key=lambda x: x[1].get("tension", 0))
+            return f"Сейчас я чувствую повышенную потребность в {dominant_drive[0].lower()}. А ты как?"
+        except Exception as e:
+            logger.warning(f"Не удалось получить состояние: {e}")
+            return "Я функционирую нормально. Спасибо, что спрашиваешь!"
+
+    async def _handle_help(self, classification: IntentClassification) -> str:
+        """Обработка запроса помощи."""
+        return (
+            "Я могу отвечать на вопросы, искать информацию в интернете, "
+            "запоминать факты, рассказывать о своём состоянии. "
+            "Просто спроси или попроси что-нибудь!"
+        )
+
+    async def _handle_via_thinker(self, user_input: str, intent: str) -> str:
+        """Обработка через thinker (для сложных или неизвестных запросов).
+
+        Это fallback для случаев, когда специализированный обработчик
+        не справился или intent == UNKNOWN.
+        """
+        try:
+            # Формируем стимул для thinker
+            stimulus = {
+                "type": "USER_MESSAGE",
+                "content": user_input,
+                "classified_intent": intent,
+            }
+
+            # Получаем контекст
+            soul_context = self.soul_manager.get_full_context() if hasattr(self, 'soul_manager') else ""
+            drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
+            memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
+            tools = self.tool_registry.get_tools_schema() if hasattr(self, 'tool_registry') else []
+
+            # Генерируем план через thinker
+            plan = await self.thinker.generate_plan(
+                stimulus=stimulus,
+                soul_context=soul_context,
+                drive_context=drive_context,
+                memory_context=memory_context,
+                tools=tools,
+            )
+
+            return plan.get("response", "Извини, я не смогла обработать запрос.")
+
+        except Exception as e:
+            logger.error(f"Ошибка обработки через thinker: {e}", exc_info=True)
+            return "Извини, произошла ошибка при обработке запроса. Попробуй ещё раз."
+
 
     async def _cognitive_loop(self, stimulus: dict[str, Any], tool_context: str) -> None:
         """
