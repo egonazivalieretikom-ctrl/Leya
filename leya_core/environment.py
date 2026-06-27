@@ -26,6 +26,7 @@ import logging
 import os
 import subprocess
 import tempfile
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -41,7 +42,8 @@ from .exceptions import (
 )
 from .interfaces import IEnvironment
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Leya.Environment")
+
 
 
 # ============================================================================
@@ -58,6 +60,35 @@ class Tool:
     handler: Callable[..., Any]
     parameters: dict[str, Any] = field(default_factory=dict)
     category: str = "general"
+
+
+class BaseEnvironment(ABC):
+    """Базовый интерфейс окружения. Все broadcast-методы должны быть явно реализованы."""
+
+    @abstractmethod
+    async def listen(self) -> None: ...
+    
+    @abstractmethod
+    async def send_message(self, text: str) -> None: ...
+
+    def broadcast_thought(self, thought_type: str, content: str) -> None:
+        """Базовая заглушка. Переопределите в WebEnvironment/CLIEnvironment."""
+        logger.warning(f"[No-Op] broadcast_thought({thought_type}) вызван, но не реализован в этом окружении.")
+
+    def update_drives(self, drive_state: dict[str, float]) -> None:
+        logger.warning(f"[No-Op] update_drives() вызван. Окружение не поддерживает визуализацию драйвов.")
+
+    def update_self_model(self, model_text: str) -> None:
+        logger.warning(f"[No-Op] update_self_model() вызван. Данные утеряны в данном окружении.")
+
+    def broadcast_state(self, state: dict[str, Any]) -> None:
+        logger.debug(f"[No-Op] broadcast_state() проигнорирован.")
+        
+    def update_memory(self, memory_info: dict[str, Any]) -> None:
+        logger.warning(f"[No-Op] update_memory() проигнорирован.")
+        
+    def broadcast_soul_update(self, soul_files: list[str]) -> None:
+        logger.warning(f"[No-Op] broadcast_soul_update() проигнорирован.")
 
 
 class ToolRegistry:

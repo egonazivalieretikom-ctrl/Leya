@@ -21,7 +21,6 @@ leya_core/reflection.py
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from collections.abc import Callable
@@ -39,6 +38,7 @@ from .exceptions import (
     LeyaWorkspaceError,
 )
 from .thinker import repair_json
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -486,7 +486,8 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     """
 
             response = await self.llm_client(prompt)
-            data = self._safe_parse_json(response)
+            data = cleaned = repair_json(response)
+            data = json.loads(cleaned) if cleaned != "{}" else {}
             insight = data.get("insight", "")
 
             if insight:
@@ -537,27 +538,6 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                 context={"error": str(exc)},
             ) from exc
 
-    def _safe_parse_json(self, response: str) -> dict[str, Any]:
-        """
-        Безопасный парсинг JSON с использованием repair_json из thinker.
-        Устраняет дублирование логики очистки markdown и поиска JSON-блоков (DRY).
-        
-        Raises:
-            LeyaJSONParseError: если не удалось распарсить
-        """
-        if not response:
-            return {}
-
-        try:
-            cleaned = repair_json(response)
-            if cleaned == "{}":
-                return {}
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            raise LeyaJSONParseError(
-                "Не удалось распарсить JSON от LLM",
-                context={"response_preview": response[:200], "error": str(exc)},
-            ) from exc
 
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition."""
