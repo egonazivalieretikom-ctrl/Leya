@@ -441,35 +441,43 @@ class MemorySystem:
     # Само-модель
     # ========================================================================
 
-    async def update_self_model(self, reflection: str) -> None:
-        """Обновить само-модель на основе рефлексии."""
-        if not reflection.strip():
+    async def update_self_model(self, reflection_text: str) -> None:
+        """
+        Обновляет само-модель на основе рефлексии/инсайта.
+
+        Args:
+            reflection_text: Текст рефлексии или инсайта для добавления в self_model.
+                Пустые строки игнорируются.
+
+        Side effects:
+            - Добавляет timestamped запись в self_model
+            - Ограничивает размер self_model последними 50 записями
+            - Сохраняет состояние через _save_state()
+        """
+        if not reflection_text or not reflection_text.strip():
+            logger.warning("MemorySystem: Пустой reflection_text, обновление пропущено.")
             return
 
-        # Добавляем как семантический факт о себе
-        await self.store_fact(
-            content=f"[Self-Model Update] {reflection}",
-            metadata={"type": "self_model_update", "timestamp": time.time()},
-        )
+        timestamp = datetime.now().isoformat()
+        entry = f"[{timestamp}] {reflection_text.strip()}"
 
-        # Обновляем текущую само-модель (конкатенация с ограничением длины)
-        max_length = self.memory_config.max_self_model_length
-        
-        # Если новая рефлексия уже превышает лимит, обрезаем её
-        if len(reflection) > max_length:
-            reflection = reflection[:max_length]
-        
-        # Конкатенация с проверкой общей длины
-        new_self_model = f"{self.self_model}\n{reflection}".strip() if self.self_model else reflection
-        
-        # Явное ограничение длины
-        if len(new_self_model) > max_length:
-            new_self_model = new_self_model[-max_length:]
-        
-        self.self_model = new_self_model
+        if self.self_model:
+            # Ограничиваем размер self_model (последние 50 записей)
+            lines = self.self_model.split("\n")
+            if len(lines) >= 50:
+                lines = lines[-49:]
+            lines.append(entry)
+            self.self_model = "\n".join(lines)
+        else:
+            self.self_model = entry
 
-        await self._save_state()
-        logger.debug(f"Само-модель обновлена (+{len(reflection)} символов)")
+        logger.info(f"MemorySystem: Self-model обновлён (+{len(reflection_text)} символов)")
+
+        # Сохранение состояния
+        try:
+            await self._save_state()
+        except Exception as exc:
+            logger.error(f"MemorySystem: Ошибка сохранения после update_self_model: {exc}")
 
     def _extract_key_topics(self, text: str) -> list[str]:
         """
