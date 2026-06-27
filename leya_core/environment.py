@@ -704,7 +704,7 @@ class SoulFileManager:
 # ============================================================================
 
 
-class Environment(ABC, IEnvironment):
+class Environment(BaseEnvironment, IEnvironment):
     """
     Базовый абстрактный класс окружения.
 
@@ -716,16 +716,12 @@ class Environment(ABC, IEnvironment):
         self.leya = leya_os
         self.tool_registry = ToolRegistry()
         self.soul_manager = SoulFileManager()
-        self.tool_generator = ToolGenerator(...)
 
     async def execute_tool_call(self, tool_call_json: Any) -> str:
         """
         Парсит и выполняет вызов инструмента.
 
         Принимает как JSON-строку, так и dict.
-
-        Raises:
-            LeyaToolError: ошибка парсинга или выполнения
         """
         try:
             if isinstance(tool_call_json, dict):
@@ -745,7 +741,9 @@ class Environment(ABC, IEnvironment):
                     context={"data": data},
                 )
 
-            result = await self.env.execute_tool_call(tool_name, parameters)
+            # Исправлено: используем tool_registry
+            result = await self.tool_registry.execute(tool_name, parameters)
+            return result
 
         except json.JSONDecodeError as exc:
             raise LeyaToolError(
