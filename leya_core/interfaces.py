@@ -137,7 +137,6 @@ class IDriveSystem(Protocol):
 class IMemorySystem(Protocol):
     """
     Интерфейс системы памяти.
-
     Реализация: leya_core.memory.MemorySystem
 
     Биологически вдохновлённая память с энграммами, синапсами,
@@ -145,14 +144,14 @@ class IMemorySystem(Protocol):
     """
 
     async def store_perception(
-        self, content: str, emotional_boost: float = 0.0, metadata: dict[str, Any] | None = None
+        self, content: str, emotional_boost: float=0.0, metadata: dict[str, Any] | None=None
     ) -> Engram: ...
 
     async def retrieve_context(
-        self, query: str, limit: int = 5, memory_type: str = "episodic"
+        self, query: str, max_results: int=5, min_retention: float=0.1
     ) -> list[Engram]: ...
 
-    async def store_fact(self, content: str, metadata: dict[str, Any] | None = None) -> Engram: ...
+    async def store_fact(self, content: str, metadata: dict[str, Any] | None=None) -> Engram: ...
 
     async def consolidate_memories(self) -> None: ...
 
@@ -160,11 +159,11 @@ class IMemorySystem(Protocol):
 
     async def get_self_model_context(self) -> str: ...
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 5) -> list[Engram]: ...
+    async def get_recent_spontaneous_thoughts(self, limit: int=10) -> list[Engram]: ...
 
-    async def get_recent_episodes(self, limit: int = 10) -> list[Engram]: ...
+    async def get_recent_episodes(self, limit: int=10) -> list[Engram]: ...
 
-    async def forget_weak_memories(self, threshold: float = 0.1) -> int:
+    async def forget_weak_memories(self, threshold: float=0.1) -> int:
         """
         Забывает слабые воспоминания.
 
@@ -178,9 +177,9 @@ class IMemorySystem(Protocol):
 
     async def get_memory_graph_data(
         self,
-        min_retention: float = 0.1,
-        max_nodes: int = 100,
-        include_synapses: bool = True,
+        min_retention: float=0.1,
+        max_nodes: int=100,
+        include_synapses: bool=True,
     ) -> dict[str, Any]:
         """
         Возвращает данные для визуализации графа памяти.
@@ -194,10 +193,10 @@ class IMemorySystem(Protocol):
 
         Returns:
             dict с ключами:
-                "nodes": list[dict] — узлы графа
-                "edges": list[dict] — рёбра графа
-                "total_engrams": int
-                "total_synapses": int
+            "nodes": list[dict] — узлы графа
+            "edges": list[dict] — рёбра графа
+            "total_engrams": int
+            "total_synapses": int
         """
         ...
 
