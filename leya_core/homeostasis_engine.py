@@ -64,6 +64,7 @@ class HomeostasisEngine:
         self.dynamic_keywords: list[str] = []
         self.current_goal: dict[str, Any] | None = None
         self.last_action_time: float = 0.0
+        self.rest_period: float = self.config.rest_period
 
         # Пороги для генерации целей (адаптируются из self_model)
         self.thresholds: dict[DriveType, float] = {
@@ -86,6 +87,34 @@ class HomeostasisEngine:
             f"rest_period={self.config.rest_period}с, "
             f"min_reward={self.config.min_reward_threshold}"
         )
+
+    def generate_goal_from_gap(self, gap: float, drive_type: str) -> Any:
+        """
+        Генерация цели из разрыва (gap) в конкретном драйве.
+    
+        Args:
+            gap: Величина разрыва (0.0-1.0)
+            drive_type: Тип драйва (CURIOSITY, CONNECTION и т.д.)
+    
+        Returns:
+            Словарь с информацией о цели или None
+        """
+        if gap < 0.3:
+            return None
+    
+        goal = {
+            "id": f"goal_{drive_type}_{int(time.time())}",
+            "drive_type": drive_type,
+            "gap": gap,
+            "urgency": gap,
+            "content": f"Восстановить баланс драйва {drive_type}",
+            "action_type": "balance_drive",
+            "timestamp": time.time(),
+        }
+    
+        self.current_goal = goal
+        self.last_action_time = time.time()
+        return goal
 
     async def generate_goal(
         self,
@@ -478,78 +507,48 @@ class HomeostasisEngine:
             "lang": "ru",
         }
 
-    async def extract_key_facts(
-        self,
-        topic: str,
-        article_text: str,
-        llm_client: Callable,
-    ) -> list[str]:
+    async def extract_key_facts(self, text: str) -> list[str]:
         """
-        Извлечение ключевых фактов из статьи через LLM.
-
+        Извлечение ключевых фактов из текста.
+    
         Args:
-            topic: Тема статьи
-            article_text: Текст статьи
-            llm_client: Функция для вызова LLM
-
+            text: Текст для анализа
+    
         Returns:
-            Список извлечённых фактов
-
-        Raises:
-            LeyaJSONParseError: Не удалось распарсить JSON от LLM
-            LeyaLLMError: Ошибка вызова LLM
-            LeyaHomeostasisError: Другие ошибки
+            Список ключевых фактов
         """
-        if not article_text or len(article_text) < 50:
-            logger.warning(
-                f"HomeostasisEngine: Текст слишком короткий для извлечения фактов ({len(article_text)} символов)"
-            )
+        if not text or len(text.strip()) < 10:
             return []
+    
+        # Простая эвристика: предложения с цифрами, датами, именами
+        facts = []
+        sentences = text.split('.')
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) > 20 and any(c.isdigit() for c in sentence):
+                facts.append(sentence)
+    
+        return facts[:5]  # Не более 5 фактов
 
-        prompt = f"""Ты — система извлечения знаний. Извлеки из текста 3-5 ключевых фактов о теме "{topic}".
-
-ПРАВИЛА:
-- Отсеивай мусор: даты, технические детали, ссылки, служебную информацию
-- Оставляй только суть: определения, принципы, важные связи
-- Каждый факт — одно предложение на русском языке
-- НЕ выдумывай факты, которых нет в тексте
-
-ТЕКСТ:
-{article_text[:2000]}
-
-Верни JSON:
-{{"facts": ["факт 1", "факт 2", "факт 3"]}}
-
-CRITICAL: Return ONLY valid JSON."""
-
-        try:
-            response = await llm_client(prompt, require_json=True)
-            cleaned = self._clean_json_response(response)
-            data = json.loads(cleaned)
-            facts = data.get("facts", [])
-
-            logger.info(
-                f"HomeostasisEngine: Извлечено {len(facts)} ключевых фактов по теме '{topic}'"
-            )
-            return facts[:10]  # Ограничение на количество фактов
-
-        except json.JSONDecodeError as exc:
-            raise LeyaJSONParseError(
-                "Не удалось распарсить JSON при извлечении фактов",
-                context={"topic": topic, "error": str(exc), "response_preview": response[:200]},
-            ) from exc
-
-        except LeyaLLMError as exc:
-            raise LeyaLLMError(
-                "Ошибка LLM при извлечении фактов",
-                context={"topic": topic, "error": str(exc)},
-            ) from exc
-
-        except Exception as exc:
-            raise LeyaHomeostasisError(
-                "Неожиданная ошибка извлечения фактов",
-                context={"topic": topic, "error": str(exc)},
-            ) from exc
+    async def extract_new_terms(self, text: str) -> list[str]:
+        """
+        Извлечение новых терминов из текста.
+    
+        Args:
+            text: Текст для анализа
+    
+        Returns:
+            Список новых терминов
+        """
+        if not text:
+            return []
+    
+        # Простая эвристика: слова в кавычках или с заглавной буквы
+        import re
+        terms = re.findall(r'"([^"]+)"', text)
+        terms.extend(re.findall(r'\b([A-ZА-ЯЁ][a-zа-яё]{3,})\b', text))
+    
+        return list(set(terms))[:10]  # Уникальные, не более 10
 
     async def extract_new_terms(
         self,
@@ -680,10 +679,6 @@ CRITICAL: Return ONLY valid JSON."""
         for kw in keywords:
             if kw not in self.dynamic_keywords:
                 self.dynamic_keywords.append(kw)
-
-    @property
-    def rest_period(self) -> float:
-        return float(self.config.rest_period)
 
     def update_from_self_model(self, self_model: str) -> None:
         """

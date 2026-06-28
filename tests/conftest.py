@@ -24,14 +24,19 @@ os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
 
 from leya_core.config import (
     ConstitutionalConfig,
+    WebConfig, 
     DrivesConfig,
     HomeostasisConfig,
     LeyaConfig,
     MemoryConfig,
     OllamaConfig,
+    WebConfig,
+    LoggingConfig, 
     ReflectionConfig,
     ThinkerConfig,
+    SoulConfig,   
     WorkspaceConfig,
+    ExperimentalConfig,
 )
 from leya_core.memory import Engram, MemoryType
 
@@ -169,16 +174,33 @@ def test_constitutional_config():
 
 
 @pytest.fixture
-def test_leya_config(
-    temp_brain_dir,
-    test_memory_config,
-    test_drives_config,
-    test_thinker_config,
-    test_homeostasis_config,
-    test_workspace_config,
-    test_reflection_config,
-    test_constitutional_config,
-):
+def test_leya_config(tmp_path):
+    """Создаёт полную тестовую конфигурацию."""
+    from leya_core.config import LeyaConfig
+    
+    return LeyaConfig(
+        ollama=OllamaConfig(
+            base_url="http://localhost:11434",
+            model="test-model",
+        ),
+        memory=MemoryConfig(
+            brain_dir=str(tmp_path / "brain"),
+            embedding_model="all-MiniLM-L6-v2",
+        ),
+        drives=DrivesConfig(),
+        homeostasis=HomeostasisConfig(),
+        thinker=ThinkerConfig(),
+        reflection=ReflectionConfig(),
+        workspace=WorkspaceConfig(),
+        constitutional=ConstitutionalConfig(),
+        web=WebConfig(),
+        logging=LoggingConfig(),
+        soul=SoulConfig(
+            soul_dir=str(tmp_path / "soul"),
+        ),
+        experimental=ExperimentalConfig(),
+    )
+
     """Полная LeyaConfig для тестов."""
     return LeyaConfig(
         ollama=OllamaConfig(

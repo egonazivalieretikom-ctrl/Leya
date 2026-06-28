@@ -101,7 +101,20 @@ class SoulCryptoManager:
             raise ValueError(
                 "Конфигурация должна содержать soul_dir или soul.soul_dir"
             )
-        
+        # 2. СНАЧАЛА инициализируем _hmac_key
+        hmac_key_value = None
+        if hasattr(config, 'hmac_key'):
+            hmac_key_value = config.hmac_key
+        elif hasattr(config, 'soul') and hasattr(config.soul, 'hmac_key'):
+            hmac_key_value = config.soul.hmac_key
+        self._hmac_key = hmac_key_value.encode("utf-8") if hmac_key_value else b""
+
+        # 3. СНАЧАЛА инициализируем enable_versioning
+        self._enable_versioning = (
+            getattr(config, 'enable_versioning', False) or
+            getattr(getattr(config, 'soul', None), 'enable_versioning', False) or
+            getattr(getattr(config, 'experimental', None), 'enable_versioning', False)
+        )
         # Создаём директорию, если её нет
         try:
             self.soul_dir.mkdir(parents=True, exist_ok=True)
@@ -122,15 +135,22 @@ class SoulCryptoManager:
             "rollbacks": 0,
         }
         
-        # HMAC ключ
-        self._hmac_key = config.hmac_key.encode("utf-8") if config.hmac_key else b""
-        
+        # Поддержка обоих вариантов: прямой enable_versioning и вложенный experimental.enable_versioning
+        enable_versioning = False
+        if hasattr(config, 'enable_versioning'):
+            enable_versioning = config.enable_versioning
+        elif hasattr(config, 'experimental') and hasattr(config.experimental, 'enable_versioning'):
+            enable_versioning = config.experimental.enable_versioning
+
+        enable_versioning = getattr(config, 'enable_versioning', False) or \
+                    getattr(getattr(config, 'soul', None), 'enable_versioning', False) or \
+                    getattr(getattr(config, 'experimental', None), 'enable_versioning', False)
+            
         logger.info(
             f"✅ SoulCryptoManager инициализирован: "
-            f"dir={self.soul_dir}, "
             f"hmac={'enabled' if self._hmac_key else 'disabled'}, "
-            f"versioning={'enabled' if config.enable_versioning else 'disabled'}, "
-            f"history_size={len(self._history)}"
+            f"versioning={'enabled' if enable_versioning else 'disabled'}, "
+            f"soul_dir={self.soul_dir}"
         )
     
     # =================================================================================

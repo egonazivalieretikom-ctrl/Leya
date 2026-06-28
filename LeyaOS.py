@@ -43,6 +43,7 @@ from leya_core.exceptions import (
     LeyaWorkspaceError,
     SoulTamperError,
 )
+from leya_core.state_persistence import StatePersistence
 
 from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
 from leya_core.homeostasis_engine import HomeostasisEngine
@@ -96,10 +97,11 @@ class LeyaOS:
         self._last_interaction_time = datetime.now().timestamp()
         self._shutdown_event = asyncio.Event()  # ✅ ДОБАВЛЕНО
         from leya_core.state_persistence import StatePersistence
-        self.persistence = StatePersistence(
-            state_dir=Path(config.brain_dir) if hasattr(config, 'brain_dir') else Path("./leya_brain")
-        )
+        from pathlib import Path
 
+        self.persistence = StatePersistence(
+            state_file=str(Path(config.memory.brain_dir) / "leya_state.json")  # ✅ Правильно
+        )
         # Конфигурация
         self.config = config or LeyaConfig.from_env()
 
@@ -107,6 +109,8 @@ class LeyaOS:
         self.constitutional: IConstitutionalLayer = ConstitutionalLayer(
             config=self.config.constitutional
         )
+
+        self.state_path = Path(config.brain_dir) / "memory_state.json"
 
         # Глобальное рабочее пространство
         self.workspace: IGlobalWorkspace = GlobalWorkspace(config=self.config.workspace)
@@ -116,6 +120,12 @@ class LeyaOS:
         # Ядро когнитивной системы
         self.drives: IDriveSystem = DriveSystem(config=self.config.drives)
         self.memory: IMemorySystem = MemorySystem(config=self.config.memory) 
+
+        # Инициализация StatePersistence
+        from leya_core.state_persistence import StatePersistence
+        self.persistence = StatePersistence(
+            brain_dir=config.memory.brain_dir
+        )
 
         # Инициализация Soul Manager
         from leya_core.soul_manager import SoulManager
@@ -142,6 +152,13 @@ class LeyaOS:
         else:
             self.env = CLIEnvironment(leya_os=self)
             logger.info("💻 Используется CLI-интерфейс")
+
+        def __init__(self, config: LeyaConfig, use_web: bool = True):
+
+            from leya_core.state_persistence import StatePersistence
+            self.persistence = StatePersistence(
+                brain_dir=config.memory.brain_dir
+            )
 
         # ✅ 1. СНАЧАЛА создаём LLM-клиент
         self.llm_client = OllamaClient(
@@ -241,6 +258,12 @@ class LeyaOS:
             except Exception as e:
                 logger.error(f"Не удалось инициализировать EmotionalSupport: {e}", exc_info=True)
                 self.emotional_support = None
+
+
+        from leya_core.state_persistence import StatePersistence
+        self.persistence = StatePersistence(
+            brain_dir=config.memory.brain_dir
+        )
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 

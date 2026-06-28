@@ -28,13 +28,14 @@ from leya_core.thinker import CoreThinker
 class TestProtocolCompliance:
     """Тесты соответствия Protocol-интерфейсам."""
 
-    def test_memory_system_implements_protocol(self, test_leya_config):
-        """MemorySystem реализует IMemorySystem."""
-        with patch("leya_core.memory.chromadb.PersistentClient") as mock_chroma:
-            mock_chroma.return_value = MagicMock()
-            memory = MemorySystem(config=test_leya_config)
-
-            assert isinstance(memory, IMemorySystem)
+    def test_memory_system_implements_protocol(self, tmp_path):
+        from leya_core.config import MemoryConfig
+        from leya_core.memory import MemorySystem
+        from leya_core.interfaces import IMemorySystem
+    
+        config = MemoryConfig(brain_dir=str(tmp_path / "brain"))
+        memory = MemorySystem(config=config)
+        assert isinstance(memory, IMemorySystem)
 
     def test_drive_system_implements_protocol(self, test_drives_config):
         """DriveSystem реализует IDriveSystem."""

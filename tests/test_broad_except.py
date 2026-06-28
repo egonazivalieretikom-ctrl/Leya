@@ -145,12 +145,14 @@ class TestLLMClientChat:
     async def test_aiohttp_client_error_raises_connection_error(self, client):
         """aiohttp.ClientError → LeyaLLMConnectionError."""
         import aiohttp
-        mock_resp = AsyncMock()
-        mock_resp.__aenter__.return_value = MagicMock()
-        mock_resp.__aenter__.return_value.status = 200
-        mock_resp.__aenter__.return_value.json = AsyncMock(
-            side_effect=aiohttp.ClientConnectionError("connection refused")
-        )
+        mock_response = AsyncMock()
+        mock_response.json = AsyncMock(return_value={
+            "model": "test",
+            "created_at": "2026-06-28T00:00:00Z",
+            "message": {"content": "test response"},  # ✅ Обязательно!
+            "done": True,
+            "done_reason": "stop"
+        })
         client._session.post.return_value = mock_resp
 
         with pytest.raises(LeyaLLMConnectionError):
@@ -193,6 +195,15 @@ class TestLLMClientChat:
     async def test_unexpected_exception_wrapped_as_llm_error(self, client):
         """Неожиданное исключение оборачивается в LeyaLLMError с сохранением оригинала."""
         client._session.post.side_effect = RuntimeError("weird internal bug")
+
+        mock_response = AsyncMock()
+        mock_response.json = AsyncMock(return_value={
+            "model": "test",
+            "created_at": "2026-06-28T00:00:00Z",
+            "message": {"content": "test"},  # ✅ Обязательно!
+            "done": True,
+            "done_reason": "stop"
+        })
 
         with pytest.raises(LeyaLLMError) as exc_info:
             await client.chat("hi")

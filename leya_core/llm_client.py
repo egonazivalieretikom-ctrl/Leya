@@ -198,13 +198,7 @@ class OllamaClient:
             await self._session.close()
             self._session = None
 
-    async def chat(
-        self,
-        prompt: str,
-        system: str | None = None,
-        require_json: bool = False,
-        timeout: float | None = None,
-    ) -> str:
+    async def chat(self, messages: list[dict], require_json: bool = False) -> str:
         from .exceptions import (
             LeyaLLMConnectionError,
             LeyaLLMTimeoutError,
@@ -236,13 +230,11 @@ class OllamaClient:
             },
             "messages": [],
         }
-        if system:
-            payload["messages"].append({"role": "system", "content": system})
-        payload["messages"].append({"role": "user", "content": prompt})
+
         if require_json:
             payload["format"] = "json"
 
-        req_timeout = aiohttp.ClientTimeout(total=timeout or self.timeout)
+        req_timeout = aiohttp.ClientTimeout(total=self.timeout)  # Используем self.timeout
 
         # ✅ Получаем сессию через ленивый метод
         session = await self._get_session()
@@ -288,34 +280,18 @@ class OllamaClient:
                 self._breaker.record_success()
                 return content
 
-        except asyncio.TimeoutError as e:
-            self._breaker.record_failure()
-            raise LeyaLLMTimeoutError(
-                "Таймаут запроса к LLM",
-                context={"timeout": req_timeout.total, "url": url},
-            ) from e
-
+        except asyncio.TimeoutError:
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMTimeoutError("LLM request timeout")
         except aiohttp.ClientError as e:
-            self._breaker.record_failure()
-            raise LeyaLLMConnectionError(
-                "Ошибка соединения с LLM",
-                context={"error_type": type(e).__name__, "detail": str(e), "url": url},
-            ) from e
-
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMConnectionError(f"Connection error: {e}")
         except (LeyaLLMError, LeyaJSONParseError):
-            raise
-
+            raise  # Пробрасываем специфичные исключения
         except Exception as e:
-            logger.error(
-                f"Неожиданная ошибка в LLM client: {e}",
-                exc_info=True,
-                extra={"context": {"url": url, "model": self.model}},
-            )
-            self._breaker.record_failure()
-            raise LeyaLLMError(
-                f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
-                context={"error_type": type(e).__name__, "detail": str(e)},
-            ) from e
+            # Только для действительно неожиданных ошибок
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMError(f"Unexpected error: {e}") from e
 
     async def __aenter__(self) -> OllamaClient:
         return self

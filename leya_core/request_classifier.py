@@ -12,7 +12,7 @@ from typing import Optional, Any
 
 from pydantic import BaseModel, Field
 
-from .exceptions import LeyaLLMError, LeyaJSONParseError
+from .exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMUnavailableError
 
 logger = logging.getLogger("LeyaRequestClassifier")
 
@@ -166,7 +166,13 @@ class RequestClassifier:
 
         user_input = user_input.strip()
 
-        # Уровень 1: Быстрая эвристика
+        # Уровень 1: Проверка кэша (самый быстрый путь)
+        cache_result = await self._cache_lookup(user_input)
+        if cache_result:
+            logger.debug(f"Найдено в кэше: {cache_result.intent}")
+            return cache_result
+
+        # Уровень 2: Быстрая эвристика
         heuristic_result = self._heuristic_classify(user_input)
         if heuristic_result.confidence >= self.use_llm_threshold:
             logger.debug(
@@ -175,38 +181,38 @@ class RequestClassifier:
             )
             return heuristic_result
 
-        # Уровень 2: Semantic cache
-        try:
-            cache_result = await self._cache_lookup(user_input)
-            if cache_result and cache_result.confidence >= self.use_llm_threshold:
-                logger.debug(
-                    f"Cache hit: {cache_result.intent} "
-                    f"(confidence={cache_result.confidence:.2f})"
-                )
-                return cache_result
-        except Exception as e:
-            logger.warning(f"Ошибка semantic cache: {e}", exc_info=True)
-
-        # Уровень 3: LLM-assisted extraction
+        # Уровень 3: LLM (с graceful degradation)
         try:
             llm_result = await self._llm_classify(user_input)
-            if llm_result.confidence >= 0.5:  # LLM результат принимаем даже с низкой уверенностью
-                logger.debug(
-                    f"LLM классификация: {llm_result.intent} "
-                    f"(confidence={llm_result.confidence:.2f})"
-                )
-                return llm_result
-        except Exception as e:
-            logger.warning(f"Ошибка LLM классификации: {e}", exc_info=True)
+            return llm_result
+        except (LeyaLLMError, LeyaLLMUnavailableError, Exception) as exc:
+            logger.warning(f"Ошибка LLM классификации, fallback на эвристику: {exc}")
+            # Fallback: возвращаем результат эвристики с пониженной уверенностью
+            return IntentClassification(
+                intent=heuristic_result.intent,
+                confidence=min(heuristic_result.confidence, 0.6),  # Понижаем уверенность
+                source="fallback",
+                topic=heuristic_result.topic,
+                raw_input=heuristic_result.raw_input,
+            )
 
         # Уровень 4: Fallback — используем лучшую эвристику
         logger.debug("Fallback на эвристику")
         return heuristic_result
 
-    def _heuristic_classify(self, text: str) -> tuple[UserIntent, float]:
+    def _heuristic_classify(self, text: str) -> IntentClassification:
+        """
+        Быстрая эвристическая классификация без LLM.
+    
+        Args:
+            text: Текст запроса пользователя
+    
+        Returns:
+            IntentClassification с результатом классификации
+        """
         text_lower = text.lower().strip()
     
-        # STATUS эвристики (ДОБАВЬТЕ перед QUESTION)
+        # STATUS эвристики (высокий приоритет)
         status_patterns = [
             r"как(?:ое|ая|ую|ие)\s+(?:у\s+тебя\s+)?состояни",
             r"как\s+ты\s+себя\s+чувству",
@@ -218,9 +224,15 @@ class RequestClassifier:
     
         for pattern in status_patterns:
             if re.search(pattern, text_lower):
-                return UserIntent.STATUS, 0.85
+                return IntentClassification(
+                    intent=UserIntent.STATUS,
+                    confidence=0.85,
+                    source="heuristic",  # ← ДОБАВЬТЕ
+                    topic=None,
+                    raw_input=text_lower,
+                )
     
-        # QUESTION эвристики (существующие)
+        # QUESTION эвристики
         question_patterns = [
             r"^(?:что|кто|как|где|когда|почему|зачем)\s+",
             r"\?$",
@@ -228,43 +240,49 @@ class RequestClassifier:
     
         for pattern in question_patterns:
             if re.search(pattern, text_lower):
-                return UserIntent.QUESTION, 0.75
+                # Извлекаем тему из вопроса
+                topic = self._extract_topic_heuristic(text_lower, UserIntent.QUESTION)
+                return IntentClassification(
+                    intent=UserIntent.QUESTION,
+                    confidence=0.75,
+                    source="heuristic",
+                    topic=topic,  # ← ИСПРАВЛЕНО
+                    raw_input=text_lower,
+                )
+    
+        # Основной цикл по скомпилированным паттернам
         scores: dict[UserIntent, float] = {}
-
+    
         for intent, patterns in self._compiled_patterns.items():
             total_weight = 0.0
             for pattern, weight in patterns:
-                if pattern.search(user_input):
+                if pattern.search(text_lower):  # ✅ ИСПРАВЛЕНО: было user_input
                     total_weight += weight
-            
+        
             if total_weight > 0:
-                # Нормализуем: делим на количество паттернов для этого intent
-                # чтобы не было перекоса в сторону intent с большим количеством паттернов
                 normalized = min(1.0, total_weight / max(1, len(patterns) * 0.5))
                 scores[intent] = normalized
-
+    
         if not scores:
             return IntentClassification(
                 intent=UserIntent.UNKNOWN,
                 confidence=0.0,
+                source="heuristic",  # ← ДОБАВЬТЕ
                 topic=None,
-                source="heuristic",
-                raw_input=user_input,
+                raw_input=text_lower,
             )
-
-        # Находим intent с максимальным score
+    
         best_intent = max(scores, key=scores.get)
         confidence = scores[best_intent]
-
-        # Извлекаем тему (простая эвристика — последние слова после ключевых)
-        topic = self._extract_topic_heuristic(user_input, best_intent)
-
+    
+        topic = self._extract_topic_heuristic(text_lower, best_intent)
+    
         return IntentClassification(
             intent=best_intent,
             confidence=confidence,
+            source="heuristic",  # ← ДОБАВЬТЕ
             topic=topic,
-            source="heuristic",
-            raw_input=user_input,
+            raw_input=text_lower,
         )
 
     def _extract_topic_heuristic(self, user_input: str, intent: UserIntent) -> Optional[str]:
@@ -368,14 +386,19 @@ class RequestClassifier:
                 timeout=10.0,  # короткий timeout для классификации
             )
 
-            # Парсим JSON
+            # Проверка типа ответа (защита от некорректных mock'ов)
+            if not isinstance(raw_response, (str, bytes, bytearray)):
+                raise LeyaLLMError(
+                    f"LLM вернул некорректный тип ответа: {type(raw_response).__name__}"
+                )
+
             try:
                 data = json.loads(raw_response)
-            except json.JSONDecodeError:
-                # Пытаемся repair_json
-                from .thinker import repair_json
-                repaired = repair_json(raw_response)
-                data = json.loads(repaired)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise LeyaJSONParseError(
+                    f"Не удалось распарсить JSON от LLM: {exc}",
+                    context={"raw_response": str(raw_response)[:200]},
+                ) from exc
 
             intent_str = data.get("intent", "UNKNOWN")
             confidence = float(data.get("confidence", 0.5))

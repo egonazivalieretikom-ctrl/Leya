@@ -58,22 +58,22 @@ class SyncReport:
     Отчёт о операции синхронизации in-memory ↔ ChromaDB.
     """
 
-    def __init__(self):
-        self.added_to_chrome: int = 0
-        self.updated_in_chrome: int = 0
-        self.removed_from_chrome: int = 0
+    def __init__(self):  # ✅ Исправлено: убрано : MemoryConfig и запятая
+        self.added_to_chroma: int = 0      # ✅ Исправлено: chroma
+        self.updated_in_chroma: int = 0    # ✅ Исправлено: chroma
+        self.removed_from_chroma: int = 0  # ✅ Исправлено: chroma
         self.errors: int = 0
         self.duration_ms: float = 0.0
 
     @property
     def total_discrepancies(self) -> int:
-        return self.added_to_chrome + self.removed_from_chrome
+        return self.added_to_chroma + self.removed_from_chroma
 
     def __str__(self) -> str:
         return (
-            f"SyncReport(added={self.added_to_chrome}, "
-            f"updated={self.updated_in_chrome}, "
-            f"removed={self.removed_from_chrome}, "
+            f"SyncReport(added={self.added_to_chroma}, "
+            f"updated={self.updated_in_chroma}, "
+            f"removed={self.removed_from_chroma}, "
             f"errors={self.errors}, "
             f"duration={self.duration_ms:.1f}ms)"
         )
@@ -195,7 +195,22 @@ class MemorySystem:
     - Эмоциональное усиление: замедление забывания для значимых событий
     """
 
-    def __init__(self, config) -> None:
+    def __init__(self, config=None,) -> None:
+        self.config = config 
+
+        # Инициализация state_path с защитой от None
+        if self.config is not None:
+            if hasattr(self.config, 'brain_dir'):
+                brain_dir = self.config.brain_dir
+            elif hasattr(self.config, 'memory') and self.config.memory is not None:
+                brain_dir = self.config.memory.brain_dir
+            else:
+                brain_dir = "./leya_brain"
+        else:
+            brain_dir = "./leya_brain"
+    
+        self.state_path = Path(brain_dir) / "memory_state.json"
+
         # ✅ СНАЧАЛА определяем memory_config
         if isinstance(config, LeyaConfig):
             self.config = config
@@ -207,14 +222,22 @@ class MemorySystem:
             raise TypeError(
                 f"config должен быть LeyaConfig или MemoryConfig, получено {type(config)}"
             )
+        self.state_path = Path(config.brain_dir) / "memory_state.json"
 
         # ✅ ПОСЛЕ этого используем memory_config.brain_dir
         self.engrams: dict[str, Engram] = {}
         self.synapses: dict[str, Synapse] = {}
         self.self_model: str = ""
-        self.state_path = Path(self.config.brain_dir) / "memory_state.json"
+        if hasattr(self.config, 'memory') and self.config.memory is not None:
+            brain_dir = self.config.memory.brain_dir
+        elif hasattr(self.config, 'brain_dir'):
+            brain_dir = self.config.brain_dir
+        else:
+            brain_dir = "./leya_brain"
+
+        self.state_path = Path(brain_dir) / "memory_state.json"
+        self.state_path = Path(config.brain_dir) / "memory_state.json"
         self._state_version = 3
-        self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
 
         # Инициализация ChromaDB
         try:
@@ -800,7 +823,7 @@ class MemorySystem:
                     embeddings=batch_embeddings,
                     metadatas=batch_metadatas,
                 )
-                report.added_to_chrome = len(batch_ids)
+                report.added_to_chroma = len(batch_ids)
                 logger.info(
                     f"Batch sync для {memory_type.value}: upserted {len(batch_ids)} энграмм"
                 )
@@ -817,6 +840,18 @@ class MemorySystem:
 
         return report
 
+    async def _sync_collection(self, collection, memory_type: MemoryType) -> SyncReport:
+        """
+        Алиас для _collect_batch для совместимости с _sync_chroma_from_memory.
+    
+        Args:
+            collection: ChromaDB collection
+            memory_type: MemoryType.EPISODIC или MemoryType.SEMANTIC
+    
+        Returns:
+            SyncReport с информацией о синхронизации
+        """
+        return await self._collect_batch(collection, memory_type)
 
     async def get_memory_graph_data(
         self,
@@ -1034,7 +1069,16 @@ class MemorySystem:
         import hmac
         import hashlib
 
-        state_path = Path(self.config.brain_dir) / "memory_state.json"
+        # Поддержка обоих вариантов
+        if hasattr(self.config, 'memory') and self.config.memory is not None:
+            brain_dir = self.config.memory.brain_dir
+        elif hasattr(self.config, 'brain_dir'):
+            brain_dir = self.config.brain_dir
+        else:
+            brain_dir = "./leya_brain"
+
+        state_path = Path(brain_dir) / "memory_state.json"
+
         hmac_path = Path(str(state_path) + ".hmac")
 
         if not state_path.exists():
@@ -1061,7 +1105,14 @@ class MemorySystem:
                 )
 
             # 3. Проверяем HMAC (если ключ задан)
-            if self.config.hmac_key:
+            hmac_key = None
+            if self.config is not None:
+                if hasattr(self.config, 'hmac_key'):
+                    hmac_key = self.config.hmac_key
+                elif hasattr(self.config, 'memory') and self.config.memory is not None:
+                    hmac_key = getattr(self.config.memory, 'hmac_key', None)
+
+            if hmac_key:
                 if not hmac_path.exists():
                     raise LeyaMemoryLoadError(
                         "HMAC-файл отсутствует, но ключ задан. Возможна подмена данных.",
@@ -1160,9 +1211,9 @@ class MemorySystem:
                 memory_type=MemoryType.EPISODIC,
             )
             if report_episodic:
-                total_report.added_to_chrome += report_episodic.added_to_chrome
-                total_report.updated_in_chrome += report_episodic.updated_in_chrome
-                total_report.removed_from_chrome += report_episodic.removed_from_chrome
+                total_report.added_to_chroma += report_episodic.added_to_chroma
+                total_report.updated_in_chroma += report_episodic.updated_in_chroma
+                total_report.removed_from_chroma += report_episodic.removed_from_chroma
                 total_report.errors += report_episodic.errors
             logger.info(f"Sync episodic: {report_episodic}")
         except Exception as exc:
@@ -1176,9 +1227,9 @@ class MemorySystem:
                 memory_type=MemoryType.SEMANTIC,
             )
             if report_semantic:
-                total_report.added_to_chrome += report_semantic.added_to_chrome
-                total_report.updated_in_chrome += report_semantic.updated_in_chrome
-                total_report.removed_from_chrome += report_semantic.removed_from_chrome
+                total_report.added_to_chroma += report_semantic.added_to_chroma
+                total_report.updated_in_chroma += report_semantic.updated_in_chroma
+                total_report.removed_from_chroma += report_semantic.removed_from_chroma
                 total_report.errors += report_semantic.errors
             logger.info(f"Sync semantic: {report_semantic}")
         except Exception as exc:
