@@ -412,7 +412,7 @@ class LeyaOS:
         не прерывают сохранение остальных. Все ошибки логируются с контекстом
         и собираются в список для итогового отчёта.
         """
-        from .exceptions import LeyaAtomicWriteError, LeyaMemoryError, LeyaError
+        from leya_core.exceptions import LeyaAtomicWriteError, LeyaMemoryError, LeyaError
 
         errors: list[tuple[str, Exception]] = []
 
@@ -439,7 +439,7 @@ class LeyaOS:
         # 2. Драйвы
         if self.drives is not None:
             try:
-                from .state_persistence import save_drives_state
+                from leya_core.state_persistence import save_drives_state
                 save_drives_state(self.drives, self.config.memory.brain_dir)
                 logger.info("✅ Состояние драйвов сохранено")
             except (OSError, LeyaError) as e:
@@ -453,7 +453,7 @@ class LeyaOS:
         # 3. Гомеостаз
         if self.homeostasis is not None:
             try:
-                from .state_persistence import save_homeostasis_state
+                from leya_core.state_persistence import save_homeostasis_state
                 save_homeostasis_state(self.homeostasis, self.config.memory.brain_dir)
                 logger.info("✅ Состояние гомеостаза сохранено")
             except (OSError, LeyaError) as e:

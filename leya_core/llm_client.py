@@ -155,9 +155,10 @@ class OllamaClient:
         system_prompt: str = "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке.",
         failure_threshold: int = 3,
         recovery_timeout: float = 60.0,
+        config: "OllamaConfig | None" = None, 
     ) -> None:
         self.config = config
-        self.base_url = config.base_url.rstrip("/")
+        self.base_url = (config.base_url if config else base_url).rstrip("/") 
         self.model = model
         self.timeout = timeout
         self.temperature = temperature

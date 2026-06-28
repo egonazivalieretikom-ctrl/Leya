@@ -886,149 +886,78 @@ class MemorySystem:
     # ========================================================================
 
     async def _save_state(self) -> None:
-        """Атомарное сохранение состояния памяти в JSON + HMAC-SHA256.
+        """Атомарное сохранение состояния памяти с HMAC-подписью."""
+        state_path = Path(self.state_path).expanduser().resolve()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
 
-        Этап 1.3: все broad except заменены на конкретные. Любая ошибка
-        упаковки/записи превращается в LeyaAtomicWriteError с контекстом.
-
-        Алгоритм:
-        1. tempfile.mkstemp в brain_dir
-        2. json.dump состояния
-        3. os.fsync + закрытие fd
-        4. HMAC-SHA256 подпись (если hmac_key задан)
-        5. os.replace → основной файл (атомарно на POSIX)
-        6. Запись .hmac файла
-        """
-        from .exceptions import LeyaAtomicWriteError
-        import tempfile
-        import hmac
-        import hashlib
-
-        state_path = Path(self.config.brain_dir) / "memory_state.json"
-        hmac_path = Path(str(state_path) + ".hmac")
-        tmp_fd = None
-        tmp_path = None
-
-        try:
-            # 1. Создаём временный файл в той же директории (для атомарного rename)
-            try:
-                tmp_fd, tmp_path_str = tempfile.mkstemp(
-                    dir=self.config.brain_dir,
-                    prefix=".memory_state_",
-                    suffix=".tmp"
-                )
-                tmp_path = Path(tmp_path_str)
-            except OSError as e:
-                raise LeyaAtomicWriteError(
-                    "Не удалось создать временный файл для сохранения памяти",
-                    context={"dir": self.config.brain_dir, "os_error": str(e)}
-                ) from e
-
-            # 2. Собираем состояние
-            state = {
-                "version": getattr(self, "_state_version", 3),
+        payload = {
+            "__version__": MEMORY_STATE_VERSION,
+            "data": {
                 "engrams": {k: v.to_dict() for k, v in self.engrams.items()},
                 "synapses": {k: v.to_dict() for k, v in self.synapses.items()},
                 "self_model": self.self_model,
-            }
+            },
+        }
 
-            # 3. Записываем JSON
-            try:
-                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                    tmp_fd = None  # fdopen владеет fd теперь
-                    json.dump(state, f, ensure_ascii=False, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-            except (TypeError, ValueError) as e:
-                # TypeError — не-сериализуемый объект, ValueError — некорректные данные
-                raise LeyaAtomicWriteError(
-                    "Ошибка сериализации состояния памяти в JSON",
-                    context={"error_type": type(e).__name__, "detail": str(e)}
-                ) from e
-            except OSError as e:
-                raise LeyaAtomicWriteError(
-                    "Ошибка записи JSON во временный файл",
-                    context={"path": str(tmp_path), "os_error": str(e)}
-                ) from e
+        # ✅ КРИТИЧНО: Инициализация ПЕРЕД try
+        fd = None
+        tmp_path = None
+    
+        try:
+            # Временный файл в той же ФС для атомарности os.replace
+            fd, tmp_path_str = tempfile.mkstemp(
+                prefix=state_path.name + ".",
+                suffix=".tmp",
+                dir=str(state_path.parent),
+            )
+            tmp_path = Path(tmp_path_str)
 
-            # 4. HMAC подпись содержимого
-            hmac_hex = ""
-            if self.config.hmac_key:
-                try:
-                    raw_bytes = json.dumps(state, ensure_ascii=False).encode("utf-8")
-                    hmac_hex = hmac.new(
-                        self.config.hmac_key.encode("utf-8"),
-                        raw_bytes,
-                        hashlib.sha256
-                    ).hexdigest()
-                except (TypeError, ValueError) as e:
-                    raise LeyaAtomicWriteError(
-                        "Ошибка вычисления HMAC состояния",
-                        context={"detail": str(e)}
-                    ) from e
+            # Определяем формат по расширению
+            if state_path.suffix == ".json":
+                import json
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            else:
+                with os.fdopen(fd, "wb") as f:
+                    pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-            # 5. Атомарный rename
+            # HMAC-подпись
+            key = self._get_hmac_key()
+            signature = self._compute_hmac(tmp_path, key)
+            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+            hmac_path.write_text(signature, encoding="utf-8")
+
+            # Атомарная замена
             try:
                 os.replace(tmp_path, state_path)
-            except OSError as e:
+            except OSError as exc:
                 raise LeyaAtomicWriteError(
-                    "Атомарный rename временного файла не удался",
-                    context={"tmp": str(tmp_path), "dst": str(state_path), "os_error": str(e)}
-                ) from e
-            tmp_path = None  # успешно переименован, не нужно чистить
-
-            # 6. Запись .hmac
-            if hmac_hex:
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, ensure_ascii=False, indent=2)
-
-                    key = self._get_hmac_key().encode("utf-8")
-                    signature = hmac.new(key, tmp_path.read_bytes(), hashlib.sha256).hexdigest()
-
-                    hmac_path = state_path.with_suffix(".json.hmac")
-                    hmac_path.write_text(signature, encoding="utf-8")
-
-                    os.replace(tmp_path, state_path)
-                except Exception as e:
-                    # ✅ ИСПРАВЛЕНО: было raise RuntimeError(...)
-                    raise LeyaAtomicWriteError(
-                        f"Сбой атомарной записи состояния памяти: {e}"
-                    ) from e
-                finally:
-                    if tmp_path.exists():
-                        with contextlib.suppress(OSError):
-                            tmp_path.unlink()
-
-            logger.debug(f"✅ Состояние памяти сохранено: {state_path}")
-
-        except LeyaAtomicWriteError:
-            # Пробрасываем дальше без обёртки
+                    "Атомарная замена memory_state не удалась",
+                    context={"path": str(state_path), "error": str(exc)},
+                ) from exc
+            except LeyaMemoryError:
+                raise
+            except Exception as exc:
+                raise LeyaMemoryError(
+                    "Сбой при сохранении состояния памяти",
+                    context={"path": str(state_path), "error": str(exc)},
+                ) from exc
+        except LeyaMemoryError:
             raise
-        except Exception as e:
-            # Last-resort: неожиданная ошибка — оборачиваем, но логируем с exc_info
-            logger.error(
-                f"Неожиданная ошибка при сохранении памяти: {e}",
-                exc_info=True,
-                extra={"context": {"state_path": str(state_path)}}
-            )
+        except Exception as exc:
             raise LeyaAtomicWriteError(
-                "Неожиданная ошибка при сохранении состояния памяти",
-                context={"error_type": type(e).__name__, "detail": str(e)}
-            ) from e
+                f"Сбой атомарной записи состояния памяти: {exc}",
+                context={"path": str(state_path)},
+            ) from exc
         finally:
-            # Чистим временный файл, если rename не случился
-            if tmp_path is not None:
-                try:
-                    Path(tmp_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
-            # Если fd всё ещё открыт (ошибка до os.fdopen) — закрываем
-            if tmp_fd is not None:
-                try:
-                    os.close(tmp_fd)
-                except OSError:
-                    pass
+            # ✅ Безопасная очистка: проверяем, что tmp_path определён
+            if tmp_path is not None and tmp_path.exists():
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+            # Закрываем fd, если он открыт, но не был закрыт через os.fdopen
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
 
     async def _load_state(self) -> None:
         """Загрузка состояния памяти из JSON + проверка HMAC.
