@@ -192,29 +192,11 @@ class MemorySystem:
     """
 
     def __init__(self, config) -> None:
-        """
-        Инициализация MemorySystem.
-
-        Args:
-            config: Может быть либо LeyaConfig (тогда извлекается config.memory),
-                    либо MemoryConfig напрямую (для тестов и упрощённого использования).
-        """
-
-        self.config = config
-        self.engrams: dict[str, Engram] = {}
-        self.synapses: dict[str, Synapse] = {}
-        self.self_model: str = ""
-        self._state_version = 3
-        self.state_path = Path(self.config.brain_dir) / "memory_state.json"
-
-
-        # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
-
+        # ✅ СНАЧАЛА определяем memory_config
         if isinstance(config, LeyaConfig):
             self.config = config
             self.memory_config = config.memory
         elif isinstance(config, MemoryConfig):
-            # Для тестов и прямого использования
             self.config = None
             self.memory_config = config
         else:
@@ -222,31 +204,38 @@ class MemorySystem:
                 f"config должен быть LeyaConfig или MemoryConfig, получено {type(config)}"
             )
 
+        # ✅ ПОСЛЕ этого используем memory_config.brain_dir
+        self.engrams: dict[str, Engram] = {}
+        self.synapses: dict[str, Synapse] = {}
+        self.self_model: str = ""
+        self._state_version = 3
+        self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
+
         # Инициализация ChromaDB
         try:
             import chromadb
-            self._chroma_client = chromadb.PersistentClient(path=config.brain_dir)
+            self._chroma_client = chromadb.PersistentClient(path=self.memory_config.brain_dir)
             self.episodic_collection = self._chroma_client.get_or_create_collection(
                 name="episodic",
-                metadata={"hnsw:space": "cosine"}
+                metadata={"hnsw:space": "cosine"},
             )
             self.semantic_collection = self._chroma_client.get_or_create_collection(
                 name="semantic",
-                metadata={"hnsw:space": "cosine"}
+                metadata={"hnsw:space": "cosine"},
             )
+            # ✅ Сохраняем embedding_fn для _generate_embedding
+            self.embedding_fn = DefaultEmbeddingFunction()
         except Exception as e:
             logger.error(f"Не удалось инициализировать ChromaDB: {e}", exc_info=True)
             raise
 
-        # Инициализация embedding модели
+        # Инициализация embedding модели (опционально, для обратной совместимости)
         try:
             from sentence_transformers import SentenceTransformer
-            self._embedding_model = SentenceTransformer(config.embedding_model)
+            self._embedding_model = SentenceTransformer(self.memory_config.embedding_model)
         except Exception as e:
-            logger.error(f"Не удалось загрузить embedding модель: {e}", exc_info=True)
-            raise
-
-        # Путь к файлу состояния
+            logger.warning(f"Не удалось загрузить SentenceTransformer: {e}")
+            self._embedding_model = None
 
         logger.info(f"MemorySystem инициализирован: {self.memory_config.brain_dir}")
 
@@ -899,12 +888,11 @@ class MemorySystem:
             },
         }
 
-        # ✅ КРИТИЧНО: Инициализация ПЕРЕД try
+        # ✅ Инициализация ПЕРЕД try
         fd = None
-        tmp_path = None
-    
+        tmp_path: Path | None = None
+
         try:
-            # Временный файл в той же ФС для атомарности os.replace
             fd, tmp_path_str = tempfile.mkstemp(
                 prefix=state_path.name + ".",
                 suffix=".tmp",
@@ -912,14 +900,10 @@ class MemorySystem:
             )
             tmp_path = Path(tmp_path_str)
 
-            # Определяем формат по расширению
-            if state_path.suffix == ".json":
-                import json
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
-            else:
-                with os.fdopen(fd, "wb") as f:
-                    pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            # ✅ Только JSON (pickle удалён — см. миграцию на v3)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            fd = None  # os.fdopen закрыл fd
 
             # HMAC-подпись
             key = self._get_hmac_key()
@@ -935,14 +919,9 @@ class MemorySystem:
                     "Атомарная замена memory_state не удалась",
                     context={"path": str(state_path), "error": str(exc)},
                 ) from exc
-            except LeyaMemoryError:
-                raise
-            except Exception as exc:
-                raise LeyaMemoryError(
-                    "Сбой при сохранении состояния памяти",
-                    context={"path": str(state_path), "error": str(exc)},
-                ) from exc
         except LeyaMemoryError:
+            raise
+        except LeyaAtomicWriteError:
             raise
         except Exception as exc:
             raise LeyaAtomicWriteError(
@@ -950,11 +929,14 @@ class MemorySystem:
                 context={"path": str(state_path)},
             ) from exc
         finally:
-            # ✅ Безопасная очистка: проверяем, что tmp_path определён
-            if tmp_path is not None and tmp_path.exists():
-                with contextlib.suppress(OSError):
-                    tmp_path.unlink()
-            # Закрываем fd, если он открыт, но не был закрыт через os.fdopen
+            # ✅ Безопасная очистка
+            if tmp_path is not None:
+                try:
+                    if tmp_path.exists():
+                        with contextlib.suppress(OSError):
+                            tmp_path.unlink()
+                except Exception:
+                    pass
             if fd is not None:
                 with contextlib.suppress(OSError):
                     os.close(fd)

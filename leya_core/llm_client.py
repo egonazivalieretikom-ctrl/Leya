@@ -155,20 +155,20 @@ class OllamaClient:
         system_prompt: str = "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке.",
         failure_threshold: int = 3,
         recovery_timeout: float = 60.0,
-        config: "OllamaConfig | None" = None, 
+        config: "OllamaConfig | None" = None,
     ) -> None:
         self.config = config
-        self.base_url = (config.base_url if config else base_url).rstrip("/") 
-        self.model = model
-        self.timeout = timeout
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.max_tokens = max_tokens
-        self.repeat_penalty = repeat_penalty
+        self.base_url = (config.base_url if config else base_url).rstrip("/")
+        self.model = config.model if config else model
+        self.timeout = config.timeout if config else timeout
+        self.temperature = config.temperature if config else temperature
+        self.top_p = config.top_p if config else top_p
+        self.top_k = config.top_k if config else top_k
+        self.max_tokens = config.max_tokens if config else max_tokens
+        self.repeat_penalty = config.repeat_penalty if config else repeat_penalty
         self.system_prompt = system_prompt
 
-        self.circuit_breaker = CircuitBreaker(
+        self._breaker = CircuitBreaker(
             failure_threshold=failure_threshold,
             recovery_timeout=recovery_timeout,
         )
@@ -199,16 +199,6 @@ class OllamaClient:
         require_json: bool = False,
         timeout: float | None = None,
     ) -> str:
-        """Отправка запроса к Ollama и получение ответа.
-
-        Этап 1.3: broad except Exception заменён на конкретные исключения.
-        - aiohttp.ClientError → LeyaLLMConnectionError
-        - asyncio.TimeoutError → LeyaLLMTimeoutError
-        - json.JSONDecodeError → LeyaJSONParseError
-        - HTTP non-2xx → LeyaLLMError
-        - Circuit Breaker OPEN → LeyaLLMUnavailableError
-        - Любая другая ошибка → LeyaLLMError (wrapped, с __cause__)
-        """
         from .exceptions import (
             LeyaLLMConnectionError,
             LeyaLLMTimeoutError,
@@ -217,24 +207,26 @@ class OllamaClient:
             LeyaJSONParseError,
         )
         import aiohttp
+        import json
 
-        # Circuit Breaker check
-        if not self._breaker.is_available():
+        # ✅ Circuit Breaker check
+        if not self._breaker.is_available:
             raise LeyaLLMUnavailableError(
                 "LLM недоступен: Circuit Breaker в состоянии OPEN",
-                context={"breaker_status": self._breaker.get_status()}
+                context={"breaker_status": self._breaker.get_status()},
             )
 
-        url = f"{self.config.base_url.rstrip('/')}/api/chat"
+        # ✅ Используем self.base_url / self.model (не self.config.*)
+        url = f"{self.base_url}/api/chat"
         payload = {
-            "model": self.config.model,
+            "model": self.model,
             "stream": False,
             "options": {
-                "temperature": self.config.temperature,
-                "top_p": self.config.top_p,
-                "top_k": self.config.top_k,
-                "num_predict": self.config.max_tokens,
-                "repeat_penalty": self.config.repeat_penalty,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "num_predict": self.max_tokens,
+                "repeat_penalty": self.repeat_penalty,
             },
             "messages": [],
         }
@@ -244,27 +236,28 @@ class OllamaClient:
         if require_json:
             payload["format"] = "json"
 
-        req_timeout = aiohttp.ClientTimeout(total=timeout or self.config.timeout)
+        req_timeout = aiohttp.ClientTimeout(total=timeout or self.timeout)
+
+        # ✅ Получаем сессию через ленивый метод
+        session = await self._get_session()
 
         try:
-            async with self._session.post(url, json=payload, timeout=req_timeout) as resp:
-                # HTTP-ошибки
+            async with session.post(url, json=payload, timeout=req_timeout) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
                     self._breaker.record_failure()
                     raise LeyaLLMError(
                         f"LLM вернул HTTP {resp.status}",
-                        context={"status": resp.status, "body": body[:500]}
+                        context={"status": resp.status, "body": body[:500]},
                     )
 
-                # Парсинг JSON-ответа Ollama
                 try:
                     data = await resp.json(content_type=None)
                 except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
                     self._breaker.record_failure()
                     raise LeyaJSONParseError(
                         "Не удалось распарсить JSON-ответ от Ollama",
-                        context={"detail": str(e)}
+                        context={"detail": str(e)},
                     ) from e
 
                 message = data.get("message", {})
@@ -273,10 +266,9 @@ class OllamaClient:
                     self._breaker.record_failure()
                     raise LeyaLLMError(
                         "Пустой ответ от LLM",
-                        context={"data_keys": list(data.keys())}
+                        context={"data_keys": list(data.keys())},
                     )
 
-                # Дополнительная проверка JSON, если требуется
                 if require_json:
                     try:
                         json.loads(content)
@@ -284,43 +276,39 @@ class OllamaClient:
                         self._breaker.record_failure()
                         raise LeyaJSONParseError(
                             "LLM вернул невалидный JSON в поле message.content",
-                            context={"content_preview": content[:200], "detail": str(e)}
+                            context={"content_preview": content[:200], "detail": str(e)},
                         ) from e
 
                 self._breaker.record_success()
                 return content
 
-        # --- Конкретные исключения ---
         except asyncio.TimeoutError as e:
             self._breaker.record_failure()
             raise LeyaLLMTimeoutError(
                 "Таймаут запроса к LLM",
-                context={"timeout": req_timeout.total, "url": url}
+                context={"timeout": req_timeout.total, "url": url},
             ) from e
 
         except aiohttp.ClientError as e:
-            # Включает ClientConnectionError, ServerDisconnectedError, ClientPayloadError и т.д.
             self._breaker.record_failure()
             raise LeyaLLMConnectionError(
                 "Ошибка соединения с LLM",
-                context={"error_type": type(e).__name__, "detail": str(e), "url": url}
+                context={"error_type": type(e).__name__, "detail": str(e), "url": url},
             ) from e
 
-        # Наши обёрнутые исключения — пробрасываем как есть
         except (LeyaLLMError, LeyaJSONParseError):
             raise
 
-        # Last-resort: неожиданная ошибка оборачивается с сохранением __cause__
         except Exception as e:
             logger.error(
                 f"Неожиданная ошибка в LLM client: {e}",
                 exc_info=True,
-                extra={"context": {"url": url, "model": self.config.model}}
+                extra={"context": {"url": url, "model": self.model}},
             )
             self._breaker.record_failure()
             raise LeyaLLMError(
                 f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
-                context={"error_type": type(e).__name__, "detail": str(e)}
+                context={"error_type": type(e).__name__, "detail": str(e)},
             ) from e
 
     async def __aenter__(self) -> OllamaClient:

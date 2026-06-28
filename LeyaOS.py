@@ -141,9 +141,8 @@ class LeyaOS:
 
         # ✅ 2. Потом thinker
         self.thinker: ICoreThinker = CoreThinker(
-            llm_client=self._llm_call,
-            soul_manager=getattr(self.env, "soul_manager", None),
             config=self.config.thinker,
+            llm_client=self._llm_call,
         )
 
         # ✅ 3. Потом request_classifier (использует self.llm_client)
@@ -405,13 +404,8 @@ class LeyaOS:
         finally:
             await self.shutdown()
 
-    async def _save_all_state(self) -> None:
-        """Сохранение состояния всех компонентов при shutdown.
-
-        Этап 1.3: каждый компонент сохраняется отдельно, ошибки одного
-        не прерывают сохранение остальных. Все ошибки логируются с контекстом
-        и собираются в список для итогового отчёта.
-        """
+    async def _save_all_state(self) -> list[tuple[str, Exception]]:
+        """Сохранение состояния всех компонентов при shutdown."""
         from leya_core.exceptions import LeyaAtomicWriteError, LeyaMemoryError, LeyaError
 
         errors: list[tuple[str, Exception]] = []
@@ -425,44 +419,37 @@ class LeyaOS:
                 logger.error(
                     f"Ошибка атомарной записи памяти при shutdown: {e}",
                     exc_info=True,
-                    extra={"component": "memory"}
+                    extra={"component": "memory"},
                 )
                 errors.append(("memory.atomic_write", e))
             except LeyaMemoryError as e:
                 logger.error(
                     f"Ошибка памяти при shutdown: {e}",
                     exc_info=True,
-                    extra={"component": "memory"}
+                    extra={"component": "memory"},
                 )
                 errors.append(("memory", e))
 
-        # 2. Драйвы
-        if self.drives is not None:
+        # 2. Драйвы + Гомеостаз — через StatePersistence
+        if self.persistence is not None:
             try:
-                from leya_core.state_persistence import save_drives_state
-                save_drives_state(self.drives, self.config.memory.brain_dir)
-                logger.info("✅ Состояние драйвов сохранено")
+                state_to_save = {}
+                if self.drives is not None:
+                    state_to_save["drives"] = self.drives.get_drives_state()
+                if self.homeostasis is not None:
+                    state_to_save["homeostasis"] = {
+                        "current_goal": getattr(self.homeostasis, "current_goal", None),
+                        "last_action_time": getattr(self.homeostasis, "last_action_time", None),
+                    }
+                self.persistence.save_state(state_to_save)
+                logger.info("✅ Состояние драйвов и гомеостаза сохранено")
             except (OSError, LeyaError) as e:
                 logger.error(
-                    f"Ошибка сохранения драйвов: {e}",
+                    f"Ошибка сохранения состояния: {e}",
                     exc_info=True,
-                    extra={"component": "drives"}
+                    extra={"component": "persistence"},
                 )
-                errors.append(("drives", e))
-
-        # 3. Гомеостаз
-        if self.homeostasis is not None:
-            try:
-                from leya_core.state_persistence import save_homeostasis_state
-                save_homeostasis_state(self.homeostasis, self.config.memory.brain_dir)
-                logger.info("✅ Состояние гомеостаза сохранено")
-            except (OSError, LeyaError) as e:
-                logger.error(
-                    f"Ошибка сохранения гомеостаза: {e}",
-                    exc_info=True,
-                    extra={"component": "homeostasis"}
-                )
-                errors.append(("homeostasis", e))
+                errors.append(("persistence", e))
 
         if errors:
             logger.warning(
