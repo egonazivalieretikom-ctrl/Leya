@@ -184,8 +184,7 @@ class OllamaClient:
         """Установить fallback-функцию на случай недоступности LLM."""
         self._fallback_fn = fallback_fn
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Ленивая инициализация HTTP-сессии."""
+    async def _get_session(self):
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session

@@ -967,13 +967,10 @@ class MemorySystem:
     # ========================================================================
 
     async def _save_state(self) -> None:
-        """Атомарное сохранение состояния с HMAC и fsync."""
-        # Гарантируем наличие state_path
+        """Надёжное атомарное сохранение с HMAC."""
         if not hasattr(self, 'state_path') or self.state_path is None:
-            if hasattr(self, 'memory_config') and self.memory_config:
-                self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
-            else:
-                self.state_path = Path("./leya_brain/memory_state.json")
+            brain_dir = getattr(self.memory_config, 'brain_dir', './leya_brain')
+            self.state_path = Path(brain_dir) / "memory_state.json"
 
         state_path = Path(self.state_path).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -987,10 +984,11 @@ class MemorySystem:
             },
         }
 
+        # Создаём временный файл в той же директории
         fd, tmp_path_str = tempfile.mkstemp(
             prefix=state_path.name + ".",
             suffix=".tmp",
-            dir=str(state_path.parent),
+            dir=str(state_path.parent)
         )
         tmp_path = Path(tmp_path_str)
 
@@ -998,22 +996,26 @@ class MemorySystem:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
                 f.flush()
-                os.fsync(f.fileno())          # fsync ДО закрытия файла
+                os.fsync(f.fileno())
 
             # HMAC
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
-            hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
-            hmac_path.write_text(signature, encoding="utf-8")
+            (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(signature, encoding="utf-8")
 
-            os.replace(tmp_path, state_path)
+            # Атомарная замена (с fallback для Windows cross-device)
+            try:
+                os.replace(tmp_path, state_path)
+            except OSError:
+                import shutil
+                shutil.move(str(tmp_path), str(state_path))
 
         except Exception as exc:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
             raise LeyaMemoryError(
-                "Сбой при сохранении состояния памяти",
-                context={"path": str(state_path), "error": str(exc)}
+                f"Сбой при сохранении состояния памяти: {exc}",
+                context={"path": str(state_path)}
             ) from exc
 
     async def _load_state(self) -> None:
