@@ -118,13 +118,10 @@ class LeyaOS:
         # SoulCryptoManager с явной передачей ключа
         hmac_key = os.environ.get("SOUL_HMAC_KEY")
         try:
-            self.soul_crypto_manager = SoulCryptoManager(config=self.config.soul)
-    
-            # Если ключ есть в окружении, но не в конфиге — устанавливаем его вручную
-            if hmac_key and not self.soul_crypto_manager._hmac_key:
-                self.soul_crypto_manager._hmac_key = hmac_key.encode("utf-8")
-                logger.info("SOUL_HMAC_KEY применён к SoulCryptoManager")
-        
+            soul_config = self.config.soul
+            if hmac_key:
+                soul_config.hmac_key = hmac_key          # если поле есть в конфиге
+            self.soul_crypto_manager = SoulCryptoManager(config=soul_config)
             logger.info("SoulCryptoManager инициализирован")
         except Exception as e:
             logger.error(f"Не удалось инициализировать SoulCryptoManager: {e}", exc_info=True)
@@ -293,9 +290,6 @@ class LeyaOS:
                 logger.info(f"Soul загружен через SoulCryptoManager ({len(soul_context)} символов)")
             except Exception as e:
                 logger.error(f"Ошибка загрузки soul через SoulCryptoManager: {e}", exc_info=True)
-
-        if not soul_context:
-            logger.warning("Soul не загружен: отсутствуют soul_crypto_manager и soul_manager")
         try:
             self.self_model = await self.memory.get_self_model_context()
         except LeyaMemoryError as exc:
@@ -676,7 +670,17 @@ class LeyaOS:
             }
 
             # Получаем контекст
-            soul_context = self.soul_manager.get_full_context() if hasattr(self, 'soul_manager') else ""
+            soul_context = ""
+            if hasattr(self, "soul_crypto_manager") and self.soul_crypto_manager is not None:
+                try:
+                    soul_data = self.soul_crypto_manager.load_all()
+                    soul_context = (
+                        f"=== PERSONALITY ===\n{soul_data.get('personality', '')}\n\n"
+                        f"=== RULES ===\n{soul_data.get('rules', '')}\n\n"
+                        f"=== VALUES ===\n{soul_data.get('values', '')}"
+                    )
+                except Exception:
+                    soul_context = ""
             drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
             memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
             tools = self.tool_registry.get_tools_schema() if hasattr(self, 'tool_registry') else []
