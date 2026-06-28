@@ -224,7 +224,7 @@ class OllamaClient:
         import aiohttp
 
         # Circuit Breaker check (исправлено: используем circuit_breaker, а не _breaker)
-        if not self.circuit_breaker.is_available():
+        if not self._breaker.is_available():
             raise LeyaLLMUnavailableError(
                 "LLM недоступен: Circuit Breaker в состоянии OPEN",
                 context={"breaker_status": self.circuit_breaker.get_status()}

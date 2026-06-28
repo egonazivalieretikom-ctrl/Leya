@@ -204,6 +204,7 @@ class MemorySystem:
                     либо MemoryConfig напрямую (для тестов и упрощённого использования).
             disable_hmac_check: Если True, отключает проверку HMAC при загрузке (для тестов).
         """
+        self.state_path: Optional[Path] = None
         # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
         if isinstance(config, LeyaConfig):
             self.config = config
@@ -825,18 +826,6 @@ class MemorySystem:
 
         return report
 
-    async def _sync_collection(self, collection, memory_type: MemoryType) -> SyncReport:
-        """
-        Алиас для _collect_batch для совместимости с _sync_chroma_from_memory.
-    
-        Args:
-            collection: ChromaDB collection
-            memory_type: MemoryType.EPISODIC или MemoryType.SEMANTIC
-    
-        Returns:
-            SyncReport с информацией о синхронизации
-        """
-        return await self._collect_batch(collection, memory_type)
 
     async def get_memory_graph_data(
         self,
@@ -978,24 +967,15 @@ class MemorySystem:
     # ========================================================================
 
     async def _save_state(self) -> None:
-        """
-        Атомарное сохранение состояния памяти с HMAC-подписью.
-
-        Формат: JSON (безопаснее pickle).
-        Путь: memory_state.json + memory_state.json.hmac
-        """
-        # Defensive guard: гарантируем наличие state_path
+        """Атомарное сохранение состояния с HMAC и fsync."""
+        # Гарантируем наличие state_path
         if not hasattr(self, 'state_path') or self.state_path is None:
             if hasattr(self, 'memory_config') and self.memory_config:
                 self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
             else:
-                # Fallback для крайне некорректного использования
                 self.state_path = Path("./leya_brain/memory_state.json")
-                logger.warning(f"state_path не инициализирован, используем fallback: {self.state_path}")
 
-        state_path = self.state_path.expanduser().resolve()
-    
-        # Гарантируем существование директории
+        state_path = Path(self.state_path).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
@@ -1007,7 +987,6 @@ class MemorySystem:
             },
         }
 
-        # Временный файл в той же ФС для атомарности os.replace
         fd, tmp_path_str = tempfile.mkstemp(
             prefix=state_path.name + ".",
             suffix=".tmp",
@@ -1016,40 +995,26 @@ class MemorySystem:
         tmp_path = Path(tmp_path_str)
 
         try:
-            # Сохраняем в JSON (безопаснее pickle)
-            import json
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
-        
-            # fsync для durability
-            os.fsync(f.fileno())
+                f.flush()
+                os.fsync(f.fileno())          # fsync ДО закрытия файла
 
-            # HMAC-подпись
+            # HMAC
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
             hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
-            # Атомарная замена
-            try:
-                os.replace(tmp_path, state_path)
-            except OSError as exc:
-                raise LeyaAtomicWriteError(
-                    "Атомарная замена memory_state не удалась",
-                    context={"path": str(state_path), "error": str(exc)},
-                ) from exc
-            
-        except LeyaMemoryError:
-            raise
+            os.replace(tmp_path, state_path)
+
         except Exception as exc:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
             raise LeyaMemoryError(
                 "Сбой при сохранении состояния памяти",
-                context={"path": str(state_path), "error": str(exc)},
+                context={"path": str(state_path), "error": str(exc)}
             ) from exc
-        finally:
-            if tmp_path.exists():
-                with contextlib.suppress(OSError):
-                    tmp_path.unlink()
 
     async def _load_state(self) -> None:
         """
@@ -1141,44 +1106,171 @@ class MemorySystem:
     
         return self.state_path.expanduser().resolve()
 
-    async def _sync_collection(self, memory_type: MemoryType, collection, report) -> None:
-        """Синхронизация одной коллекции (episodic или semantic)."""
-        try:
-            # ИСПРАВЛЕНО: Добавлен метод _collect_batch
-            batch = await self._collect_batch(memory_type)
-            if not batch:
-                return
-            
-            # ... (остальной код синхронизации)
-        except Exception as e:
-            logger.error(f"Сбой sync {memory_type.value}: {e}")
+    async def _sync_collection(
+        self,
+        memory_type: MemoryType,
+        collection,
+        report: Optional["SyncReport"] = None
+) -> "SyncReport":
+        """
+        Синхронизация in-memory энграмм указанного типа с ChromaDB коллекцией.
+    
+        Исправляет критический баг: использует engram.timestamp вместо engram.created_at.
+    
+        Args:
+            memory_type: Тип памяти (EPISODIC или SEMANTIC)
+            collection: ChromaDB коллекция для синхронизации
+            report: Словарь для статистики (модифицируется in-place)
+        """
 
-    async def _collect_batch(self, memory_type: MemoryType) -> list[Engram]:
-        """Сбор энграмм указанного типа из in-memory состояния."""
-        return [
-            engram for engram in self.engrams.values()
+        from .exceptions import LeyaMemoryError
+        import logging
+    
+        logger = logging.getLogger(__name__)
+    
+        # Фильтруем энграммы по типу
+        type_engrams = {
+            eid: engram
+            for eid, engram in self.engrams.items()
             if engram.memory_type == memory_type
-        ]
-
-    async def _sync_chroma_from_memory(self) -> "SyncReport":
-        """Синхронизация in-memory состояния с ChromaDB."""
-        report = SyncReport()
-        logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
-
+        }
+    
+        if not type_engrams:
+            logger.debug(f"Нет энграмм типа {memory_type.value} для синхронизации")
+            return
+    
         try:
-            # ИСПРАВЛЕНО: Передаем report в _sync_collection
-            await self._sync_collection(MemoryType.EPISODIC, self.episodic_collection, report)
-            await self._sync_collection(MemoryType.SEMANTIC, self.semantic_collection, report)
+            # 1. Получить все IDs из ChromaDB
+            chroma_data = await asyncio.to_thread(collection.get)
+            chroma_ids = set(chroma_data.get("ids", [])) if chroma_data else set()
+            in_memory_ids = set(type_engrams.keys())
+        
+            # 2. Определить операции
+            ids_to_upsert = in_memory_ids  # Все in-memory должны быть в Chroma
+            ids_to_delete = chroma_ids - in_memory_ids  # Удалить отсутствующие в in-memory
+        
+            logger.info(
+                f"Синхронизация {memory_type.value}: "
+                f"upsert={len(ids_to_upsert)}, delete={len(ids_to_delete)}"
+            )
+        
+            # 3. Upsert батчами (ChromaDB рекомендует батчи до 1000)
+            BATCH_SIZE = 500
+            upserted_count = 0
+        
+            for i in range(0, len(ids_to_upsert), BATCH_SIZE):
+                batch_ids = list(ids_to_upsert)[i:i + BATCH_SIZE]
+                batch_engrams = [type_engrams[eid] for eid in batch_ids]
+            
+                # Подготовка данных для upsert
+                batch_documents = []
+                batch_metadatas = []
+                batch_embeddings = []
+            
+                for engram in batch_engrams:
+                    batch_documents.append(engram.content)
+                
+                    # ИСПРАВЛЕНО: используем timestamp вместо created_at
+                    batch_metadatas.append({
+                        "id": engram.id,
+                        "memory_type": engram.memory_type.value,
+                        "timestamp": engram.timestamp.isoformat(),  # ✅ Правильное поле
+                        "retention_strength": engram.retention_strength,
+                        "emotional_boost": engram.emotional_boost,
+                        "retrieval_count": engram.retrieval_count,
+                        "consolidation_level": engram.consolidation_level,
+                        "last_retrieved": engram.last_retrieved.isoformat() if engram.last_retrieved else None,
+                    })
+                
+                    # Генерация embedding (синхронная операция в thread)
+                    try:
+                        embedding = await asyncio.to_thread(
+                            self._generate_embedding, engram.content
+                        )
+                        batch_embeddings.append(embedding)
+                    except Exception as e:
+                        logger.warning(
+                            f"Не удалось сгенерировать embedding для энграммы {engram.id}: {e}"
+                        )
+                        # Пропускаем эту энграмму (без embedding)
+                        continue
+            
+                # Если все embeddings провалились — пропускаем батч
+                if len(batch_embeddings) != len(batch_documents):
+                    logger.warning(
+                        f"Пропущен батч upsert для {memory_type.value}: "
+                        f"не все embeddings сгенерированы"
+                    )
+                    continue
+            
+                # Выполняем upsert
+                try:
+                    await asyncio.to_thread(
+                        collection.upsert,
+                        ids=batch_ids,
+                        documents=batch_documents,
+                        embeddings=batch_embeddings,
+                        metadatas=batch_metadatas,
+                    )
+                    upserted_count += len(batch_ids)
+                    logger.debug(f"Upserted {len(batch_ids)} энграмм типа {memory_type.value}")
+                except Exception as e:
+                    logger.error(
+                        f"Ошибка upsert в ChromaDB для {memory_type.value}: {e}",
+                        exc_info=True,
+                        extra={"batch_size": len(batch_ids)}
+                    )
+                    raise LeyaMemoryError(
+                        f"Сбой upsert в ChromaDB для {memory_type.value}",
+                        context={"batch_size": len(batch_ids), "error": str(e)}
+                    ) from e
+        
+            # 4. Удаление батчами
+            deleted_count = 0
+            if ids_to_delete:
+                ids_to_delete_list = list(ids_to_delete)
+            
+                for i in range(0, len(ids_to_delete_list), BATCH_SIZE):
+                    batch_delete_ids = ids_to_delete_list[i:i + BATCH_SIZE]
+                
+                    try:
+                        await asyncio.to_thread(collection.delete, ids=batch_delete_ids)
+                        deleted_count += len(batch_delete_ids)
+                        logger.debug(f"Deleted {len(batch_delete_ids)} энграмм из ChromaDB")
+                    except Exception as e:
+                        logger.error(
+                            f"Ошибка удаления из ChromaDB для {memory_type.value}: {e}",
+                            exc_info=True,
+                            extra={"batch_size": len(batch_delete_ids)}
+                        )
+                        raise LeyaMemoryError(
+                            f"Сбой удаления из ChromaDB для {memory_type.value}",
+                            context={"batch_size": len(batch_delete_ids), "error": str(e)}
+                        ) from e
+        
+            # 5. Обновление отчёта
+            report["upserted"] = report.get("upserted", 0) + upserted_count
+            report["deleted"] = report.get("deleted", 0) + deleted_count
+            report["total_synced"] = report.get("total_synced", 0) + upserted_count
+        
+            logger.info(
+                f"✅ Синхронизация {memory_type.value} завершена: "
+                f"upserted={upserted_count}, deleted={deleted_count}"
+            )
+        
+        except LeyaMemoryError:
+            raise
         except Exception as e:
-            logger.error(f"Сбой синхронизации: {e}")
-            report.errors += 1
+            logger.error(
+                f"Неожиданная ошибка в _sync_collection для {memory_type.value}: {e}",
+                exc_info=True
+            )
+            raise LeyaMemoryError(
+                f"Сбой синхронизации коллекции {memory_type.value}",
+                context={"memory_type": memory_type.value, "error": str(e)}
+            ) from e
 
-        logger.info(
-            f"Синхронизация завершена: добавлено={report.added_to_chroma}, "
-            f"удалено={report.removed_from_chroma}, обновлено={report.updated_in_chroma}, "
-            f"ошибки={report.errors}"
-        )
-        return report
+
     
     async def _sync_chroma_from_memory(self) -> SyncReport:
         """
