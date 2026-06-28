@@ -114,10 +114,43 @@ class TestMemorySaveState:
 # =================================================================================
 
 class TestLLMClientChat:
-    
+    """Проверяем, что chat превращает низкоуровневые ошибки в LeyaLLM*."""
+
+    @pytest.fixture
+    def client(self):
+        from leya_core.config import OllamaConfig
+        cfg = OllamaConfig()
+        c = OllamaClient(
+            base_url=cfg.base_url,
+            model=cfg.model,
+            timeout=cfg.timeout,
+            temperature=cfg.temperature,
+            top_p=cfg.top_p,
+            top_k=cfg.top_k,
+            max_tokens=cfg.max_tokens,
+            repeat_penalty=cfg.repeat_penalty,
+        )
+        c._session = AsyncMock()
+        c._breaker = MagicMock()
+        c._breaker.is_available.return_value = True
+        c._breaker.record_success = MagicMock()
+        c._breaker.record_failure = MagicMock()
+        return c
+
     @pytest.mark.asyncio
-    async def test_aiohttp_client_error_raises_connection_error(self, client):
+    async def test_aiohttp_client_error_raises_connection_error(self):
         """aiohttp.ClientError → LeyaLLMConnectionError."""
+        from leya_core.config import OllamaConfig
+        cfg = OllamaConfig()
+        client = OllamaClient(
+            base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
+            temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
+            max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
+        )
+        client._session = AsyncMock()
+        client._breaker = MagicMock()
+        client._breaker.is_available.return_value = True
+        
         # ИСПРАВЛЕНО: Корректно мокаем aiohttp.ClientError через side_effect
         client._session.post.side_effect = aiohttp.ClientError("Connection failed")
         
@@ -125,8 +158,19 @@ class TestLLMClientChat:
             await client.chat("hi")
 
     @pytest.mark.asyncio
-    async def test_timeout_error_raises_timeout(self, client):
+    async def test_timeout_error_raises_timeout(self):
         """asyncio.TimeoutError → LeyaLLMTimeoutError."""
+        from leya_core.config import OllamaConfig
+        cfg = OllamaConfig()
+        client = OllamaClient(
+            base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
+            temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
+            max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
+        )
+        client._session = AsyncMock()
+        client._breaker = MagicMock()
+        client._breaker.is_available.return_value = True
+        
         # ИСПРАВЛЕНО: Корректно мокаем asyncio.TimeoutError
         client._session.post.side_effect = asyncio.TimeoutError()
         
@@ -134,8 +178,19 @@ class TestLLMClientChat:
             await client.chat("hi")
 
     @pytest.mark.asyncio
-    async def test_unexpected_exception_wrapped_as_llm_error(self, client):
+    async def test_unexpected_exception_wrapped_as_llm_error(self):
         """Неожиданное исключение оборачивается в LeyaLLMError с сохранением оригинала."""
+        from leya_core.config import OllamaConfig
+        cfg = OllamaConfig()
+        client = OllamaClient(
+            base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
+            temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
+            max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
+        )
+        client._session = AsyncMock()
+        client._breaker = MagicMock()
+        client._breaker.is_available.return_value = True
+        
         # ИСПРАВЛЕНО: Корректно мокаем RuntimeError через side_effect
         client._session.post.side_effect = RuntimeError("weird internal bug")
         

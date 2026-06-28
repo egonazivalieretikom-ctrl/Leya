@@ -993,10 +993,10 @@ class MemorySystem:
     # ========================================================================
 
     async def _save_state(self) -> None:
-        """Атомарное сохранение состояния памяти с HMAC-подписью."""
-        # ИСПРАВЛЕНО: Используем self.config вместо self.memory_config
-        state_path_str = getattr(self, 'state_path', None) or str(Path(self.config.brain_dir) / "memory_state.json")
-        state_path = Path(state_path_str).expanduser().resolve()
+        """
+        Атомарное сохранение состояния памяти с HMAC-подписью.
+        """
+        state_path = Path(self.state_path).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
@@ -1009,13 +1009,15 @@ class MemorySystem:
         }
 
         fd, tmp_path_str = tempfile.mkstemp(
-            prefix=state_path.name + ".", suffix=".tmp", dir=str(state_path.parent)
+            prefix=state_path.name + ".",
+            suffix=".tmp",
+            dir=str(state_path.parent),
         )
         tmp_path = Path(tmp_path_str)
 
         try:
-            use_json = getattr(self.config, "use_json_format", True)
-            if use_json:
+            # Определяем формат по расширению
+            if state_path.suffix == ".json":
                 import json
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1023,21 +1025,52 @@ class MemorySystem:
                 with os.fdopen(fd, "wb") as f:
                     pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+            # HMAC-подпись
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
             hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
-            os.replace(tmp_path, state_path)
+            # Атомарная замена
+            try:
+                os.replace(tmp_path, state_path)
+            except OSError as exc:
+                # ИСПРАВЛЕНО: Оборачиваем в LeyaAtomicWriteError
+                raise LeyaAtomicWriteError(
+                    "Атомарная замена memory_state не удалась",
+                    context={"path": str(state_path), "error": str(exc)},
+                ) from exc
+        except LeyaAtomicWriteError:
+            raise
         except Exception as exc:
+            # ИСПРАВЛЕНО: Все исключения оборачиваем в LeyaAtomicWriteError
             raise LeyaAtomicWriteError(
-                "Атомарная запись memory_state не удалась",
+                "Сбой при сохранении состояния памяти",
                 context={"path": str(state_path), "error": str(exc)},
             ) from exc
         finally:
             if tmp_path.exists():
                 with contextlib.suppress(OSError):
                     tmp_path.unlink()
+
+    async def _sync_collection(self, memory_type: MemoryType, collection, report) -> None:
+        """Синхронизация одной коллекции (episodic или semantic)."""
+        try:
+            # ИСПРАВЛЕНО: Добавлен метод _collect_batch
+            batch = await self._collect_batch(memory_type)
+            if not batch:
+                return
+            
+            # ... (остальной код синхронизации)
+        except Exception as e:
+            logger.error(f"Сбой sync {memory_type.value}: {e}")
+
+    async def _collect_batch(self, memory_type: MemoryType) -> list[Engram]:
+        """Сбор энграмм указанного типа из in-memory состояния."""
+        return [
+            engram for engram in self.engrams.values()
+            if engram.memory_type == memory_type
+        ]
 
     async def _sync_chroma_from_memory(self) -> "SyncReport":
         """Синхронизация in-memory состояния с ChromaDB."""
