@@ -1175,7 +1175,7 @@ class MemorySystem:
                         except Exception:
                             report.errors += 1
                             continue
-                        if not emb:
+                        if emb is None or len(emb) == 0:
                             report.errors += 1
                             continue
 

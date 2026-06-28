@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from leya_core.exceptions import LeyaMemoryError
+from leya_core.memory import MemoryType
 
 
 # =================================================================================
@@ -85,12 +86,15 @@ class FakeChromaClient:
 def _make_engram(id_: str, content: str, memory_type: str = "EPISODIC"):
     """Создаёт минимальный Engram-подобный объект."""
     from dataclasses import dataclass, field
+    import time
+
+    mem_type_enum = MemoryType[memory_type]
 
     @dataclass
     class Engram:
         id: str
         content: str
-        memory_type: str
+        memory_type: MemoryType
         retention_strength: float = 1.0
         emotional_boost: float = 0.0
         retrieval_count: int = 0
@@ -104,7 +108,7 @@ def _make_engram(id_: str, content: str, memory_type: str = "EPISODIC"):
             return {
                 "id": self.id,
                 "content": self.content,
-                "memory_type": self.memory_type,
+                "memory_type": self.memory_type.value,
                 "retention_strength": self.retention_strength,
                 "emotional_boost": self.emotional_boost,
                 "retrieval_count": self.retrieval_count,
@@ -117,9 +121,12 @@ def _make_engram(id_: str, content: str, memory_type: str = "EPISODIC"):
 
         @classmethod
         def from_dict(cls, d):
+            d = d.copy()
+            if isinstance(d.get("memory_type"), str):
+                d["memory_type"] = MemoryType[d["memory_type"]]
             return cls(**d)
 
-    return Engram(id=id_, content=content, memory_type=memory_type)
+    return Engram(id=id_, content=content, memory_type=mem_type_enum)
 
 
 @pytest.fixture
@@ -137,7 +144,7 @@ def memory_with_fake_chroma(tmp_path):
         # Мокаем sentence-transformers (эмбеддинги)
         with patch("sentence_transformers.SentenceTransformer") as mock_st:  
             mock_model = MagicMock()
-            mock_model.encode.return_value = [[0.1] * 384]
+            mock_model.encode.return_value = [0.1] * 384
             mock_st.return_value = mock_model
 
             mem = MemorySystem(cfg)

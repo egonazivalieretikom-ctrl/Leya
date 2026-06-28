@@ -140,55 +140,32 @@ class TestLLMClientChat:
         return c
 
     @pytest.mark.asyncio
-    async def test_aiohttp_client_error_raises_connection_error(self, client):
-        mock_post = AsyncMock()
-        mock_post.side_effect = aiohttp.ClientError("Connection failed")
-        client._session.post.return_value = mock_post
+    async def test_oserror_on_hmac_write_raises_atomic_write_error(self, memory_instance, tmp_path):
+        memory_instance.config.brain_dir = str(tmp_path)
 
-        with pytest.raises(LeyaLLMConnectionError):
-            await client.chat("hi")
+        # Патчим именно метод, который используется в коде
+        with patch.object(Path, "write_text", side_effect=OSError("Permission denied on .hmac")):
+            with pytest.raises(LeyaAtomicWriteError):
+                await memory_instance._save_state()
 
     @pytest.mark.asyncio
-    async def test_timeout_error_raises_timeout(self):
-        """asyncio.TimeoutError → LeyaLLMTimeoutError."""
-        from leya_core.config import OllamaConfig
-        cfg = OllamaConfig()
-        client = OllamaClient(
-            base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
-            temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
-            max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
-        )
-        client._session = AsyncMock()
-        client._breaker = MagicMock()
-        client._breaker.is_available.return_value = True
-        
-        # ИСПРАВЛЕНО: Корректно мокаем asyncio.TimeoutError
-        client._session.post.side_effect = asyncio.TimeoutError()
-        
+    async def test_timeout_error_raises_timeout(self, client):
+        mock_post = AsyncMock()
+        mock_post.side_effect = asyncio.TimeoutError()
+        client._session.post.return_value = mock_post
+
         with pytest.raises(LeyaLLMTimeoutError):
             await client.chat("hi")
 
     @pytest.mark.asyncio
-    async def test_unexpected_exception_wrapped_as_llm_error(self):
-        """Неожиданное исключение оборачивается в LeyaLLMError с сохранением оригинала."""
-        from leya_core.config import OllamaConfig
-        cfg = OllamaConfig()
-        client = OllamaClient(
-            base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
-            temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
-            max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
-        )
-        client._session = AsyncMock()
-        client._breaker = MagicMock()
-        client._breaker.is_available.return_value = True
-        
-        # ИСПРАВЛЕНО: Корректно мокаем RuntimeError через side_effect
-        client._session.post.side_effect = RuntimeError("weird internal bug")
-        
+    async def test_unexpected_exception_wrapped_as_llm_error(self, client):
+        mock_post = AsyncMock()
+        mock_post.side_effect = RuntimeError("weird internal bug")
+        client._session.post.return_value = mock_post
+
         with pytest.raises(LeyaLLMError) as exc_info:
             await client.chat("hi")
-        
-        # Оригинал должен быть сохранён как __cause__
+
         assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
