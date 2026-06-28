@@ -492,9 +492,8 @@ class LeyaOS:
     async def shutdown(self) -> None:
         """Graceful shutdown: остановка задач + сохранение состояния.
 
-        Этап 1.3: ошибки при сохранении не проглатываются молча — они
-        логируются с контекстом и возвращаются списком. Сам shutdown
-        не падает, даже если все компоненты отказали.
+        Ошибки при сохранении логируются с контекстом и возвращаются списком.
+        Сам shutdown не падает, даже если все компоненты отказали.
         """
         if self._shutdown_event.is_set():
             logger.warning("Shutdown уже инициирован")
@@ -502,6 +501,9 @@ class LeyaOS:
         self._shutdown_event.set()
 
         logger.info("🛑 Начало graceful shutdown...")
+    
+        # Явно устанавливаем состояние "sleeping" ПЕРЕД сохранением
+        self.state = "sleeping"
 
         # 1. Отменяем все фоновые задачи
         tasks_to_cancel = [
