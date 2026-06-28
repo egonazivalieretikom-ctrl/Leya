@@ -148,7 +148,7 @@ class IMemorySystem(Protocol):
         content: str,
         emotional_boost: float = 0.0,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> "Engram":  # ✅ ИСПРАВЛЕНО: было -> None
         """Сохранение восприятия в память."""
         ...
     
@@ -156,7 +156,7 @@ class IMemorySystem(Protocol):
         self,
         content: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> "Engram":  # ✅ ИСПРАВЛЕНО: было -> None
         """Сохранение факта в семантическую память."""
         ...
     
@@ -164,7 +164,7 @@ class IMemorySystem(Protocol):
         self,
         query: str,
         max_results: int = 5,
-    ) -> list[Any]:
+    ) -> list["Engram"]:  # ✅ ИСПРАВЛЕНО: было -> list[Any]
         """Получение релевантного контекста из памяти."""
         ...
     
@@ -180,7 +180,7 @@ class IMemorySystem(Protocol):
         """Получение контекста модели себя для промптов."""
         ...
     
-    async def get_recent_episodes(self, limit: int = 10) -> list[Any]:
+    async def get_recent_episodes(self, limit: int = 10) -> list["Engram"]:  # ✅ ИСПРАВЛЕНО: было -> list[Any]
         """Получение недавних эпизодов."""
         ...
     
@@ -188,7 +188,7 @@ class IMemorySystem(Protocol):
         """Забывание слабых воспоминаний."""
         ...
     
-    def get_memory_graph_data(self) -> dict[str, Any]:
+    async def get_memory_graph_data(self) -> dict[str, Any]:  # ✅ КРИТИЧНО ИСПРАВЛЕНО: было def (синхронный), стало async def
         """Получение данных графа памяти для визуализации."""
         ...
     

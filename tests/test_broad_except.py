@@ -14,7 +14,8 @@ import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from LeyaOS import LeyaOS 
+import LeyaOS as leya_module
+LeyaOS = leya_module.LeyaOS
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 from leya_core.exceptions import (
@@ -118,10 +119,9 @@ class TestLLMClientChat:
     def client(self):
         from leya_core.llm_client import OllamaClient
         from leya_core.config import OllamaConfig
-    
         cfg = OllamaConfig()
-    
-        # Создаём OllamaClient с отдельными параметрами (как в LeyaOS.py)
+        
+        # ✅ ИСПРАВЛЕНО: OllamaClient не принимает config=cfg, передаём параметры явно
         c = OllamaClient(
             base_url=cfg.base_url,
             model=cfg.model,
@@ -132,14 +132,13 @@ class TestLLMClientChat:
             max_tokens=cfg.max_tokens,
             repeat_penalty=cfg.repeat_penalty,
         )
-    
+        
         # Мокаем сессию и breaker
         c._session = AsyncMock()
         c._breaker = MagicMock()
         c._breaker.is_available.return_value = True
         c._breaker.record_success = MagicMock()
         c._breaker.record_failure = MagicMock()
-    
         return c
 
     @pytest.mark.asyncio

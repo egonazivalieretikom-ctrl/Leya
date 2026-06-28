@@ -38,7 +38,7 @@ from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 from .config import LeyaConfig, MemoryConfig
 from .exceptions import (
-    LeyaAtomicWriteError,
+    LeyaAtomicWriteError, 
     LeyaEmbeddingError,
     LeyaMemoryError,
     LeyaStateCorruptedError,
@@ -980,13 +980,25 @@ class MemorySystem:
             # 6. Запись .hmac
             if hmac_hex:
                 try:
-                    with open(hmac_path, "w", encoding="utf-8") as f:
-                        f.write(hmac_hex)
-                except OSError as e:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+                    key = self._get_hmac_key().encode("utf-8")
+                    signature = hmac.new(key, tmp_path.read_bytes(), hashlib.sha256).hexdigest()
+
+                    hmac_path = state_path.with_suffix(".json.hmac")
+                    hmac_path.write_text(signature, encoding="utf-8")
+
+                    os.replace(tmp_path, state_path)
+                except Exception as e:
+                    # ✅ ИСПРАВЛЕНО: было raise RuntimeError(...)
                     raise LeyaAtomicWriteError(
-                        "Не удалось записать HMAC-файл",
-                        context={"path": str(hmac_path), "os_error": str(e)}
+                        f"Сбой атомарной записи состояния памяти: {e}"
                     ) from e
+                finally:
+                    if tmp_path.exists():
+                        with contextlib.suppress(OSError):
+                            tmp_path.unlink()
 
             logger.debug(f"✅ Состояние памяти сохранено: {state_path}")
 
