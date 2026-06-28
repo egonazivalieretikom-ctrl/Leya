@@ -10,6 +10,7 @@
 import asyncio
 import json
 import pytest
+from leya_core.memory import MemorySystem
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from pathlib import Path
@@ -275,9 +276,7 @@ class TestLoadStateSync:
     async def test_load_state_calls_sync(self, memory_with_fake_chroma, tmp_path):
         """После _load_state Chroma синхронизирована с JSON."""
         mem, fake_client = memory_with_fake_chroma
-        mem = MemorySystem(config, disable_hmac_check=True)
         
-        # ИСПРАВЛЕНО: Используем "__version__" и структуру "data"
         state = {
             "__version__": 3,
             "data": {
@@ -315,13 +314,11 @@ class TestLoadStateSync:
     async def test_load_state_removes_orphans_from_chroma(self, memory_with_fake_chroma, tmp_path):
         """Если в Chroma есть orphan, а в JSON нет — после load orphan удалён."""
         mem, fake_client = memory_with_fake_chroma
-        mem = MemorySystem(config, disable_hmac_check=True)
         epi = fake_client.collections["episodic"]
         
         # В Chroma есть orphan
         epi.upsert(ids=["orphan"], documents=["x"])
         
-        # ИСПРАВЛЕНО: Используем "__version__" и структуру "data"
         state = {
             "__version__": 3,
             "data": {

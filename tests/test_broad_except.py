@@ -62,9 +62,10 @@ class TestMemorySaveState:
 
     @pytest.mark.asyncio
     async def test_oserror_on_replace_raises_atomic_write_error(self, memory_instance, tmp_path):
-        """Если os.replace падает (например, cross-device) → LeyaAtomicWriteError."""
+        """Если os.replace падает (cross-device) → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
-        with patch("os.replace", side_effect=OSError("cross-device link")):
+        with patch("os.replace", side_effect=OSError("cross-device link")), \
+             patch("shutil.move", side_effect=OSError("move also failed")):
             with pytest.raises(LeyaAtomicWriteError):
                 await memory_instance._save_state()
 
@@ -80,6 +81,11 @@ class TestMemorySaveState:
 
     @pytest.mark.asyncio
     async def test_oserror_on_hmac_write_raises_atomic_write_error(self, memory_instance, tmp_path):
+        memory_instance.config.brain_dir = str(tmp_path)
+
+        with patch("pathlib.Path.write_text", side_effect=OSError("Permission denied")):
+            with pytest.raises(LeyaAtomicWriteError):
+                await memory_instance._save_state()
         """Если запись .hmac файла падает → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
         memory_instance.config.hmac_key = "test_key"
