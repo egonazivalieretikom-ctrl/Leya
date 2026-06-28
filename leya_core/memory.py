@@ -917,26 +917,24 @@ class MemorySystem:
         }
 
     async def _extract_semantic_facts(self, episodes: list[Engram]) -> list[str]:
-        """
-        Извлечение семантических фактов из эпизодов через LLM.
-
-        Требует наличия llm_client (опционально).
-        """
+        """Извлечение семантических фактов из эпизодов через LLM с defensive проверкой."""
         if not hasattr(self, "llm_client") or not self.llm_client:
             return []
 
-        # Формирование промпта для извлечения фактов
         episodes_text = "\n".join([f"- {e.content}" for e in episodes[:20]])
-        prompt = f"""Проанализируй следующие эпизоды и извлеки из них ключевые семантические факты (обобщённые знания, не конкретные события):
-
-{episodes_text}
-
-Верни список фактов (каждый с новой строки, без нумерации):"""
+        prompt = f"""Проанализируй следующие эпизоды и извлеки из них ключевые семантические факты:
+    {episodes_text}
+    Верни список фактов (каждый с новой строки, без нумерации):"""
 
         try:
-            response = await self.llm_client.generate(prompt, max_tokens=500)
+            # Defensive check: используем generate, если есть, иначе chat
+            if hasattr(self.llm_client, "generate"):
+                response = await self.llm_client.generate(prompt, max_tokens=500)
+            else:
+                response = await self.llm_client.chat(prompt, require_json=False)
+            
             facts = [line.strip() for line in response.split("\n") if line.strip()]
-            return facts[:10]  # Ограничение на количество фактов
+            return facts[:10]
         except Exception as exc:
             logger.warning(f"Не удалось извлечь факты через LLM: {exc}")
             return []
@@ -1243,14 +1241,9 @@ class MemorySystem:
 
     
     async def _sync_chroma_from_memory(self) -> SyncReport:
-        """
-        Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
-
-        Агрегирует результаты синхронизации эпизодической и семантической памяти
-        в единый SyncReport.
-
-        Returns:
-            SyncReport с суммарной информацией о синхронизации.
+        """Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
+    
+        ИСПРАВЛЕНО: Убран дублирующий вызов синхронизации семантической коллекции.
         """
         logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
         total_report = SyncReport()
@@ -1266,22 +1259,11 @@ class MemorySystem:
             total_report.updated_in_chroma += report_episodic.updated_in_chroma
             total_report.removed_from_chroma += report_episodic.removed_from_chroma
             total_report.errors += report_episodic.errors
-
-            report_semantic = await self._sync_collection(
-                collection=self.semantic_collection,
-                memory_type=MemoryType.SEMANTIC,
-            )
-            total_report.added_to_chroma += report_semantic.added_to_chroma
-            total_report.updated_in_chroma += report_semantic.updated_in_chroma
-            total_report.removed_from_chroma += report_semantic.removed_from_chroma
-            total_report.errors += report_semantic.errors
-
-            total_report.duration_ms = (time.time() - start_time) * 1000
         except Exception as exc:
             logger.error(f"Сбой sync episodic: {exc}", exc_info=True)
             total_report.errors += 1
 
-        # 2. Синхронизация семантической памяти
+        # 2. Синхронизация семантической памяти (ИСПРАВЛЕНО: только один вызов)
         try:
             report_semantic = await self._sync_collection(
                 collection=self.semantic_collection,

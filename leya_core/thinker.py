@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ConfigDict
 
 from .config import ThinkerConfig
 from .exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMTimeoutError
@@ -41,17 +41,17 @@ class ToolCall(BaseModel):
 
 class CognitiveOutput(BaseModel):
     """Структурированный вывод когнитивного цикла Леи.
-
-    Pydantic модель для строгой валидации ответа LLM.
+    
+    ИСПРАВЛЕНО: Поля сделаны Optional с дефолтами, чтобы избежать падения
+    при неполном JSON от LLM. Добавлен model_config для игнорирования лишних полей.
     """
-    response: str = Field(..., description="Внешний ответ пользователю")
-    internal_monologue: str = Field(..., description="Внутренний монолог (не показывается пользователю)")
-    action_intent: ActionIntent = Field(..., description="Намерение действия")
-    tool_call: Optional[ToolCall] = Field(None, description="Вызов инструмента (если action_intent == USE_TOOL)")
-    self_reflection: str = Field(..., description="Саморефлексия о процессе мышления")
+    response: str = Field(default="Я обрабатываю информацию...", description="Внешний ответ пользователю")
+    internal_monologue: str = Field(default="Анализ стимула...", description="Внутренний монолог")
+    action_intent: ActionIntent = Field(default=ActionIntent.RESPOND, description="Намерение действия")
+    tool_call: Optional[ToolCall] = Field(default=None, description="Вызов инструмента")
+    self_reflection: str = Field(default="Процесс мышления в норме.", description="Саморефлексия")
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(extra='ignore', use_enum_values=True)
 
 
 # =================================================================================

@@ -24,8 +24,6 @@ from leya_core.config import LeyaConfig
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem
 from leya_core.environment import CLIEnvironment
-from leya_core.experimental.decision_engine import DecisionEngine, Decision
-from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
 from leya_core.interfaces import IDecisionEngine, IEmotionalSupport
 from leya_core.soul_manager import SoulManager 
 
@@ -69,6 +67,51 @@ from leya_core.system_metrics import SystemMetrics
 from leya_core.thinker import CoreThinker
 from leya_core.tool_generator import ToolGenerator
 from web_interface.web_environment import WebEnvironment
+
+if not isinstance(self.memory, IMemorySystem):
+    raise TypeError(f"memory должен реализовывать IMemorySystem, получено {type(self.memory)}")
+if not isinstance(self.drives, IDriveSystem):
+    raise TypeError(f"drives должен реализовывать IDriveSystem, получено {type(self.drives)}")
+if not isinstance(self.workspace, IGlobalWorkspace):
+    raise TypeError(f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}")
+if not isinstance(self.constitutional, IConstitutionalLayer):
+    raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer, получено {type(self.constitutional)}")
+if not isinstance(self.thinker, ICoreThinker):
+    raise TypeError(f"thinker должен реализовывать ICoreThinker, получено {type(self.thinker)}")
+if not isinstance(self.homeostasis, IHomeostasisEngine):
+    raise TypeError(f"homeostasis должен реализовывать IHomeostasisEngine, получено {type(self.homeostasis)}")
+if not isinstance(self.reflection, IMetaCognition):
+    raise TypeError(f"reflection должен реализовывать IMetaCognition, получено {type(self.reflection)}")
+if not isinstance(self.env, IEnvironment):
+    raise TypeError(f"env должен реализовывать IEnvironment, получено {type(self.env)}")
+
+# Experimental компоненты (lazy import для изоляции)
+self.decision_engine: Optional[IDecisionEngine] = None
+self.emotional_support: Optional[IEmotionalSupport] = None
+
+if self.config.experimental.enable_decision_engine:
+    try:
+        from leya_core.experimental.decision_engine import DecisionEngine
+        from leya_core.experimental.interfaces import IDecisionEngine
+        self.decision_engine = DecisionEngine(self.config)
+        if not isinstance(self.decision_engine, IDecisionEngine):
+            raise TypeError("DecisionEngine не реализует IDecisionEngine")
+        logger.info("✅ DecisionEngine включён (feature flag)")
+    except Exception as e:
+        logger.error(f"Не удалось инициализировать DecisionEngine: {e}", exc_info=True)
+        self.decision_engine = None
+
+if self.config.experimental.enable_emotional_support:
+    try:
+        from leya_core.experimental.emotional_support import EmotionalSupport
+        from leya_core.experimental.interfaces import IEmotionalSupport
+        self.emotional_support = EmotionalSupport(self.config, self.memory)
+        if not isinstance(self.emotional_support, IEmotionalSupport):
+            raise TypeError("EmotionalSupport не реализует IEmotionalSupport")
+        logger.info("✅ EmotionalSupport включён (feature flag)")
+    except Exception as e:
+        logger.error(f"Не удалось инициализировать EmotionalSupport: {e}", exc_info=True)
+        self.emotional_support = None
 
 # Настройка логирования ПОСЛЕ всех импортов
 logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
