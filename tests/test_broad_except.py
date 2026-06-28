@@ -8,29 +8,28 @@
 """
 
 import asyncio
-import json
-import os
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import LeyaOS as leya_module
+
 LeyaOS = leya_module.LeyaOS
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
-from leya_core.llm_client import OllamaClient
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from leya_core.exceptions import (
     LeyaAtomicWriteError,
-    LeyaLLMConnectionError,
-    LeyaLLMTimeoutError,
-    LeyaJSONParseError,
     LeyaLLMError,
+    LeyaLLMTimeoutError,
 )
-import aiohttp 
-
+from leya_core.llm_client import OllamaClient
 
 # =================================================================================
 # MEMORY._save_state
 # =================================================================================
+
 
 class TestMemorySaveState:
     """Проверяем, что _save_state бросает LeyaAtomicWriteError на конкретных ошибках."""
@@ -38,13 +37,13 @@ class TestMemorySaveState:
     @pytest.fixture
     def memory_instance(self):
         """Создаёт минимальный mock памяти с нужными атрибутами для _save_state."""
-        from leya_core.memory import MemorySystem
         from leya_core.config import MemoryConfig
+        from leya_core.memory import MemorySystem
 
         # Создаём объект без вызова __init__ (чтобы не трогать Chroma и т.д.)
         mem = MemorySystem.__new__(MemorySystem)
         mem.config = MemoryConfig()
-        mem.memory_config = mem.config   # важно: MemoryConfig имеет brain_dir
+        mem.memory_config = mem.config  # важно: MemoryConfig имеет brain_dir
         mem.engrams = {}
         mem.synapses = {}
         mem.self_model = "test self model"
@@ -58,19 +57,25 @@ class TestMemorySaveState:
         with patch("tempfile.mkstemp", side_effect=OSError(28, "No space left on device")):
             with pytest.raises(LeyaAtomicWriteError) as exc_info:
                 await memory_instance._save_state()
-            assert "No space left" in str(exc_info.value) or "tempfile" in str(exc_info.value).lower()
+            assert (
+                "No space left" in str(exc_info.value) or "tempfile" in str(exc_info.value).lower()
+            )
 
     @pytest.mark.asyncio
     async def test_oserror_on_replace_raises_atomic_write_error(self, memory_instance, tmp_path):
         """Если os.replace падает (cross-device) → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
-        with patch("os.replace", side_effect=OSError("cross-device link")), \
-             patch("shutil.move", side_effect=OSError("move also failed")):
+        with (
+            patch("os.replace", side_effect=OSError("cross-device link")),
+            patch("shutil.move", side_effect=OSError("move also failed")),
+        ):
             with pytest.raises(LeyaAtomicWriteError):
                 await memory_instance._save_state()
 
     @pytest.mark.asyncio
-    async def test_typeerror_on_json_dump_raises_atomic_write_error(self, memory_instance, tmp_path):
+    async def test_typeerror_on_json_dump_raises_atomic_write_error(
+        self, memory_instance, tmp_path
+    ):
         """Если json.dump не может сериализовать (TypeError) → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
         # Неподдерживаемый тип в engrams
@@ -78,7 +83,6 @@ class TestMemorySaveState:
 
         with pytest.raises(LeyaAtomicWriteError):
             await memory_instance._save_state()
-
 
     @pytest.mark.asyncio
     async def test_success_does_not_raise(self, memory_instance, tmp_path):
@@ -95,17 +99,24 @@ class TestMemorySaveState:
 # LLM_CLIENT.chat
 # =================================================================================
 
+
 class TestLLMClientChat:
     """Проверяем, что chat превращает низкоуровневые ошибки в LeyaLLM*."""
 
     @pytest.fixture
     def client(self):
         from leya_core.config import OllamaConfig
+
         cfg = OllamaConfig()
         c = OllamaClient(
-            base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
-            temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
-            max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
+            base_url=cfg.base_url,
+            model=cfg.model,
+            timeout=cfg.timeout,
+            temperature=cfg.temperature,
+            top_p=cfg.top_p,
+            top_k=cfg.top_k,
+            max_tokens=cfg.max_tokens,
+            repeat_penalty=cfg.repeat_penalty,
         )
         c._session = MagicMock()
         c.circuit_breaker = MagicMock()
@@ -113,7 +124,6 @@ class TestLLMClientChat:
         c.circuit_breaker.record_success = MagicMock()
         c.circuit_breaker.record_failure = MagicMock()
         return c
-
 
     @pytest.mark.asyncio
     async def test_timeout_error_raises_timeout(self, client):
@@ -146,6 +156,7 @@ class TestLLMClientChat:
 # LEYA OS SHUTDOWN
 # =================================================================================
 
+
 class TestLeyaShutdown:
     """Проверяем, что shutdown логирует ошибки, но не падает и не проглатывает их молча."""
 
@@ -155,9 +166,10 @@ class TestLeyaShutdown:
         import logging
         import sys
         from pathlib import Path
+
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from LeyaOS import LeyaOS
         from leya_core.config import LeyaConfig
+        from LeyaOS import LeyaOS
 
         # Создаём OS без полного init
         os_instance = LeyaOS.__new__(LeyaOS)
@@ -174,17 +186,19 @@ class TestLeyaShutdown:
             await os_instance.shutdown()
 
         # Ошибка должна быть залогирована
-        assert any("disk full" in rec.message or "atomic" in rec.message.lower()
-                   for rec in caplog.records)
+        assert any(
+            "disk full" in rec.message or "atomic" in rec.message.lower() for rec in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_shutdown_succeeds_when_all_components_ok(self):
         """Если всё ок — shutdown проходит без ошибок."""
         import sys
         from pathlib import Path
+
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from LeyaOS import LeyaOS
         from leya_core.config import LeyaConfig
+        from LeyaOS import LeyaOS
 
         os_instance = LeyaOS.__new__(LeyaOS)
         os_instance.config = LeyaConfig()

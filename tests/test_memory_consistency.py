@@ -7,31 +7,33 @@
 - Graceful degradation при недоступности Chroma
 """
 
-import asyncio
-import json
-import pytest
-from leya_core.memory import MemorySystem
 from dataclasses import dataclass
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from pathlib import Path
-from sentence_transformers import SentenceTransformer
-from leya_core.exceptions import LeyaMemoryError
-from leya_core.memory import MemoryType
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from leya_core.memory import MemorySystem, MemoryType
 
 # =================================================================================
 # ФИКСТУРЫ И МОКИ
 # =================================================================================
 
+
 class FakeChromaCollection:
     """Мок Chroma-коллекции с in-memory хранением."""
+
     def __init__(self):
         self._store: dict = {}  # id -> {document, embedding, metadata}
         self.upsert_calls = 0
         self.delete_calls = 0
 
-    def add(self, ids: list[str], documents: list[str], 
-            embeddings: list[list[float]], metadatas: list[dict]):
+    def add(
+        self,
+        ids: list[str],
+        documents: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict],
+    ):
         """Добавление записей (алиас для upsert в тестах)."""
         self.upsert(ids, documents, embeddings, metadatas)
 
@@ -71,6 +73,7 @@ class FakeChromaCollection:
 
 class FakeChromaClient:
     """Мок chromadb.PersistentClient."""
+
     def __init__(self):
         self.collections = {
             "episodic": FakeChromaCollection(),
@@ -85,8 +88,7 @@ class FakeChromaClient:
 
 def _make_engram(id_: str, content: str, memory_type: str = "EPISODIC"):
     """Создаёт минимальный Engram-подобный объект."""
-    from dataclasses import dataclass, field
-    import time
+    from dataclasses import field
 
     mem_type_enum = MemoryType[memory_type]
 
@@ -132,7 +134,6 @@ def _make_engram(id_: str, content: str, memory_type: str = "EPISODIC"):
 @pytest.fixture
 def memory_with_fake_chroma(tmp_path):
     """Создаёт MemorySystem с мокнутым Chroma-клиентом."""
-    from leya_core.memory import MemorySystem
     from leya_core.config import MemoryConfig
 
     cfg = MemoryConfig(brain_dir=str(tmp_path), hmac_key="test_key")
@@ -142,7 +143,7 @@ def memory_with_fake_chroma(tmp_path):
         mock_client_cls.return_value = fake_client
 
         # Мокаем sentence-transformers (эмбеддинги)
-        with patch("sentence_transformers.SentenceTransformer") as mock_st:  
+        with patch("sentence_transformers.SentenceTransformer") as mock_st:
             mock_model = MagicMock()
             mock_model.encode.return_value = [0.1] * 384
             mock_st.return_value = mock_model
@@ -159,6 +160,7 @@ def memory_with_fake_chroma(tmp_path):
 # =================================================================================
 # ТЕСТЫ SYNC
 # =================================================================================
+
 
 class TestSyncChromaFromMemory:
     """Проверяем _sync_chroma_from_memory."""
@@ -240,6 +242,7 @@ class TestSyncChromaFromMemory:
     async def test_sync_logs_discrepancies(self, memory_with_fake_chroma, caplog):
         """Расхождения логируются с метриками."""
         import logging
+
         mem, fake_client = memory_with_fake_chroma
         epi = fake_client.collections["episodic"]
 
@@ -251,9 +254,12 @@ class TestSyncChromaFromMemory:
             report = await mem._sync_chroma_from_memory()
 
         # Должен быть лог с метриками
-        assert any("sync" in rec.message.lower() or "расхожд" in rec.message.lower()
-                   or "synchro" in rec.message.lower()
-                   for rec in caplog.records)
+        assert any(
+            "sync" in rec.message.lower()
+            or "расхожд" in rec.message.lower()
+            or "synchro" in rec.message.lower()
+            for rec in caplog.records
+        )
         assert report.added_to_chroma == 1
         assert report.removed_from_chroma == 1
 
@@ -275,6 +281,7 @@ class TestSyncChromaFromMemory:
 # =================================================================================
 # ТЕСТЫ LOAD + SYNC
 # =================================================================================
+
 
 class TestLoadStateSync:
     """Проверяем, что _load_state вызывает sync."""
@@ -322,6 +329,7 @@ class TestLoadStateSync:
 # ТЕСТЫ GRACEFUL DEGRADATION
 # =================================================================================
 
+
 class TestSyncGracefulDegradation:
     """Sync не должен ронять систему при проблемах с Chroma."""
 
@@ -356,6 +364,7 @@ class TestSyncGracefulDegradation:
 # =================================================================================
 # ТЕСТЫ STORE/RETRIEVE CONSISTENCY
 # =================================================================================
+
 
 class TestStoreRetrieveConsistency:
     """Проверяем, что store_perception и retrieve_context не ломают consistency."""

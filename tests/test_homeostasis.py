@@ -2,10 +2,12 @@
 Тесты для HomeostasisEngine.
 Покрывает генерацию целей, RPE, эмоциональную связность.
 """
+
 import pytest
-from leya_core.homeostasis_engine import HomeostasisEngine
-from leya_core.drives import DriveType
+
 from leya_core.config import HomeostasisConfig
+from leya_core.drives import DriveType
+from leya_core.homeostasis_engine import HomeostasisEngine
 
 
 @pytest.fixture
@@ -49,6 +51,7 @@ class TestGoalGeneration:
     async def test_rest_period_prevents_goal_generation(self):
         """rest_period предотвращает частую генерацию целей."""
         import time
+
         config = HomeostasisConfig(rest_period=10.0)  # 10 секунд
         engine = HomeostasisEngine(config=config)
         # Имитируем действие 5 секунд назад (недавнее)
@@ -67,7 +70,7 @@ class TestEmotionalConnectivity:
     async def test_emotional_boost_increases_urgency(self, homeostasis_engine):
         """Высокий emotional_boost увеличивает urgency цели."""
         from leya_core.memory import Engram, MemoryType
-        
+
         # Создаём эпизоды с высоким emotional_boost
         episodes = [
             Engram(

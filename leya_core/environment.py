@@ -26,7 +26,6 @@ import logging
 import os
 import subprocess
 import tempfile
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -43,7 +42,6 @@ from .exceptions import (
 from .interfaces import IEnvironment
 
 logger = logging.getLogger("Leya.Environment")
-
 
 
 # ============================================================================
@@ -773,29 +771,29 @@ class Environment(BaseEnvironment, IEnvironment):
         logger.debug(f"[{thought_type}] {content[:100]}")
 
     async def update_drives(self, drive_state: dict[str, float]) -> None:
-            """Обновление состояния драйвов.
+        """Обновление состояния драйвов.
 
-            В базовой реализации — логирование.
-            WebEnvironment переопределяет метод для отправки через WebSocket.
-            CLIEnvironment может переопределять для вывода в консоль.
-            """
-            logger.debug(f"[Environment] Drive state updated: {drive_state}")
+        В базовой реализации — логирование.
+        WebEnvironment переопределяет метод для отправки через WebSocket.
+        CLIEnvironment может переопределять для вывода в консоль.
+        """
+        logger.debug(f"[Environment] Drive state updated: {drive_state}")
 
     async def update_self_model(self, self_model: str) -> None:
-            """Обновление модели себя.
+        """Обновление модели себя.
 
-            В базовой реализации — логирование.
-            WebEnvironment переопределяет метод для отправки через WebSocket.
-            """
-            logger.debug("[Environment] Self-model updated")
+        В базовой реализации — логирование.
+        WebEnvironment переопределяет метод для отправки через WebSocket.
+        """
+        logger.debug("[Environment] Self-model updated")
 
     async def broadcast_state(self, state: str) -> None:
-            """Трансляция общего состояния системы.
+        """Трансляция общего состояния системы.
 
-            В базовой реализации — логирование.
-            WebEnvironment переопределяет метод для отправки через WebSocket.
-            """
-            logger.debug(f"[Environment] System state: {state}")
+        В базовой реализации — логирование.
+        WebEnvironment переопределяет метод для отправки через WebSocket.
+        """
+        logger.debug(f"[Environment] System state: {state}")
 
 
 # ============================================================================
@@ -866,10 +864,10 @@ class CLIEnvironment(Environment):
         logger.info(f"[CLI] Drives updated: {drive_state}")
 
     async def update_self_model(self, self_model: str) -> None:
-        logger.info(f"[CLI] Self-model updated")
+        logger.info("[CLI] Self-model updated")
 
     async def update_memory(self, memory_info: dict) -> None:
-        logger.info(f"[CLI] Memory updated")
+        logger.info("[CLI] Memory updated")
 
     async def broadcast_soul_update(self, soul_files: dict[str, str]) -> None:
         logger.info(f"[CLI] Soul files updated: {list(soul_files.keys())}")

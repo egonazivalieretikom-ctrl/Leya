@@ -5,16 +5,17 @@ WebEnvironment — веб-интерфейс для Леи через FastAPI + 
 Шаг 1+2: Унифицированный WebSocket (единственный источник connected_clients),
 heartbeat для обнаружения мёртвых соединений, явная обработка LeyaBroadcastError.
 """
+
 import asyncio
 import logging
-from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
+from typing import Any, Literal
+
 from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, ValidationError
 
 from leya_core.environment import Environment
-from leya_core.exceptions import LeyaBroadcastError, LeyaEnvironmentError
-from pydantic import BaseModel, ValidationError
-from typing import Literal
+from leya_core.exceptions import LeyaBroadcastError
 
 logger = logging.getLogger("WebEnvironment")
 
@@ -22,51 +23,70 @@ logger = logging.getLogger("WebEnvironment")
 # Pydantic модели для валидации broadcast сообщений (Шаг 4)
 # =========================================================================
 
+
 class BaseBroadcastMessage(BaseModel):
     """Базовая модель broadcast сообщения."""
+
     type: str
-    timestamp: Optional[float] = None
+    timestamp: float | None = None
+
 
 class ThoughtMessage(BaseBroadcastMessage):
     """Модель сообщения мысли."""
+
     type: Literal["thought"]
     thought_type: str  # "internal", "spontaneous", "reflection", "workspace"
     content: str
 
+
 class DrivesUpdateMessage(BaseBroadcastMessage):
     """Модель обновления драйвов."""
+
     type: Literal["drives_update"]
-    data: Dict[str, float]
+    data: dict[str, float]
+
 
 class SelfModelUpdateMessage(BaseBroadcastMessage):
     """Модель обновления само-модели."""
+
     type: Literal["self_model_update"]
     data: str
 
+
 class MemoryUpdateMessage(BaseBroadcastMessage):
     """Модель обновления памяти."""
+
     type: Literal["memory_update"]
-    data: Dict[str, Any]
+    data: dict[str, Any]
+
 
 class StateUpdateMessage(BaseBroadcastMessage):
     """Модель обновления состояния."""
+
     type: Literal["state_update"]
     data: str
 
+
 class SoulUpdateMessage(BaseBroadcastMessage):
     """Модель обновления души."""
+
     type: Literal["soul_update"]
-    data: Dict[str, str]
+    data: dict[str, str]
+
 
 class LeyaResponseMessage(BaseBroadcastMessage):
     """Модель ответа Леи."""
+
     type: Literal["leya_response"]
     content: str
 
+
 class UserMessageBroadcast(BaseBroadcastMessage):
     """Модель сообщения пользователя (broadcast)."""
+
     type: Literal["user_message"]
     content: str
+
 
 class WebEnvironment(Environment):
     """
@@ -81,10 +101,10 @@ class WebEnvironment(Environment):
         super().__init__(leya_os)
         self.message_queue = asyncio.Queue()
         self.input_queue = self.message_queue
-        self.connected_clients: Set[WebSocket] = set()
-        self.message_history: List[Dict] = []
+        self.connected_clients: set[WebSocket] = set()
+        self.message_history: list[dict] = []
         self.max_history = 100
-        self._heartbeat_tasks: Dict[WebSocket, asyncio.Task] = {}
+        self._heartbeat_tasks: dict[WebSocket, asyncio.Task] = {}
 
     async def connect(self, websocket: WebSocket):
         """Подключение нового клиента. Единственный способ подключения."""
@@ -100,9 +120,7 @@ class WebEnvironment(Environment):
                 break
 
         # Запускаем heartbeat для этого соединения
-        self._heartbeat_tasks[websocket] = asyncio.create_task(
-            self._heartbeat_loop(websocket)
-        )
+        self._heartbeat_tasks[websocket] = asyncio.create_task(self._heartbeat_loop(websocket))
 
     async def _heartbeat_loop(self, websocket: WebSocket):
         """Отправляет ping каждые HEARTBEAT_INTERVAL секунд для поддержания соединения."""
@@ -110,7 +128,9 @@ class WebEnvironment(Environment):
             while True:
                 await asyncio.sleep(self.HEARTBEAT_INTERVAL)
                 try:
-                    await websocket.send_json({"type": "ping", "timestamp": datetime.now().timestamp()})
+                    await websocket.send_json(
+                        {"type": "ping", "timestamp": datetime.now().timestamp()}
+                    )
                 except (WebSocketDisconnect, RuntimeError, Exception):
                     # Соединение мертво — выходим, disconnect обработается в websocket_endpoint
                     break
@@ -126,10 +146,10 @@ class WebEnvironment(Environment):
             task.cancel()
         logger.info(f"WebEnvironment: Клиент отключен. Всего: {len(self.connected_clients)}")
 
-    async def broadcast(self, message: Dict[str, Any]):
+    async def broadcast(self, message: dict[str, Any]):
         """
         Отправка сообщения всем подключенным клиентам.
-    
+
         ИСПРАВЛЕНИЕ ШАГ 4: Валидирует структуру сообщения через Pydantic модели.
         Явно обрабатывает LeyaBroadcastError и очищает отключившихся.
         """
@@ -138,7 +158,7 @@ class WebEnvironment(Environment):
         if not msg_type:
             logger.error(f"WebEnvironment: Сообщение без type: {message}")
             raise LeyaBroadcastError("Сообщение broadcast должно содержать 'type'")
-    
+
         # Попытка валидации через Pydantic модель
         try:
             model_map = {
@@ -151,7 +171,7 @@ class WebEnvironment(Environment):
                 "leya_response": LeyaResponseMessage,
                 "user_message": UserMessageBroadcast,
             }
-        
+
             if msg_type in model_map:
                 # Валидируем через Pydantic
                 validated = model_map[msg_type](**message)
@@ -163,9 +183,9 @@ class WebEnvironment(Environment):
             logger.error(f"WebEnvironment: Ошибка валидации сообщения типа {msg_type}: {exc}")
             raise LeyaBroadcastError(
                 f"Невалидная структура сообщения типа {msg_type}",
-                context={"validation_error": str(exc)}
+                context={"validation_error": str(exc)},
             ) from exc
-    
+
         # Сохраняем в историю
         message["timestamp"] = datetime.now().timestamp()
         self.message_history.append(message)
@@ -173,12 +193,12 @@ class WebEnvironment(Environment):
             self.message_history.pop(0)
 
         # Отправляем всем клиентам
-        disconnected: Set[WebSocket] = set()
+        disconnected: set[WebSocket] = set()
         for client in list(self.connected_clients):
             try:
                 await client.send_json(message)
             except WebSocketDisconnect:
-                logger.debug(f"WebEnvironment: Клиент отключился во время broadcast")
+                logger.debug("WebEnvironment: Клиент отключился во время broadcast")
                 disconnected.add(client)
             except RuntimeError as e:
                 logger.debug(f"WebEnvironment: WebSocket закрыт: {e}")
@@ -191,7 +211,7 @@ class WebEnvironment(Environment):
         for client in disconnected:
             self.disconnect(client)
 
-    async def listen(self) -> Optional[Dict[str, Any]]:
+    async def listen(self) -> dict[str, Any] | None:
         """Получает следующее сообщение из очереди"""
         try:
             return self.message_queue.get_nowait()
@@ -200,72 +220,55 @@ class WebEnvironment(Environment):
 
     async def send_message(self, message: str):
         """Отправляет сообщение всем клиентам"""
-        await self.broadcast({
-            "type": "leya_response",
-            "content": message
-        })
+        await self.broadcast({"type": "leya_response", "content": message})
 
     async def handle_user_message(self, content: str):
         """Обрабатывает входящее сообщение от пользователя"""
-        await self.message_queue.put({
-            "type": "user_message",
-            "content": content,
-            "source": "web",
-            "timestamp": datetime.now().timestamp()
-        })
+        await self.message_queue.put(
+            {
+                "type": "user_message",
+                "content": content,
+                "source": "web",
+                "timestamp": datetime.now().timestamp(),
+            }
+        )
 
         # Логируем в историю
-        await self.broadcast({
-            "type": "user_message",
-            "content": content
-        })
+        await self.broadcast({"type": "user_message", "content": content})
 
-    async def update_drives(self, drive_state: Dict[str, float]):
+    async def update_drives(self, drive_state: dict[str, float]):
         """Отправляет обновления драйвов клиентам"""
-        await self.broadcast({
-            "type": "drives_update",
-            "data": drive_state
-        })
+        await self.broadcast({"type": "drives_update", "data": drive_state})
 
-    async def update_memory(self, memory_info: Dict):
+    async def update_memory(self, memory_info: dict):
         """Отправляет обновления памяти"""
-        await self.broadcast({
-            "type": "memory_update",
-            "data": memory_info
-        })
+        await self.broadcast({"type": "memory_update", "data": memory_info})
 
     async def update_self_model(self, self_model: str):
         """Отправляет обновления Модели Себя"""
-        await self.broadcast({
-            "type": "self_model_update",
-            "data": self_model
-        })
+        await self.broadcast({"type": "self_model_update", "data": self_model})
 
     async def broadcast_thought(self, thought_type: str, content: str):
         """Отправляет мысли Леи (внутренний монолог, спонтанные мысли)"""
-        await self.broadcast({
-            "type": "thought",
-            "thought_type": thought_type,  # "internal", "spontaneous", "reflection"
-            "content": content
-        })
+        await self.broadcast(
+            {
+                "type": "thought",
+                "thought_type": thought_type,  # "internal", "spontaneous", "reflection"
+                "content": content,
+            }
+        )
 
     async def broadcast_state(self, state: str):
         """Отправляет состояние Леи (awake, sleeping, reflecting)"""
-        await self.broadcast({
-            "type": "state_update",
-            "data": state
-        })
+        await self.broadcast({"type": "state_update", "data": state})
 
     async def update_state(self, state: str):
         """Обновляет состояние Леи (awake, sleeping, reflecting)"""
         await self.broadcast_state(state)
 
-    async def broadcast_soul_update(self, soul_files: Dict[str, str]):
+    async def broadcast_soul_update(self, soul_files: dict[str, str]):
         """Отправляет содержимое души"""
-        await self.broadcast({
-            "type": "soul_update",
-            "data": soul_files
-        })
+        await self.broadcast({"type": "soul_update", "data": soul_files})
 
     async def shutdown(self):
         """Graceful shutdown: закрыть все соединения и отменить heartbeat."""

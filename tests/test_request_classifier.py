@@ -23,6 +23,7 @@ from leya_core.request_classifier import (
 # ФИКСТУРЫ
 # =================================================================================
 
+
 @pytest.fixture
 def mock_llm():
     """Мок LLM-клиента."""
@@ -53,49 +54,46 @@ def classifier(mock_llm, mock_memory):
 # PARAMETRIZED TESTS — 20+ вариаций формулировок
 # =================================================================================
 
+
 class TestIntentClassificationParametrized:
     """Parametrized тесты на 20+ вариаций формулировок одного намерения."""
 
-    @pytest.mark.parametrize("user_input,expected_intent", [
-        # GREETING — 5 вариаций
-        ("Привет!", UserIntent.GREETING),
-        ("Здравствуй", UserIntent.GREETING),
-        ("Добрый день", UserIntent.GREETING),
-        ("Хеллоу", UserIntent.GREETING),
-        ("Приветствую тебя", UserIntent.GREETING),
-
-        # FAREWELL — 4 вариации
-        ("Пока", UserIntent.FAREWELL),
-        ("До свидания", UserIntent.FAREWELL),
-        ("Увидимся", UserIntent.FAREWELL),
-        ("Всего доброго", UserIntent.FAREWELL),
-
-        # QUESTION — 5 вариаций
-        ("Что такое квантовая физика?", UserIntent.QUESTION),
-        ("Расскажи про Python", UserIntent.QUESTION),
-        ("Объясни, как работает asyncio", UserIntent.QUESTION),
-        ("Кто такой Эйнштейн?", UserIntent.QUESTION),
-        ("Почему небо голубое?", UserIntent.QUESTION),
-
-        # SEARCH — 3 вариации
-        ("Поищи в интернете про нейросети", UserIntent.SEARCH),
-        ("Найди информацию о погоде", UserIntent.SEARCH),
-        ("Загугли последние новости", UserIntent.SEARCH),
-
-        # REMEMBER — 3 вариации
-        ("Запомни, что я люблю кофе", UserIntent.REMEMBER),
-        ("Сохрани это: мой день рождения 1 января", UserIntent.REMEMBER),
-        ("Запиши, что я программист", UserIntent.REMEMBER),
-
-        # STATUS — 3 вариации
-        ("Как ты себя чувствуешь?", UserIntent.STATUS),
-        ("Какое у тебя состояние?", UserIntent.STATUS),
-        ("Что ты сейчас делаешь?", UserIntent.STATUS),
-    ])
+    @pytest.mark.parametrize(
+        "user_input,expected_intent",
+        [
+            # GREETING — 5 вариаций
+            ("Привет!", UserIntent.GREETING),
+            ("Здравствуй", UserIntent.GREETING),
+            ("Добрый день", UserIntent.GREETING),
+            ("Хеллоу", UserIntent.GREETING),
+            ("Приветствую тебя", UserIntent.GREETING),
+            # FAREWELL — 4 вариации
+            ("Пока", UserIntent.FAREWELL),
+            ("До свидания", UserIntent.FAREWELL),
+            ("Увидимся", UserIntent.FAREWELL),
+            ("Всего доброго", UserIntent.FAREWELL),
+            # QUESTION — 5 вариаций
+            ("Что такое квантовая физика?", UserIntent.QUESTION),
+            ("Расскажи про Python", UserIntent.QUESTION),
+            ("Объясни, как работает asyncio", UserIntent.QUESTION),
+            ("Кто такой Эйнштейн?", UserIntent.QUESTION),
+            ("Почему небо голубое?", UserIntent.QUESTION),
+            # SEARCH — 3 вариации
+            ("Поищи в интернете про нейросети", UserIntent.SEARCH),
+            ("Найди информацию о погоде", UserIntent.SEARCH),
+            ("Загугли последние новости", UserIntent.SEARCH),
+            # REMEMBER — 3 вариации
+            ("Запомни, что я люблю кофе", UserIntent.REMEMBER),
+            ("Сохрани это: мой день рождения 1 января", UserIntent.REMEMBER),
+            ("Запиши, что я программист", UserIntent.REMEMBER),
+            # STATUS — 3 вариации
+            ("Как ты себя чувствуешь?", UserIntent.STATUS),
+            ("Какое у тебя состояние?", UserIntent.STATUS),
+            ("Что ты сейчас делаешь?", UserIntent.STATUS),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_variations_classified_correctly(
-        self, classifier, user_input, expected_intent
-    ):
+    async def test_variations_classified_correctly(self, classifier, user_input, expected_intent):
         """Разные формулировки одного намерения классифицируются правильно."""
         result = await classifier.classify(user_input)
 
@@ -104,12 +102,15 @@ class TestIntentClassificationParametrized:
         assert 0.0 <= result.confidence <= 1.0
         assert result.source in ("heuristic", "cache", "llm", "fallback")
 
-    @pytest.mark.parametrize("user_input", [
-        "",  # пустой
-        "   ",  # только пробелы
-        "а",  # очень короткий
-        "123",  # только цифры
-    ])
+    @pytest.mark.parametrize(
+        "user_input",
+        [
+            "",  # пустой
+            "   ",  # только пробелы
+            "а",  # очень короткий
+            "123",  # только цифры
+        ],
+    )
     @pytest.mark.asyncio
     async def test_edge_cases_do_not_crash(self, classifier, user_input):
         """Edge cases не роняют классификатор."""
@@ -121,6 +122,7 @@ class TestIntentClassificationParametrized:
 # =================================================================================
 # CONFIDENCE-BASED ROUTING TESTS
 # =================================================================================
+
 
 class TestConfidenceBasedRouting:
     """Проверяем, что LLM не зовём, если эвристика уверена."""
@@ -140,7 +142,9 @@ class TestConfidenceBasedRouting:
     async def test_low_confidence_heuristic_calls_llm(self, classifier, mock_llm):
         """Если эвристика не уверена — вызывается LLM."""
         # Мокаем LLM ответ
-        mock_llm.chat.return_value = '{"intent": "QUESTION", "confidence": 0.9, "topic": "квантовая физика"}'
+        mock_llm.chat.return_value = (
+            '{"intent": "QUESTION", "confidence": 0.9, "topic": "квантовая физика"}'
+        )
 
         # Неоднозначный запрос
         result = await classifier.classify("Мне интересно узнать что-то новое")
@@ -153,6 +157,7 @@ class TestConfidenceBasedRouting:
 # =================================================================================
 # GRACEFUL DEGRADATION TESTS
 # =================================================================================
+
 
 class TestGracefulDegradation:
     """Проверяем, что классификатор работает при недоступности LLM."""
@@ -183,6 +188,7 @@ class TestGracefulDegradation:
 # =================================================================================
 # SEMANTIC CACHE TESTS
 # =================================================================================
+
 
 class TestSemanticCache:
     """Проверяем кэширование через memory."""
@@ -225,13 +231,16 @@ class TestSemanticCache:
 # TOPIC EXTRACTION TESTS
 # =================================================================================
 
+
 class TestTopicExtraction:
     """Проверяем извлечение темы из запроса."""
 
     @pytest.mark.asyncio
     async def test_topic_extracted_from_question(self, classifier, mock_llm):
         """Тема извлекается из вопроса."""
-        mock_llm.chat.return_value = '{"intent": "QUESTION", "confidence": 0.9, "topic": "квантовая физика"}'
+        mock_llm.chat.return_value = (
+            '{"intent": "QUESTION", "confidence": 0.9, "topic": "квантовая физика"}'
+        )
 
         result = await classifier.classify("Что такое квантовая физика?")
 
@@ -250,6 +259,7 @@ class TestTopicExtraction:
 # INTEGRATION TESTS
 # =================================================================================
 
+
 class TestRequestClassifierIntegration:
     """Интеграционные тесты полного цикла."""
 
@@ -265,7 +275,9 @@ class TestRequestClassifierIntegration:
     @pytest.mark.asyncio
     async def test_full_pipeline_with_llm(self, classifier, mock_llm):
         """Полный цикл: эвристика (low confidence) → LLM → возврат."""
-        mock_llm.chat.return_value = '{"intent": "SEARCH", "confidence": 0.85, "topic": "нейросети"}'
+        mock_llm.chat.return_value = (
+            '{"intent": "SEARCH", "confidence": 0.85, "topic": "нейросети"}'
+        )
 
         result = await classifier.classify("Хочу узнать что-то интересное")
 

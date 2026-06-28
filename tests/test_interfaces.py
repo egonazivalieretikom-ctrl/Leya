@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem
@@ -30,9 +30,7 @@ class TestProtocolCompliance:
 
     def test_memory_system_implements_protocol(self, tmp_path):
         from leya_core.config import MemoryConfig
-        from leya_core.memory import MemorySystem
-        from leya_core.interfaces import IMemorySystem
-    
+
         config = MemoryConfig(brain_dir=str(tmp_path / "brain"))
         memory = MemorySystem(config=config)
         assert isinstance(memory, IMemorySystem)

@@ -7,14 +7,15 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import sys
-from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import LeyaOS as leya_module
+
 LeyaOS = leya_module.LeyaOS
 
 

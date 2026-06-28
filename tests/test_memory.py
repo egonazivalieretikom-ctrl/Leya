@@ -2,13 +2,15 @@
 Тесты для системы памяти LeyaOS.
 Покрывает критические пути: store_perception, retrieve_context, synapses, consolidation.
 """
-import asyncio
+
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import pytest
-from leya_core.memory import MemorySystem, Engram, Synapse, MemoryType
-from leya_core.config import LeyaConfig, MemoryConfig
-from unittest.mock import patch, MagicMock
+
+from leya_core.config import MemoryConfig
+from leya_core.memory import Engram, MemorySystem, MemoryType
 
 
 @pytest.fixture
@@ -22,33 +24,34 @@ def temp_brain_dir():
 def memory_system(temp_brain_dir):
     """Инициализация MemorySystem для тестов с моком эмбеддингов."""
     config = MemoryConfig(brain_dir=str(temp_brain_dir))
-    
+
     # Мокаем ChromaDB и эмбеддинги
-    with patch('leya_core.memory.chromadb.PersistentClient') as mock_client, \
-         patch('leya_core.memory.DefaultEmbeddingFunction') as mock_embed_fn:
-        
+    with (
+        patch("leya_core.memory.chromadb.PersistentClient") as mock_client,
+        patch("leya_core.memory.DefaultEmbeddingFunction") as mock_embed_fn,
+    ):
         # Настраиваем мок коллекции
         mock_collection = MagicMock()
-        
+
         # Мок для query: возвращает данные для формирования синапсов
         def mock_query(query_embeddings, n_results=10):
             # Возвращаем пустые результаты для простоты
             return {"ids": [[]], "distances": [[]]}
-        
+
         mock_collection.query = mock_query
         mock_collection.add = MagicMock()
         mock_collection.delete = MagicMock()
-        
+
         mock_client.return_value.get_or_create_collection.return_value = mock_collection
         mock_embed_fn.return_value = MagicMock(return_value=[[0.1] * 384])
-        
+
         mem = MemorySystem(config=config)
         mem._generate_embedding = MagicMock(return_value=[0.1] * 384)
-        
+
         yield mem
-        
+
         # Явное закрытие ChromaDB client
-        if hasattr(mem, 'chroma_client') and mem.chroma_client:
+        if hasattr(mem, "chroma_client") and mem.chroma_client:
             try:
                 mem.chroma_client = None
                 mem.episodic_collection = None
@@ -95,6 +98,7 @@ class TestSynapticConnections:
     @pytest.mark.asyncio
     async def test_form_synaptic_connections(self, memory_system):
         """При сохранении похожих энграмм формируются синапсы."""
+
         # Настраиваем мок для возврата похожих энграмм
         def mock_query(query_embeddings, n_results=10):
             # Возвращаем данные с похожей энграммой
@@ -102,19 +106,18 @@ class TestSynapticConnections:
                 "ids": [["existing-engram-id"]],
                 "distances": [[0.2]],  # Высокое сходство (1 - 0.2 = 0.8)
             }
-        
+
         memory_system.episodic_collection.query = mock_query
-        
+
         # Сохраняем первую энграмму
         engram1 = await memory_system.store_perception("Нейронные сети и обучение")
-        
+
         # Сохраняем похожую энграмму
         engram2 = await memory_system.store_perception("Глубокое обучение нейронных сетей")
 
         # Проверяем наличие синапсов (могут быть в любом направлении)
         has_synapse = any(
-            engram1.id in key and engram2.id in key
-            for key in memory_system.synapses.keys()
+            engram1.id in key and engram2.id in key for key in memory_system.synapses.keys()
         )
         # В тестовой среде с моками синапсы могут не формироваться,
         # поэтому просто проверяем, что метод не упал
@@ -143,13 +146,9 @@ class TestForgetting:
     async def test_emotional_boost_slows_forgetting(self, memory_system):
         """Эмоциональное усиление замедляет забывание."""
         # Сохраняем с высоким emotional_boost
-        engram_high = await memory_system.store_perception(
-            "Важное событие", emotional_boost=0.9
-        )
+        engram_high = await memory_system.store_perception("Важное событие", emotional_boost=0.9)
         # Сохраняем с низким emotional_boost
-        engram_low = await memory_system.store_perception(
-            "Обычное событие", emotional_boost=0.1
-        )
+        engram_low = await memory_system.store_perception("Обычное событие", emotional_boost=0.1)
 
         # Имитируем passage of time
         engram_high.last_retrieved -= 5000
@@ -218,12 +217,13 @@ class TestPersistence:
 
         # Создаём новую систему памяти с тем же конфигом
         new_memory = MemorySystem(config=memory_system.memory_config)
-        
+
         # Явно загружаем состояние
         await new_memory._load_state()
 
         # Проверяем загрузку
-        assert len(new_memory.engrams) == len(memory_system.engrams), \
+        assert len(new_memory.engrams) == len(memory_system.engrams), (
             f"Ожидается {len(memory_system.engrams)} энграмм, получено {len(new_memory.engrams)}"
+        )
         assert engram1.id in new_memory.engrams
         assert engram2.id in new_memory.engrams

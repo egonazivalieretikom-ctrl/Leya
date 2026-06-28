@@ -12,32 +12,26 @@ FastAPI сервер для веб-интерфейса Леи.
 - Advanced UI эндпоинты (/api/self-model, /api/soul, /api/workspace/proposals, /api/memory/graph)
 - Дополнительные эндпоинты (/api/memory/consolidate, /api/memory/forget, /api/workspace/submit)
 """
+
 from __future__ import annotations
 
-import json
 import logging
-import time
 from pathlib import Path
-from typing import Any, Dict
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from leya_core.exceptions import (
-    LeyaError,
-    LeyaMemoryError,
-    LeyaLLMError,
-    LeyaLLMUnavailableError,
-    LeyaJSONParseError,
-    LeyaEnvironmentError,
     LeyaBroadcastError,
+    LeyaEnvironmentError,
     LeyaHomeostasisError,
-    LeyaWorkspaceError,
+    LeyaLLMError,
+    LeyaMemoryError,
     LeyaSoulError,
-    LeyaToolError,
+    LeyaWorkspaceError,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +42,7 @@ WEB_DIR = Path(__file__).parent
 
 class MessageRequest(BaseModel):
     """Модель запроса сообщения."""
+
     content: str
 
 
@@ -115,7 +110,7 @@ def create_app(web_environment) -> FastAPI:
         try:
             drives = web_environment.leya.drives
             # Используем публичный метод вместо прямого доступа к .drives.items()
-            if hasattr(drives, 'get_drives_state'):
+            if hasattr(drives, "get_drives_state"):
                 return drives.get_drives_state()
 
             # Fallback: если метод ещё не добавлен (не должно происходить)
@@ -124,16 +119,10 @@ def create_app(web_environment) -> FastAPI:
 
         except LeyaHomeostasisError as exc:
             logger.error(f"Ошибка драйвов: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "homeostasis"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "homeostasis"}, status_code=500)
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/drives: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.get("/api/memory/recent")
     async def get_recent_memory(limit: int = 20):
@@ -155,22 +144,13 @@ def create_app(web_environment) -> FastAPI:
             ]
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка памяти: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "memory"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "memory"}, status_code=500)
         except LeyaLLMError as exc:
             logger.error(f"Ошибка LLM при получении памяти: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "llm"},
-                status_code=503
-            )
+            return JSONResponse({"error": str(exc), "type": "llm"}, status_code=503)
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/memory/recent: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.post("/api/message")
     async def send_message(request: MessageRequest):
@@ -183,22 +163,13 @@ def create_app(web_environment) -> FastAPI:
             return {"status": "ok", "message": "Сообщение принято"}
         except LeyaEnvironmentError as exc:
             logger.error(f"Ошибка окружения: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "environment"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "environment"}, status_code=500)
         except LeyaBroadcastError as exc:
             logger.error(f"Ошибка broadcast: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "broadcast"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "broadcast"}, status_code=500)
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/message: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     # =========================================================================
     # Advanced UI эндпоинты
@@ -215,14 +186,12 @@ def create_app(web_environment) -> FastAPI:
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка памяти при получении self_model: {exc}", exc_info=True)
             return JSONResponse(
-                {"self_model": "", "error": str(exc), "type": "memory"},
-                status_code=500
+                {"self_model": "", "error": str(exc), "type": "memory"}, status_code=500
             )
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/self-model: {exc}")
             return JSONResponse(
-                {"self_model": "", "error": "Internal error", "type": "unexpected"},
-                status_code=500
+                {"self_model": "", "error": "Internal error", "type": "unexpected"}, status_code=500
             )
 
     @app.get("/api/soul")
@@ -236,16 +205,10 @@ def create_app(web_environment) -> FastAPI:
             return {}
         except LeyaSoulError as exc:
             logger.error(f"Ошибка души: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "soul"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "soul"}, status_code=500)
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/soul: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.post("/api/soul/update")
     async def update_soul_file(request: dict):
@@ -266,22 +229,13 @@ def create_app(web_environment) -> FastAPI:
             return JSONResponse({"error": "SoulManager не доступен"}, status_code=500)
         except LeyaSoulError as exc:
             logger.error(f"Ошибка обновления души: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "soul"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "soul"}, status_code=500)
         except LeyaBroadcastError as exc:
             logger.error(f"Ошибка broadcast soul update: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "broadcast"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "broadcast"}, status_code=500)
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/soul/update: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.get("/api/workspace/proposals")
     async def get_workspace_proposals():
@@ -293,24 +247,26 @@ def create_app(web_environment) -> FastAPI:
             workspace = web_environment.leya.workspace
 
             # Используем публичный метод вместо прямого доступа к workspace.proposals
-            if hasattr(workspace, 'get_workspace_status'):
+            if hasattr(workspace, "get_workspace_status"):
                 return workspace.get_workspace_status()
 
             # Fallback: если метод ещё не добавлен
-            logger.warning("GlobalWorkspace не имеет метода get_workspace_status() — используется fallback")
+            logger.warning(
+                "GlobalWorkspace не имеет метода get_workspace_status() — используется fallback"
+            )
             return {"proposals": [], "focus": None, "total": 0}
 
         except LeyaWorkspaceError as exc:
             logger.error(f"Ошибка workspace: {exc}", exc_info=True)
             return JSONResponse(
                 {"proposals": [], "focus": None, "error": str(exc), "type": "workspace"},
-                status_code=500
+                status_code=500,
             )
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/workspace/proposals: {exc}")
             return JSONResponse(
                 {"proposals": [], "focus": None, "error": "Internal error", "type": "unexpected"},
-                status_code=500
+                status_code=500,
             )
 
     @app.post("/api/workspace/submit")
@@ -320,6 +276,7 @@ def create_app(web_environment) -> FastAPI:
             return JSONResponse({"error": "Лея не инициализирована"}, status_code=500)
         try:
             from leya_core.global_workspace import Priority
+
             workspace = web_environment.leya.workspace
             proposal = workspace.force_submit(
                 source=request.get("source", "manual"),
@@ -332,22 +289,15 @@ def create_app(web_environment) -> FastAPI:
             return {"status": "ok", "proposal_id": id(proposal)}
         except LeyaWorkspaceError as exc:
             logger.error(f"Ошибка подачи proposal: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "workspace"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "workspace"}, status_code=500)
         except KeyError as exc:
             logger.error(f"Невалидный priority: {exc}", exc_info=True)
             return JSONResponse(
-                {"error": f"Invalid priority: {exc}", "type": "validation"},
-                status_code=400
+                {"error": f"Invalid priority: {exc}", "type": "validation"}, status_code=400
             )
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/workspace/submit: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.get("/api/memory/graph")
     async def get_memory_graph(
@@ -366,7 +316,7 @@ def create_app(web_environment) -> FastAPI:
             memory = web_environment.leya.memory
 
             # Используем публичный метод вместо прямого доступа к engrams/synapses
-            if hasattr(memory, 'get_memory_graph_data'):
+            if hasattr(memory, "get_memory_graph_data"):
                 return await memory.get_memory_graph_data(
                     min_retention=min_retention,
                     max_nodes=max_nodes,
@@ -374,20 +324,21 @@ def create_app(web_environment) -> FastAPI:
                 )
 
             # Fallback: если метод ещё не добавлен
-            logger.warning("MemorySystem не имеет метода get_memory_graph_data() — используется fallback")
+            logger.warning(
+                "MemorySystem не имеет метода get_memory_graph_data() — используется fallback"
+            )
             return {"nodes": [], "edges": [], "total_engrams": 0, "total_synapses": 0}
 
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка памяти при построении графа: {exc}", exc_info=True)
             return JSONResponse(
-                {"nodes": [], "edges": [], "error": str(exc), "type": "memory"},
-                status_code=500
+                {"nodes": [], "edges": [], "error": str(exc), "type": "memory"}, status_code=500
             )
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/memory/graph: {exc}")
             return JSONResponse(
                 {"nodes": [], "edges": [], "error": "Internal error", "type": "unexpected"},
-                status_code=500
+                status_code=500,
             )
 
     @app.post("/api/memory/consolidate")
@@ -400,22 +351,13 @@ def create_app(web_environment) -> FastAPI:
             return {"status": "ok", "stats": stats}
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка консолидации: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "memory"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "memory"}, status_code=500)
         except LeyaLLMError as exc:
             logger.error(f"Ошибка LLM при консолидации: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "llm"},
-                status_code=503
-            )
+            return JSONResponse({"error": str(exc), "type": "llm"}, status_code=503)
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/memory/consolidate: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.post("/api/memory/forget")
     async def forget_weak_memories(request: dict):
@@ -428,27 +370,21 @@ def create_app(web_environment) -> FastAPI:
             return {"status": "ok", "forgotten": forgotten}
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка забывания: {exc}", exc_info=True)
-            return JSONResponse(
-                {"error": str(exc), "type": "memory"},
-                status_code=500
-            )
+            return JSONResponse({"error": str(exc), "type": "memory"}, status_code=500)
         except ValueError as exc:
             logger.error(f"Невалидный threshold: {exc}", exc_info=True)
             return JSONResponse(
-                {"error": f"Invalid threshold: {exc}", "type": "validation"},
-                status_code=400
+                {"error": f"Invalid threshold: {exc}", "type": "validation"}, status_code=400
             )
         except Exception as exc:
             logger.exception(f"Неожиданная ошибка в /api/memory/forget: {exc}")
-            return JSONResponse(
-                {"error": "Internal error", "type": "unexpected"},
-                status_code=500
-            )
+            return JSONResponse({"error": "Internal error", "type": "unexpected"}, status_code=500)
 
     @app.get("/favicon.ico")
     async def favicon():
         """Пустой favicon, чтобы не было 404."""
         from fastapi.responses import Response
+
         return Response(content=b"", media_type="image/x-icon")
 
     return app
@@ -477,5 +413,5 @@ async def run_server(web_environment):
         await server.serve()
     finally:
         # Graceful shutdown: закрываем все WebSocket соединения
-        if hasattr(web_environment, 'shutdown'):
+        if hasattr(web_environment, "shutdown"):
             await web_environment.shutdown()

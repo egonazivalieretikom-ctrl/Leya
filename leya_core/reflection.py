@@ -21,11 +21,11 @@ leya_core/reflection.py
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import re
 from collections.abc import Callable
 from typing import Any
-from .interfaces import IMetaCognition
+
 from .config import ReflectionConfig
 from .exceptions import (
     LeyaDriveNotFoundError,
@@ -37,8 +37,8 @@ from .exceptions import (
     LeyaToolError,
     LeyaWorkspaceError,
 )
+from .interfaces import IMetaCognition
 from .thinker import repair_json
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class MetaCognition(IMetaCognition):
     def is_sleeping(self) -> bool:
         """
         Флаг: находится ли Лея в состоянии "сна" (рефлексии).
-    
+
         Реализует интерфейс IReflection.is_sleeping (read-only для внешних потребителей).
         Внутренне управляется через setter.
         """
@@ -92,11 +92,11 @@ class MetaCognition(IMetaCognition):
         """Setter для внутреннего использования."""
         if not isinstance(value, bool):
             raise TypeError(f"is_sleeping must be bool, got {type(value).__name__}")
-    
+
         # Безопасное получение old_value (если поле ещё не инициализировано)
-        old_value = getattr(self, '_is_sleeping', None)
+        old_value = getattr(self, "_is_sleeping", None)
         self._is_sleeping = value
-    
+
         # Логируем только если значение изменилось и поле уже существовало
         if old_value is not None and old_value != value:
             logger.debug(f"MetaCognition: is_sleeping changed: {old_value} → {value}")
@@ -564,7 +564,6 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                 "Неожиданная ошибка получения семантических фактов",
                 context={"error": str(exc)},
             ) from exc
-
 
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition."""

@@ -2,21 +2,23 @@
 LeyaOS.py — Оркестратор цифрового сознания Леи.
 Версия: 3.0
 """
+
 from __future__ import annotations  # ✅ ИСПРАВЛЕНО: было "from future"
+
 from dotenv import load_dotenv
+
 load_dotenv()
-import os 
-from pathlib import Path 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from datetime import datetime
-from typing import Any, Optional  # ✅ Добавлен Optional
+from pathlib import Path
+from typing import Any  # ✅ Добавлен Optional
 
 # Bootstrap выполняется автоматически при импорте leya_core (см. leya_core/__init__.py)
 # os.environ устанавливается там ДО загрузки chromadb
-
 # Импорт конфигурации
 from leya_core.config import LeyaConfig
 
@@ -24,8 +26,6 @@ from leya_core.config import LeyaConfig
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem
 from leya_core.environment import CLIEnvironment
-from leya_core.interfaces import IDecisionEngine, IEmotionalSupport
-from leya_core.soul_manager import SoulManager 
 
 # Импорт исключений
 from leya_core.exceptions import (
@@ -36,13 +36,9 @@ from leya_core.exceptions import (
     LeyaMemoryError,
     LeyaPersistenceError,
     LeyaReflectionError,
-    LeyaSoulError,
     LeyaToolError,
     LeyaWorkspaceError,
-    SoulTamperError,
 )
-from leya_core.state_persistence import StatePersistence
-
 from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
 from leya_core.homeostasis_engine import HomeostasisEngine
 
@@ -50,18 +46,20 @@ from leya_core.homeostasis_engine import HomeostasisEngine
 from leya_core.interfaces import (
     IConstitutionalLayer,
     ICoreThinker,
+    IDecisionEngine,
     IDriveSystem,
+    IEmotionalSupport,
     IEnvironment,
     IGlobalWorkspace,
     IHomeostasisEngine,
     IMemorySystem,
     IMetaCognition,
 )
-
 from leya_core.llm_client import OllamaClient  # ✅ Этот импорт теперь выполнится
 from leya_core.memory import MemorySystem
 from leya_core.reflection import MetaCognition
-from leya_core.request_classifier import RequestClassifier, IntentClassification, UserIntent
+from leya_core.request_classifier import IntentClassification, RequestClassifier, UserIntent
+from leya_core.soul_manager import SoulManager
 from leya_core.state_persistence import StatePersistence
 from leya_core.system_metrics import SystemMetrics
 from leya_core.thinker import CoreThinker
@@ -73,26 +71,36 @@ if not isinstance(self.memory, IMemorySystem):
 if not isinstance(self.drives, IDriveSystem):
     raise TypeError(f"drives должен реализовывать IDriveSystem, получено {type(self.drives)}")
 if not isinstance(self.workspace, IGlobalWorkspace):
-    raise TypeError(f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}")
+    raise TypeError(
+        f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}"
+    )
 if not isinstance(self.constitutional, IConstitutionalLayer):
-    raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer, получено {type(self.constitutional)}")
+    raise TypeError(
+        f"constitutional должен реализовывать IConstitutionalLayer, получено {type(self.constitutional)}"
+    )
 if not isinstance(self.thinker, ICoreThinker):
     raise TypeError(f"thinker должен реализовывать ICoreThinker, получено {type(self.thinker)}")
 if not isinstance(self.homeostasis, IHomeostasisEngine):
-    raise TypeError(f"homeostasis должен реализовывать IHomeostasisEngine, получено {type(self.homeostasis)}")
+    raise TypeError(
+        f"homeostasis должен реализовывать IHomeostasisEngine, получено {type(self.homeostasis)}"
+    )
 if not isinstance(self.reflection, IMetaCognition):
-    raise TypeError(f"reflection должен реализовывать IMetaCognition, получено {type(self.reflection)}")
+    raise TypeError(
+        f"reflection должен реализовывать IMetaCognition, получено {type(self.reflection)}"
+    )
 if not isinstance(self.env, IEnvironment):
     raise TypeError(f"env должен реализовывать IEnvironment, получено {type(self.env)}")
 
 # Experimental компоненты (lazy import для изоляции)
-self.decision_engine: Optional[IDecisionEngine] = None
-self.emotional_support: Optional[IEmotionalSupport] = None
+self.decision_engine: IDecisionEngine | None = None
+self.emotional_support: IEmotionalSupport | None = None
 
 if self.config.experimental.enable_decision_engine:
     try:
-        from leya_core.experimental.decision_engine import DecisionEngine
         from leya_core.experimental.interfaces import IDecisionEngine
+
+        from leya_core.experimental.decision_engine import DecisionEngine
+
         self.decision_engine = DecisionEngine(self.config)
         if not isinstance(self.decision_engine, IDecisionEngine):
             raise TypeError("DecisionEngine не реализует IDecisionEngine")
@@ -103,8 +111,10 @@ if self.config.experimental.enable_decision_engine:
 
 if self.config.experimental.enable_emotional_support:
     try:
-        from leya_core.experimental.emotional_support import EmotionalSupport
         from leya_core.experimental.interfaces import IEmotionalSupport
+
+        from leya_core.experimental.emotional_support import EmotionalSupport
+
         self.emotional_support = EmotionalSupport(self.config, self.memory)
         if not isinstance(self.emotional_support, IEmotionalSupport):
             raise TypeError("EmotionalSupport не реализует IEmotionalSupport")
@@ -136,44 +146,40 @@ class LeyaOS:
         self._last_interaction_time = datetime.now().timestamp()
         self._shutdown_event = asyncio.Event()
         self.config = config or LeyaConfig.from_env()
-    
+
         # Конституционный слой
-        self.constitutional = ConstitutionalLayer(
-            config=self.config.constitutional
-        )
+        self.constitutional = ConstitutionalLayer(config=self.config.constitutional)
         self.state_path = Path(config.memory.brain_dir) / "memory_state.json"
-    
+
         # Глобальное рабочее пространство
         self.workspace = GlobalWorkspace(config=self.config.workspace)
-    
+
         logger.info("Инициализация когнитивной архитектуры...")
-    
+
         # Ядро когнитивной системы
         self.drives = DriveSystem(config=self.config.drives)
         self.memory = MemorySystem(config=self.config.memory)
-    
+
         # Персистентность
-        self.persistence = StatePersistence(
-            brain_dir=config.memory.brain_dir
-        )
-    
+        self.persistence = StatePersistence(brain_dir=config.memory.brain_dir)
+
         # Soul Manager
         self.soul_manager = SoulManager(
             soul_dir=self.config.soul.soul_dir,
             hmac_key=os.environ.get("SOUL_HMAC_KEY"),
         )
         logger.info("SoulManager инициализирован")
-    
+
         # Проверка Protocol-интерфейсов
         if not isinstance(self.memory, IMemorySystem):
-            raise TypeError(f"memory должен реализовывать IMemorySystem")
+            raise TypeError("memory должен реализовывать IMemorySystem")
         if not isinstance(self.drives, IDriveSystem):
-            raise TypeError(f"drives должен реализовывать IDriveSystem")
+            raise TypeError("drives должен реализовывать IDriveSystem")
         if not isinstance(self.workspace, IGlobalWorkspace):
-            raise TypeError(f"workspace должен реализовывать IGlobalWorkspace")
+            raise TypeError("workspace должен реализовывать IGlobalWorkspace")
         if not isinstance(self.constitutional, IConstitutionalLayer):
-            raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer")
-    
+            raise TypeError("constitutional должен реализовывать IConstitutionalLayer")
+
         # LLM-клиент
         self.llm_client = OllamaClient(
             base_url=self.config.ollama.base_url,
@@ -186,13 +192,13 @@ class LeyaOS:
             repeat_penalty=self.config.ollama.repeat_penalty,
         )
         self.llm_client.set_fallback(self._llm_fallback)
-    
+
         # Thinker
         self.thinker = CoreThinker(
             config=self.config.thinker,
             llm_client=self._llm_call,
         )
-    
+
         # Request Classifier
         self.request_classifier = RequestClassifier(
             llm_client=self.llm_client,
@@ -200,17 +206,17 @@ class LeyaOS:
             use_llm_threshold=0.7,
             cache_similarity_threshold=0.85,
         )
-    
+
         # Гомеостаз
         self.homeostasis = HomeostasisEngine(config=self.config.homeostasis)
-    
+
         # Мета-когниция
         self.reflection = MetaCognition(
             leya_os=self,
             llm_client=self._llm_call,
             config=self.config.reflection,
         )
-    
+
         # Окружение
         if use_web and self.config.web.enabled:
             self.env = WebEnvironment(leya_os=self)
@@ -218,13 +224,13 @@ class LeyaOS:
         else:
             self.env = CLIEnvironment(leya_os=self)
             logger.info("Используется CLI-интерфейс")
-    
+
         # Инструменты
         try:
             self.tools_description = self.env.tool_registry.get_all_descriptions()
         except Exception:
             self.tools_description = ""
-    
+
         # Tool Generator
         self.tool_generator = None
         if hasattr(self.env, "tool_registry") and self.env.tool_registry:
@@ -235,34 +241,33 @@ class LeyaOS:
                 )
             except Exception:
                 self.tool_generator = None
-    
+
         # Состояние
         self.self_model = ""
         self.running = False
         self.system_metrics = SystemMetrics()
         self._perceive_lock = asyncio.Lock()
         self._background_tasks = []
-    
+
         # Experimental (по умолчанию выключено)
         self.decision_engine = None
         self.emotional_support = None
-    
+
         if self.config.experimental.enable_decision_engine:
             try:
                 self.decision_engine = DecisionEngine(self.config)
                 logger.info("DecisionEngine включён")
             except Exception:
                 self.decision_engine = None
-    
+
         if self.config.experimental.enable_emotional_support:
             try:
                 self.emotional_support = EmotionalSupport(self.config, self.memory)
                 logger.info("EmotionalSupport включён")
             except Exception:
                 self.emotional_support = None
-    
-        logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
+        logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
     # =========================================================================
     # Публичные методы
@@ -283,7 +288,7 @@ class LeyaOS:
         tool_context = stimulus.get("tool_context", "")
 
         logger.info(
-            f"Восприятие стимула [{stimulus_type}] от {source}: " f"{stimulus_content[:100]}..."
+            f"Восприятие стимула [{stimulus_type}] от {source}: {stimulus_content[:100]}..."
         )
 
         # Обработка пользовательских сообщений
@@ -313,7 +318,7 @@ class LeyaOS:
         """
         logger.info("Загрузка Модели Себя...")
         soul_context = ""
-        if hasattr(self, 'soul_crypto') and self.soul_crypto is not None:
+        if hasattr(self, "soul_crypto") and self.soul_crypto is not None:
             try:
                 soul_context = await asyncio.to_thread(self.soul_crypto.load_all)
                 logger.info("Soul загружен через soul_crypto (с проверкой целостности)")
@@ -321,10 +326,10 @@ class LeyaOS:
                 # Если soul_crypto упал — логируем, но не крашимся
                 logger.error(f"Ошибка загрузки soul через soul_crypto: {exc}")
                 # Fallback на обычный soul_manager
-                if hasattr(self, 'soul_manager'):
+                if hasattr(self, "soul_manager"):
                     soul_context = await self.soul_manager.load_all()
                     logger.warning("Использован fallback на soul_manager (без крипто-проверки)")
-        elif hasattr(self, 'soul_manager'):
+        elif hasattr(self, "soul_manager"):
             # soul_crypto не инициализирован — используем обычный soul_manager
             soul_context = await asyncio.to_thread(self.soul_manager.load_all)
             logger.info("Soul загружен через soul_manager (без крипто-проверки)")
@@ -356,10 +361,10 @@ class LeyaOS:
         ):
             try:
                 # Безопасная загрузка soul
-                if hasattr(self, 'soul_crypto') and self.soul_crypto is not None:
+                if hasattr(self, "soul_crypto") and self.soul_crypto is not None:
                     soul_context = await asyncio.to_thread(self.soul_crypto.load_all)
                     logger.info("Soul загружен через soul_crypto (с проверкой целостности)")
-                elif hasattr(self, 'soul_manager') and self.soul_manager is not None:
+                elif hasattr(self, "soul_manager") and self.soul_manager is not None:
                     soul_context = await asyncio.to_thread(self.soul_manager.load_all)
                     logger.info("Soul загружен через soul_manager")
                 else:
@@ -468,7 +473,6 @@ class LeyaOS:
 
     async def _save_all_state(self) -> list[tuple[str, Exception]]:
         """Сохранение состояния всех компонентов при shutdown."""
-        from leya_core.exceptions import LeyaAtomicWriteError, LeyaMemoryError, LeyaError
 
         errors: list[tuple[str, Exception]] = []
 
@@ -480,14 +484,14 @@ class LeyaOS:
             errors.append(f"memory: {e}")
 
         # 2. Драйвы + Гомеостаз — через StatePersistence
-        persistence = getattr(self, 'persistence', getattr(self, 'state_persistence', None))
+        persistence = getattr(self, "persistence", getattr(self, "state_persistence", None))
         if persistence is not None:
             try:
                 await persistence.save_state()
             except Exception as e:
                 logger.error(f"Ошибка сохранения состояния persistence при shutdown: {e}")
                 errors.append(f"persistence: {e}")
-                
+
         return errors
 
     async def shutdown(self) -> None:
@@ -502,15 +506,12 @@ class LeyaOS:
         self._shutdown_event.set()
 
         logger.info("🛑 Начало graceful shutdown...")
-    
+
         # Явно устанавливаем состояние "sleeping" ПЕРЕД сохранением
         self.state = "sleeping"
 
         # 1. Отменяем все фоновые задачи
-        tasks_to_cancel = [
-            t for t in self._background_tasks
-            if not t.done()
-        ]
+        tasks_to_cancel = [t for t in self._background_tasks if not t.done()]
         for task in tasks_to_cancel:
             task.cancel()
 
@@ -526,7 +527,7 @@ class LeyaOS:
                 logger.error(
                     f"Ошибка закрытия LLM-сессии: {e}",
                     exc_info=True,
-                    extra={"component": "llm_client"}
+                    extra={"component": "llm_client"},
                 )
 
         # 3. Сохраняем состояние всех компонентов
@@ -534,9 +535,7 @@ class LeyaOS:
 
         # 4. Финальный лог
         if save_errors:
-            logger.warning(
-                f"⚠️ Shutdown завершён с {len(save_errors)} ошибкой(ами) сохранения"
-            )
+            logger.warning(f"⚠️ Shutdown завершён с {len(save_errors)} ошибкой(ами) сохранения")
         else:
             logger.info("✅ Graceful shutdown завершён успешно")
 
@@ -596,15 +595,15 @@ class LeyaOS:
         """Обработка пользовательского запроса с трёхуровневой классификацией.
 
         Этап 2.1: заменяет жёсткие ключевые слова на robust классификатор.
-        
+
         Стратегия:
         1. Классифицируем запрос через RequestClassifier
         2. В зависимости от intent — вызываем соответствующий обработчик
         3. Сохраняем результат в cache для будущих похожих запросов
-        
+
         Args:
             user_input: Текст запроса пользователя
-            
+
         Returns:
             dict с результатом обработки (response, intent, metadata)
         """
@@ -676,6 +675,7 @@ class LeyaOS:
             "Приветствую! Чем могу помочь?",
         ]
         import random
+
         return random.choice(greetings)
 
     async def _handle_farewell(self, classification: IntentClassification) -> str:
@@ -686,6 +686,7 @@ class LeyaOS:
             "Всего доброго! Буду ждать нашей следующей встречи.",
         ]
         import random
+
         return random.choice(farewells)
 
     async def _handle_question(self, classification: IntentClassification) -> str:
@@ -710,7 +711,9 @@ class LeyaOS:
             drives_state = self.drives.get_drives_state()
             # Формируем ответ на основе состояния
             dominant_drive = max(drives_state.items(), key=lambda x: x[1].get("tension", 0))
-            return f"Сейчас я чувствую повышенную потребность в {dominant_drive[0].lower()}. А ты как?"
+            return (
+                f"Сейчас я чувствую повышенную потребность в {dominant_drive[0].lower()}. А ты как?"
+            )
         except Exception as e:
             logger.warning(f"Не удалось получить состояние: {e}")
             return "Я функционирую нормально. Спасибо, что спрашиваешь!"
@@ -738,10 +741,16 @@ class LeyaOS:
             }
 
             # Получаем контекст
-            soul_context = self.soul_manager.get_full_context() if hasattr(self, 'soul_manager') else ""
-            drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
-            memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
-            tools = self.tool_registry.get_tools_schema() if hasattr(self, 'tool_registry') else []
+            soul_context = (
+                self.soul_manager.get_full_context() if hasattr(self, "soul_manager") else ""
+            )
+            drive_context = (
+                self.drives.get_internal_state_prompt() if hasattr(self, "drives") else ""
+            )
+            memory_context = (
+                await self.memory.retrieve_context(user_input) if hasattr(self, "memory") else []
+            )
+            tools = self.tool_registry.get_tools_schema() if hasattr(self, "tool_registry") else []
 
             # Генерируем план через thinker
             plan = await self.thinker.generate_plan(
@@ -758,39 +767,37 @@ class LeyaOS:
             logger.error(f"Ошибка обработки через thinker: {e}", exc_info=True)
             return "Извини, произошла ошибка при обработке запроса. Попробуй ещё раз."
 
-
     async def _execute_fast_decision(self, decision: Decision) -> None:
         """Выполнение быстрого решения от DecisionEngine (без LLM).
-        
+
         Этап 2.2 (Группа A): выполняется, когда DecisionEngine уверен в решении
         (confidence >= 0.8). Разгружает LLM для очевидных случаев.
-        
+
         Args:
             decision: Решение с tool_name и parameters
         """
         if not decision.use_tool or not decision.tool_name:
             logger.warning("Fast decision без tool_name, пропускаю")
             return
-        
+
         try:
             # Выполняем инструмент
             result = await self.env.tool_registry.execute(
-                tool_name=decision.tool_name,
-                parameters=decision.tool_parameters or {}
+                tool_name=decision.tool_name, parameters=decision.tool_parameters or {}
             )
-            
+
             # Формируем ответ
             response = f"Я нашла информацию: {result}"
-            
+
             # Конституциональная проверка
             verdict = self.constitutional.verify_response(response)
             if not verdict.allowed:
                 logger.warning(f"Fast decision ответ не прошёл проверку: {verdict.reason}")
                 response = "Извини, я не могу выполнить это действие."
-            
+
             # Отправляем ответ
             await self.env.send_message(response)
-            
+
             # Сохраняем в память
             await self.memory.store_perception(
                 content=f"[Fast decision: {decision.tool_name}] {result}",
@@ -800,15 +807,14 @@ class LeyaOS:
                     "tool_name": decision.tool_name,
                     "reasoning": decision.reasoning,
                     "confidence": decision.confidence,
-                }
+                },
             )
-            
+
             logger.info(f"✅ Fast decision выполнен: {decision.tool_name}")
-        
+
         except Exception as e:
             logger.error(f"Ошибка выполнения fast decision: {e}", exc_info=True)
             # Fallback — не роняем систему, просто логируем
-
 
     async def _cognitive_loop(self, stimulus: dict[str, Any], tool_context: str) -> None:
         """
@@ -887,18 +893,16 @@ class LeyaOS:
                     "Произошла непредвиденная ошибка в моих когнитивных процессах."
                 )
 
-
             # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
             if self.decision_engine:
                 try:
                     stimulus_content = stimulus.get("content", "")
                     drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-                    
+
                     fast_decision = await self.decision_engine.make_decision(
-                        stimulus_content,
-                        drive_state
+                        stimulus_content, drive_state
                     )
-                    
+
                     if fast_decision and fast_decision.use_tool and fast_decision.confidence >= 0.8:
                         logger.info(
                             f"🚀 Fast decision: {fast_decision.tool_name} "
@@ -910,20 +914,22 @@ class LeyaOS:
                 except Exception as e:
                     logger.error(f"Ошибка DecisionEngine: {e}", exc_info=True)
                     # Graceful degradation — продолжаем с LLM
-            
+
             # === УРОВЕНЬ 1.5: Emotional Support (анализ эмоций) — этап 2.2 ===
             emotion_state = None
             if self.emotional_support:
                 try:
                     stimulus_content = stimulus.get("content", "")
-                    emotion_state = await self.emotional_support.analyze_user_state(stimulus_content)
-                    
+                    emotion_state = await self.emotional_support.analyze_user_state(
+                        stimulus_content
+                    )
+
                     # Влияние на drives
                     if emotion_state and emotion_state.intensity > 0.5:
                         await self.emotional_support.update_drives_from_emotion(
                             emotion_state, self.drives
                         )
-                    
+
                     # Сохранение в memory (async, не блокируем)
                     if emotion_state and emotion_state.intensity > 0.6:
                         asyncio.create_task(
@@ -932,7 +938,6 @@ class LeyaOS:
                 except Exception as e:
                     logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
                     # Graceful degradation — продолжаем без эмоционального контекста
-
 
     async def _process_action_intent(
         self, action_intent: str, cognitive_output: dict, stimulus: str
@@ -1086,7 +1091,7 @@ class LeyaOS:
     async def _workspace_loop(self) -> None:
         """
         Фоновый цикл Global Workspace.
-        
+
         МЕХАНИЗМ ТОРМОЖЕНИЯ (Inhibition):
         Если идёт активный диалог с пользователем (менее 30 секунд с последнего взаимодействия),
         внутренние proposals от homeostasis получают понижение приоритета,
@@ -1097,11 +1102,11 @@ class LeyaOS:
             try:
                 await asyncio.sleep(5)
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-                
+
                 # МЕХАНИЗМ ТОРМОЖЕНИЯ: проверка времени последнего взаимодействия
                 time_since_interaction = datetime.now().timestamp() - self._last_interaction_time
                 active_dialogue = time_since_interaction < 30.0  # 30 секунд
-                
+
                 # Передаём флаг активного диалога в select_winner
                 winner = self.workspace.select_winner(drive_state, inhibit_internal=active_dialogue)
 
@@ -1113,7 +1118,7 @@ class LeyaOS:
                             f"тормозится из-за активного диалога "
                             f"(содержание: {winner.content[:50]}...)"
                         )
-                    
+
                     await self.perceive(
                         {
                             "type": "workspace_focus",

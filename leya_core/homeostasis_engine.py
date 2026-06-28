@@ -91,17 +91,17 @@ class HomeostasisEngine:
     def generate_goal_from_gap(self, gap: float, drive_type: str) -> Any:
         """
         Генерация цели из разрыва (gap) в конкретном драйве.
-    
+
         Args:
             gap: Величина разрыва (0.0-1.0)
             drive_type: Тип драйва (CURIOSITY, CONNECTION и т.д.)
-    
+
         Returns:
             Словарь с информацией о цели или None
         """
         if gap < 0.3:
             return None
-    
+
         goal = {
             "id": f"goal_{drive_type}_{int(time.time())}",
             "drive_type": drive_type,
@@ -111,7 +111,7 @@ class HomeostasisEngine:
             "action_type": "balance_drive",
             "timestamp": time.time(),
         }
-    
+
         self.current_goal = goal
         self.last_action_time = time.time()
         return goal
@@ -125,7 +125,7 @@ class HomeostasisEngine:
     ) -> dict[str, Any] | None:
         """
         Генерация цели на основе дисбаланса драйвов.
-        
+
         ЭМОЦИОНАЛЬНАЯ СВЯЗНОСТЬ:
         Учитывает средний emotional_boost недавних эпизодов для корректировки urgency.
         """
@@ -162,13 +162,19 @@ class HomeostasisEngine:
                 try:
                     drive_type = DriveType(drive_type_raw)
                 except ValueError:
-                    logger.warning(f"HomeostasisEngine: Неизвестный тип драйва в drive_state: {drive_type_raw}")
+                    logger.warning(
+                        f"HomeostasisEngine: Неизвестный тип драйва в drive_state: {drive_type_raw}"
+                    )
                     continue
             else:
                 drive_type = drive_type_raw
 
             threshold = self.thresholds.get(drive_type, 0.6)
-            predicted_value = predicted_state.get(drive_type_raw, current_value) if predicted_state else current_value
+            predicted_value = (
+                predicted_state.get(drive_type_raw, current_value)
+                if predicted_state
+                else current_value
+            )
 
             # Дисбаланс = отклонение от порога + предсказание (с меньшим весом)
             current_disbalance = max(0.0, current_value - threshold)
@@ -189,7 +195,7 @@ class HomeostasisEngine:
 
         # RPE feedback: корректируем urgency на основе предыдущего опыта
         urgency_adjustment = self._calculate_rpe_adjustment(action_values)
-        
+
         # ЭМОЦИОНАЛЬНАЯ СВЯЗНОСТЬ: корректировка urgency на основе emotional_boost
         emotional_adjustment = avg_emotional_boost * 0.2  # Макс +0.2 при boost=1.0
 
@@ -212,7 +218,7 @@ class HomeostasisEngine:
                         "goal": goal,
                         "timestamp": time.time(),
                         "drive_state": {
-                            (k.value if hasattr(k, 'value') else k): v 
+                            (k.value if hasattr(k, "value") else k): v
                             for k, v in drive_state.items()
                         },
                         "avg_emotional_boost": avg_emotional_boost,
@@ -221,7 +227,7 @@ class HomeostasisEngine:
 
                 # Ограничение истории
                 if len(self.action_history) > self.max_action_history:
-                    self.action_history = self.action_history[-self.max_action_history:]
+                    self.action_history = self.action_history[-self.max_action_history :]
 
                 logger.info(
                     f"HomeostasisEngine: Сгенерирована цель для {target_drive.value}: "
@@ -329,13 +335,13 @@ class HomeostasisEngine:
     def _calculate_rpe_adjustment(self, action_values: dict[str, float] | None) -> float:
         """
         Вычисление корректировки urgency на основе RPE (Reward Prediction Error).
-        
+
         Если последние действия были успешными (высокий RPE), увеличиваем urgency.
         Если неудачными (низкий RPE), уменьшаем.
-        
+
         Args:
             action_values: Ценности действий из DriveSystem
-            
+
         Returns:
             Корректировка urgency (-0.2 до +0.2)
         """
@@ -378,7 +384,7 @@ class HomeostasisEngine:
         """
         # Извлечение тем из недавних эпизодов
         recent_topics = set()
-        
+
         # Обработка None
         if recent_episodes:
             for episode in recent_episodes[-10:]:  # Последние 10 эпизодов
@@ -412,24 +418,24 @@ class HomeostasisEngine:
     async def extract_key_facts(self, text: str) -> list[str]:
         """
         Извлечение ключевых фактов из текста.
-    
+
         Args:
             text: Текст для анализа
-    
+
         Returns:
             Список ключевых фактов
         """
         if not text or len(text.strip()) < 10:
             return []
-    
+
         # Простая эвристика: предложения с цифрами, датами, именами
         facts = []
-        sentences = text.split('.')
+        sentences = text.split(".")
         for sentence in sentences:
             sentence = sentence.strip()
             if len(sentence) > 20 and any(c.isdigit() for c in sentence):
                 facts.append(sentence)
-    
+
         return facts[:5]  # Не более 5 фактов
 
     async def extract_new_terms_with_llm(
@@ -476,7 +482,7 @@ class HomeostasisEngine:
 
 ПРАВИЛА:
 - Ищи термины, которые могут быть незнакомы широкой аудитории
-- НЕ включай: {', '.join(list(known_topics)[:10])}
+- НЕ включай: {", ".join(list(known_topics)[:10])}
 - Каждый термин — 1-3 слова на русском языке
 - Термины должны быть конкретными (не "наука", а "квантовая запутанность")
 

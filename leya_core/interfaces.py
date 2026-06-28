@@ -13,12 +13,10 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-from typing import Protocol, runtime_checkable, Any
-from dataclasses import dataclass, field
 
 if TYPE_CHECKING:
     # Импорт только для проверки типов, избегает циклического импорта в runtime
-    from .memory import Engram, Synapse  # Адаптируйте импорт под ваш пакет
+    from .memory import Engram  # Адаптируйте импорт под ваш пакет
 
 
 logger = logging.getLogger(__name__)
@@ -144,61 +142,65 @@ class IDriveSystem(Protocol):
 @runtime_checkable
 class IMemorySystem(Protocol):
     """Протокол системы памяти Леи."""
-    
+
     async def store_perception(
         self,
         content: str,
         emotional_boost: float = 0.0,
         metadata: dict[str, Any] | None = None,
-    ) -> "Engram":  # ✅ ИСПРАВЛЕНО: было -> None
+    ) -> Engram:  # ✅ ИСПРАВЛЕНО: было -> None
         """Сохранение восприятия в память."""
         ...
-    
+
     async def store_fact(
         self,
         content: str,
         metadata: dict[str, Any] | None = None,
-    ) -> "Engram":  # ✅ ИСПРАВЛЕНО: было -> None
+    ) -> Engram:  # ✅ ИСПРАВЛЕНО: было -> None
         """Сохранение факта в семантическую память."""
         ...
-    
+
     async def retrieve_context(
         self,
         query: str,
         max_results: int = 5,
         min_retention: float = 0.1,
-    ) -> list["Engram"]:
+    ) -> list[Engram]:
         """Получение релевантного контекста из памяти (семантический поиск + Эббингауз + emotional_boost)."""
         ...
-    
+
     async def consolidate_memories(self) -> dict[str, Any]:
         """Консолидация памяти (фоновая задача)."""
         ...
-    
+
     async def update_self_model(self, reflection: str) -> None:
         """Обновление модели себя на основе рефлексии."""
         ...
-    
+
     async def get_self_model_context(self) -> str:
         """Получение контекста модели себя для промптов."""
         ...
-    
-    async def get_recent_episodes(self, limit: int = 10) -> list["Engram"]:  # ✅ ИСПРАВЛЕНО: было -> list[Any]
+
+    async def get_recent_episodes(
+        self, limit: int = 10
+    ) -> list[Engram]:  # ✅ ИСПРАВЛЕНО: было -> list[Any]
         """Получение недавних эпизодов."""
         ...
-    
+
     async def forget_weak_memories(self) -> int:
         """Забывание слабых воспоминаний."""
         ...
-    
-    async def get_memory_graph_data(self) -> dict[str, Any]:  # ✅ КРИТИЧНО ИСПРАВЛЕНО: было def (синхронный), стало async def
+
+    async def get_memory_graph_data(
+        self,
+    ) -> dict[str, Any]:  # ✅ КРИТИЧНО ИСПРАВЛЕНО: было def (синхронный), стало async def
         """Получение данных графа памяти для визуализации."""
         ...
-    
+
     async def _save_state(self) -> None:
         """Сохранение состояния памяти (приватный метод)."""
         ...
-    
+
     async def _load_state(self) -> None:
         """Загрузка состояния памяти (приватный метод)."""
         ...
@@ -330,49 +332,51 @@ class IHomeostasisEngine(Protocol):
 
     def add_dynamic_keywords(self, keywords: list[str]) -> None: ...
 
+
 # =============================================================================
 # Homeostasis Engine Interface
 # =============================================================================
+
 
 class HomeostasisEngine:
     """
     Реализация IHomeostasisEngine.
     Генерирует автономные цели на основе дисбаланса драйвов.
     """
-    
+
     def __init__(self, config: HomeostasisConfig | None = None) -> None:
         self.config = config or HomeostasisConfig()
-        
+
         # Реализация атрибутов Protocol
         self._current_goal: WorkspaceProposal | None = None
         self._last_action_time: float = 0.0
         self._rest_period: float = self.config.rest_period
-        
+
         # Внутреннее состояние
         self._researched_topics: set[str] = set()
         self._dynamic_keywords: list[str] = []
-    
+
     # Реализация атрибутов Protocol (обычные поля, НЕ @property)
     @property
     def current_goal(self) -> WorkspaceProposal | None:
         return self._current_goal
-    
+
     @current_goal.setter
     def current_goal(self, value: WorkspaceProposal | None) -> None:
         self._current_goal = value
-    
+
     @property
     def last_action_time(self) -> float:
         return self._last_action_time
-    
+
     @last_action_time.setter
     def last_action_time(self, value: float) -> None:
         self._last_action_time = value
-    
+
     @property
     def rest_period(self) -> float:
         return self._rest_period
-    
+
     # Реализация методов Protocol
     async def generate_goal(
         self,
@@ -384,29 +388,30 @@ class HomeostasisEngine:
         """Генерация цели на основе дисбаланса драйвов."""
         # ... существующая реализация ...
         pass
-    
+
     def generate_goal_from_gap(self, gap: float, drive_type: str) -> WorkspaceProposal | None:
         """Генерация цели из разрыва (gap)."""
         # ... существующая реализация ...
         pass
-    
+
     async def extract_key_facts(self, text: str) -> list[str]:
         """Извлечение ключевых фактов из текста."""
         # ... существующая реализация ...
         pass
-    
+
     async def extract_new_terms(self, text: str) -> list[str]:
         """Извлечение новых терминов из текста."""
         # ... существующая реализация ...
         pass
-    
+
     def mark_as_researched(self, topic: str) -> None:
         """Пометить тему как исследованную."""
         self._researched_topics.add(topic)
-    
+
     def add_dynamic_keywords(self, keywords: list[str]) -> None:
         """Добавить динамические ключевые слова."""
         self._dynamic_keywords.extend(keywords)
+
 
 # =============================================================================
 # Thinker Interfaces
@@ -654,35 +659,37 @@ class IConstitutionalLayer(Protocol):
         """Удаление правила по названию."""
         ...
 
+
 # =================================================================================
 # DECISION ENGINE & EMOTIONAL SUPPORT (Experimental, v3.1)
 # =================================================================================
 
+
 @runtime_checkable
 class IDecisionEngine(Protocol):
     """Детерминированный движок быстрых решений (без LLM).
-    
+
     Этап 2.2 (ADR-001): Префронтальная кора Леи. Принимает решения на основе
     состояния драйвов и типа стимула. Используется как уровень 0 в cognitive loop
     для мгновенных решений (разгрузка LLM).
     """
-    
+
     async def make_decision(
         self,
         stimulus: str,
         drive_state: dict,
-    ) -> Optional["Decision"]:
+    ) -> Optional[Decision]:
         """Принятие решения на основе стимула и состояния драйвов.
-        
+
         Args:
             stimulus: Текст стимула от пользователя
             drive_state: Словарь {DriveType: tension_level}
-            
+
         Returns:
             Decision с tool_name/parameters или None, если нужен LLM
         """
         ...
-    
+
     def get_decision_confidence(self) -> float:
         """Возвращает confidence последнего решения (0.0-1.0)."""
         ...
@@ -691,60 +698,60 @@ class IDecisionEngine(Protocol):
 @runtime_checkable
 class IEmotionalSupport(Protocol):
     """Анализ эмоций пользователя и генерация эмпатических ответов.
-    
+
     Этап 2.2 (ADR-001): Усиливает социальную составляющую Леи.
     Влияет на CONNECTION drive через RPE. Сохраняет эмоциональный контекст
     в Memory для долгосрочного анализа.
     """
-    
+
     async def analyze_user_state(
         self,
         text: str,
         recent_messages: Optional[list[str]] = None,
-    ) -> "EmotionState":
+    ) -> EmotionState:
         """Анализ эмоционального состояния пользователя.
-        
+
         Args:
             text: Текст сообщения пользователя
             recent_messages: Контекст последних сообщений (опционально)
-            
+
         Returns:
             EmotionState с mood, intensity, needs_support
         """
         ...
-    
+
     async def generate_support_response(
         self,
-        emotion_state: "EmotionState",
+        emotion_state: EmotionState,
         context: str = "",
     ) -> str:
         """Генерация эмпатического ответа.
-        
+
         Args:
             emotion_state: Результат analyze_user_state
             context: Дополнительный контекст (опционально)
-            
+
         Returns:
             Поддерживающий ответ на русском языке
         """
         ...
-    
+
     async def update_drives_from_emotion(
         self,
-        emotion_state: "EmotionState",
-        drives: "IDriveSystem",
+        emotion_state: EmotionState,
+        drives: IDriveSystem,
     ) -> None:
         """Влияние эмоции на CONNECTION drive через RPE.
-        
+
         Позитивные эмоции → удовлетворение CONNECTION.
         Негативные эмоции → усиление CONNECTION (потребность в поддержке).
-        
+
         Args:
             emotion_state: Результат analyze_user_state
             drives: Система драйвов для обновления
         """
         ...
-    
+
     async def get_emotional_context_for_prompt(self) -> str:
         """Возвращает строку с эмоциональным контекстом для промпта LLM."""
         ...

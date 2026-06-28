@@ -1,8 +1,11 @@
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from leya_core.config import LeyaConfig
 from leya_core.exceptions import LeyaConfigError
+
 
 def test_from_env_all_fields():
     """Проверяет, что ВСЕ поля всех под-конфигов читаются из .env."""
@@ -84,37 +87,47 @@ def test_from_env_all_fields():
         "LOG_FILE": "custom.log",
         "LOG_FORMAT": "custom_format",
     }
-    
+
     with patch.dict(os.environ, env_vars, clear=True):
         config = LeyaConfig.from_env()
-            
+
     # Ollama
     assert config.ollama.base_url == "http://custom:11434"
     assert config.ollama.timeout == 300
     assert config.ollama.temperature == 0.5
-    
+
     # Memory (проверяем новые и ранее скрытые поля)
     assert config.memory.forgetting_threshold == 0.2
     assert config.memory.synapse_learning_rate == 0.1
     assert config.memory.hmac_key == "secret_key_123"
     assert config.memory.state_version == 2
-    
+
     # Homeostasis (проверяем thresholds)
     assert config.homeostasis.connection_threshold == 0.7
     assert config.homeostasis.autonomy_threshold == 0.8
     assert config.homeostasis.integrity_threshold == 0.6
-    
+
     # Thinker (проверяем bool)
     assert config.thinker.fallback_enabled is False
-    
+
     # Web
     assert config.web.enabled is False
     assert config.web.port == 9000
 
-@pytest.mark.parametrize("val,expected", [
-    ("true", True), ("True", True), ("1", True), ("yes", True),
-    ("false", False), ("False", False), ("0", False), ("no", False)
-])
+
+@pytest.mark.parametrize(
+    "val,expected",
+    [
+        ("true", True),
+        ("True", True),
+        ("1", True),
+        ("yes", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("no", False),
+    ],
+)
 def test_bool_parsing(val, expected):
     """Проверяет улучшенный парсинг булевых значений."""
     env = {"THINKER_FALLBACK_ENABLED": val}
@@ -122,9 +135,9 @@ def test_bool_parsing(val, expected):
         config = LeyaConfig.from_env()
         assert config.thinker.fallback_enabled is expected
 
+
 def test_explicit_error_on_invalid_env():
     """Проверяет, что невалидные данные вызывают явную ошибку, а не silent fallback."""
     env = {"OLLAMA_TIMEOUT": "not_a_number"}
-    with patch.dict(os.environ, env, clear=True):
-        with pytest.raises(LeyaConfigError):
-            LeyaConfig.from_env()
+    with patch.dict(os.environ, env, clear=True), pytest.raises(LeyaConfigError):
+        LeyaConfig.from_env()

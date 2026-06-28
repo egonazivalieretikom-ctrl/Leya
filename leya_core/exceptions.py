@@ -12,6 +12,7 @@ from __future__ import annotations
 
 class LeyaError(Exception):
     """Базовое исключение для всех ошибок системы Леи."""
+
     def __init__(self, message: str, context: dict | None = None):
         super().__init__(message)
         self.message = message
@@ -27,11 +28,13 @@ class LeyaError(Exception):
 class SoulTamperError(LeyaError):
     """
     Исключение: обнаружена подмена или повреждение soul-файлов.
-    
+
     Возникает при нарушении целостности soul (HMAC mismatch)
     или при попытке загрузки несанкционированного содержимого.
     """
+
     pass
+
 
 # --- Persistence ---
 class LeyaPersistenceError(LeyaError):
@@ -50,11 +53,14 @@ class LeyaStateVersionMismatchError(LeyaPersistenceError):
 class LeyaMemoryError(LeyaError):
     """Базовое исключение для ошибок памяти (ChromaDB, engrams, synapses)."""
 
+
 class LeyaAtomicWriteError(LeyaMemoryError):
     """Ошибка атомарной записи состояния (OSError, JSON, HMAC)."""
 
+
 class LeyaMemoryLoadError(LeyaMemoryError):
     """Ошибка загрузки состояния (повреждение, несовпадение HMAC, версия)."""
+
 
 class LeyaEmbeddingError(LeyaMemoryError):
     """Не удалось получить эмбеддинг (сбой sentence-transformers / to_thread)."""
@@ -68,8 +74,10 @@ class LeyaEngramNotFoundError(LeyaMemoryError):
 class LeyaLLMError(LeyaError):
     """Базовое исключение для ошибок взаимодействия с LLM."""
 
+
 class LeyaLLMConnectionError(LeyaLLMError):
     """Ошибка сети/соединения с LLM (aiohttp.ClientError и подклассы)."""
+
 
 class LeyaLLMTimeoutError(LeyaLLMError):
     """Таймаут при обращении к Ollama."""
@@ -122,14 +130,18 @@ class LeyaInsightError(LeyaReflectionError):
 
 # --- Tools ---
 
+
 class LeyaShutdownError(LeyaError):
     """Ошибка в процессе graceful shutdown."""
+
 
 class LeyaToolError(LeyaError):
     """Ошибка выполнения инструмента."""
 
+
 class LeyaConstitutionalViolation(LeyaError):
     """Нарушение конституционального правила."""
+
 
 class LeyaToolNotFoundError(LeyaToolError):
     """Инструмент не найден в реестре."""

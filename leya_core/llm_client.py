@@ -16,17 +16,13 @@ Circuit Breaker + обёртка для HTTP-запросов к Ollama.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
-import json
 from collections.abc import Callable
 from enum import Enum
 from typing import (
     Any,
-    Callable,
-    Protocol,
-    runtime_checkable,
-    Optional, 
 )
 
 import aiohttp
@@ -73,7 +69,7 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time: float = 0.0
         self._last_state_change: float = time.time()
-    
+
     @property
     def state(self) -> CircuitState:
         """Текущее состояние (с автоматическим переходом в half-open)."""
@@ -207,15 +203,12 @@ class OllamaClient:
         timeout: float | None = None,
     ) -> str:
         """Отправка запроса к Ollama и получение ответа с поддержкой fallback при OPEN breaker."""
-        from .exceptions import (
-            LeyaLLMConnectionError,
-            LeyaLLMTimeoutError,
-            LeyaLLMUnavailableError,
-            LeyaLLMError,
-            LeyaJSONParseError,
-        )
         import aiohttp
-        import json
+
+        from .exceptions import (
+            LeyaJSONParseError,
+            LeyaLLMConnectionError,
+        )
 
         # Проверка Circuit Breaker с вызовом fallback
         if not self.circuit_breaker.is_available():
@@ -227,11 +220,13 @@ class OllamaClient:
                     else:
                         return self._fallback_fn(prompt)
                 except Exception as fb_exc:
-                    logger.error(f"Fallback функция также завершилась с ошибкой: {fb_exc}", exc_info=True)
-        
+                    logger.error(
+                        f"Fallback функция также завершилась с ошибкой: {fb_exc}", exc_info=True
+                    )
+
             raise LeyaLLMUnavailableError(
                 "LLM недоступен: Circuit Breaker в состоянии OPEN, и fallback не сработал.",
-                context={"breaker_status": self.circuit_breaker.get_status()}
+                context={"breaker_status": self.circuit_breaker.get_status()},
             )
 
         url = f"{self.base_url.rstrip('/')}/api/chat"
@@ -263,7 +258,7 @@ class OllamaClient:
                     self.circuit_breaker.record_failure()
                     raise LeyaLLMError(
                         f"LLM вернул HTTP {resp.status}",
-                        context={"status": resp.status, "body": body[:500]}
+                        context={"status": resp.status, "body": body[:500]},
                     )
 
                 try:
@@ -271,8 +266,7 @@ class OllamaClient:
                 except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
                     self.circuit_breaker.record_failure()
                     raise LeyaJSONParseError(
-                        "Не удалось распарсить JSON-ответ от Ollama",
-                        context={"detail": str(e)}
+                        "Не удалось распарсить JSON-ответ от Ollama", context={"detail": str(e)}
                     ) from e
 
                 message = data.get("message", {})
@@ -280,8 +274,7 @@ class OllamaClient:
                 if not content:
                     self.circuit_breaker.record_failure()
                     raise LeyaLLMError(
-                        "Пустой ответ от LLM",
-                        context={"data_keys": list(data.keys())}
+                        "Пустой ответ от LLM", context={"data_keys": list(data.keys())}
                     )
 
                 if require_json:
@@ -291,7 +284,7 @@ class OllamaClient:
                         self.circuit_breaker.record_failure()
                         raise LeyaJSONParseError(
                             "LLM вернул невалидный JSON в поле message.content",
-                            context={"content_preview": content[:200], "detail": str(e)}
+                            context={"content_preview": content[:200], "detail": str(e)},
                         ) from e
 
                 self.circuit_breaker.record_success()
@@ -300,15 +293,14 @@ class OllamaClient:
         except asyncio.TimeoutError as e:
             self.circuit_breaker.record_failure()
             raise LeyaLLMTimeoutError(
-                "Таймаут запроса к LLM",
-                context={"timeout": req_timeout.total, "url": url}
+                "Таймаут запроса к LLM", context={"timeout": req_timeout.total, "url": url}
             ) from e
 
         except aiohttp.ClientError as e:
             self.circuit_breaker.record_failure()
             raise LeyaLLMConnectionError(
                 "Ошибка соединения с LLM",
-                context={"error_type": type(e).__name__, "detail": str(e), "url": url}
+                context={"error_type": type(e).__name__, "detail": str(e), "url": url},
             ) from e
 
         except (LeyaLLMError, LeyaJSONParseError):
@@ -319,12 +311,12 @@ class OllamaClient:
             self.circuit_breaker.record_failure()
             raise LeyaLLMError(
                 f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
-                context={"error_type": type(e).__name__, "detail": str(e)}
+                context={"error_type": type(e).__name__, "detail": str(e)},
             ) from e
 
     async def generate(self, prompt: str, max_tokens: int = 500, **kwargs) -> str:
         """Thin wrapper над chat() для обратной совместимости с memory.py.
-    
+
         Расположение: leya_core/llm_client.py, класс OllamaClient, сразу после метода chat().
         """
         return await self.chat(

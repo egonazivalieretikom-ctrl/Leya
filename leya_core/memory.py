@@ -16,19 +16,18 @@ leya_core/memory.py
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import hmac
 import json
 import logging
 import math
 import os
-import re 
+import re
 import tempfile
 import time
 import uuid
-from datetime import datetime 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -39,18 +38,19 @@ from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 from .config import LeyaConfig, MemoryConfig
 from .exceptions import (
-    LeyaAtomicWriteError, 
+    LeyaAtomicWriteError,
+    LeyaConfigError,
     LeyaEmbeddingError,
     LeyaMemoryError,
     LeyaStateCorruptedError,
     LeyaStateVersionMismatchError,
-    LeyaConfigError,
 )
 
 logger = logging.getLogger(__name__)
 
 # Версия формата состояния памяти (инкрементировать при несовместимых изменениях)
 MEMORY_STATE_VERSION: int = 3
+
 
 @dataclass
 class SyncReport:
@@ -59,8 +59,8 @@ class SyncReport:
     """
 
     def __init__(self):  # ✅ Исправлено: убрано : MemoryConfig и запятая
-        self.added_to_chroma: int = 0      # ✅ Исправлено: chroma
-        self.updated_in_chroma: int = 0    # ✅ Исправлено: chroma
+        self.added_to_chroma: int = 0  # ✅ Исправлено: chroma
+        self.updated_in_chroma: int = 0  # ✅ Исправлено: chroma
         self.removed_from_chroma: int = 0  # ✅ Исправлено: chroma
         self.errors: int = 0
         self.duration_ms: float = 0.0
@@ -77,6 +77,7 @@ class SyncReport:
             f"errors={self.errors}, "
             f"duration={self.duration_ms:.1f}ms)"
         )
+
 
 # ============================================================================
 # Модели данных
@@ -477,35 +478,34 @@ class MemorySystem:
         """Обновление модели себя с ограничением длины."""
         timestamp = datetime.now().isoformat()
         updated_content = f"[{timestamp}] {new_content}"
-    
+
         # ДОБАВЬТЕ проверку длины:
         max_length = self.memory_config.max_self_model_length
         if len(updated_content) > max_length:
             # Обрезаем с сохранением последних записей
             updated_content = updated_content[-max_length:]
             logger.warning(
-                f"Self-model обрезан до {max_length} символов "
-                f"(было {len(updated_content)})"
+                f"Self-model обрезан до {max_length} символов (было {len(updated_content)})"
             )
-    
+
         self.self_model = updated_content
-    
+
         # Сохранение состояния
         await self._save_state()
 
     def _extract_key_topics(self, text: str) -> list[str]:
         """
         Извлечение ключевых тем из текста для гранулярного обновления Self-Model.
-        
+
         Использует простые эвристики:
         - Ключевые слова о личности, эмоциях, целях
         - Частотные существительные
-        
+
         Returns:
             Список ключевых тем (до 5)
         """
         text_lower = text.lower()
-        
+
         # Ключевые темы и их маркеры
         topic_markers = {
             "любопытство": ["любопыт", "интерес", "исслед", "узна", "почем", "зачем"],
@@ -516,20 +516,20 @@ class MemorySystem:
             "память": ["помню", "забыва", "воспомин", "память", "храню"],
             "рефлексия": ["думаю о себе", "анализирую", "осознаю", "рефлекс"],
         }
-        
+
         detected_topics = []
         for topic, markers in topic_markers.items():
             if any(marker in text_lower for marker in markers):
                 detected_topics.append(topic)
-        
+
         # Если не нашли маркеров, используем частотные слова
         if not detected_topics:
             # Простая эвристика: слова длиной > 5 символов
-            words = re.findall(r'\b[а-яА-ЯёЁ]{6,}\b', text)
+            words = re.findall(r"\b[а-яА-ЯёЁ]{6,}\b", text)
             # Уникальные слова (до 3)
             unique_words = list(set(words))[:3]
             detected_topics = unique_words
-        
+
         return detected_topics[:5]  # Макс 5 тем
 
     async def get_self_model_context(self) -> str:
@@ -759,8 +759,7 @@ class MemorySystem:
         try:
             # Получаем все энграммы нужного типа из in-memory состояния
             engrams_of_type = [
-                engram for engram in self.engrams.values()
-                if engram.memory_type == memory_type
+                engram for engram in self.engrams.values() if engram.memory_type == memory_type
             ]
 
             # Списки для batch операции
@@ -791,14 +790,18 @@ class MemorySystem:
                 batch_ids.append(engram.id)
                 batch_docs.append(engram.content)
                 batch_embeddings.append(embedding)
-                batch_metadatas.append({
-                    "memory_type": engram.memory_type.value,
-                    "timestamp": getattr(engram, "timestamp", 0),                 # ← ИСПРАВЛЕНО: было created_at
-                    "retention_strength": engram.retention_strength,  # ← ИСПРАВЛЕНО: было recentness_strength
-                    "emotional_boost": engram.emotional_boost,
-                    "retrieval_count": engram.retrieval_count,
-                    "consolidation_level": engram.consolidation_level,
-                })
+                batch_metadatas.append(
+                    {
+                        "memory_type": engram.memory_type.value,
+                        "timestamp": getattr(
+                            engram, "timestamp", 0
+                        ),  # ← ИСПРАВЛЕНО: было created_at
+                        "retention_strength": engram.retention_strength,  # ← ИСПРАВЛЕНО: было recentness_strength
+                        "emotional_boost": engram.emotional_boost,
+                        "retrieval_count": engram.retrieval_count,
+                        "consolidation_level": engram.consolidation_level,
+                    }
+                )
 
             # Batch upsert в ChromaDB
             if batch_ids:
@@ -825,7 +828,6 @@ class MemorySystem:
             report.duration_ms = (time.time() - start_time) * 1000
 
         return report
-
 
     async def get_memory_graph_data(
         self,
@@ -932,7 +934,7 @@ class MemorySystem:
                 response = await self.llm_client.generate(prompt, max_tokens=500)
             else:
                 response = await self.llm_client.chat(prompt, require_json=False)
-            
+
             facts = [line.strip() for line in response.split("\n") if line.strip()]
             return facts[:10]
         except Exception as exc:
@@ -966,13 +968,13 @@ class MemorySystem:
 
     async def _save_state(self) -> None:
         """Надёжное атомарное сохранение с HMAC."""
-        if not hasattr(self, 'state_path') or self.state_path is None:
-            if hasattr(self, 'memory_config') and self.memory_config is not None:
-                brain_dir = getattr(self.memory_config, 'brain_dir', './leya_brain')
-            elif hasattr(self, 'config') and self.config is not None:
-                brain_dir = getattr(self.config, 'brain_dir', './leya_brain')
+        if not hasattr(self, "state_path") or self.state_path is None:
+            if hasattr(self, "memory_config") and self.memory_config is not None:
+                brain_dir = getattr(self.memory_config, "brain_dir", "./leya_brain")
+            elif hasattr(self, "config") and self.config is not None:
+                brain_dir = getattr(self.config, "brain_dir", "./leya_brain")
             else:
-                brain_dir = './leya_brain'
+                brain_dir = "./leya_brain"
             self.state_path = Path(brain_dir) / "memory_state.json"
 
         state_path = Path(self.state_path).expanduser().resolve()
@@ -990,9 +992,7 @@ class MemorySystem:
             }
 
             fd, tmp_path_str = tempfile.mkstemp(
-                prefix=state_path.name + ".",
-                suffix=".tmp",
-                dir=str(state_path.parent)
+                prefix=state_path.name + ".", suffix=".tmp", dir=str(state_path.parent)
             )
             tmp_path = Path(tmp_path_str)
 
@@ -1003,13 +1003,16 @@ class MemorySystem:
 
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
-            (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(signature, encoding="utf-8")
+            (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(
+                signature, encoding="utf-8"
+            )
 
             try:
                 os.replace(tmp_path, state_path)
             except OSError as ose:
                 if "cross-device" in str(ose).lower():
                     import shutil
+
                     shutil.move(str(tmp_path), str(state_path))
                 else:
                     raise
@@ -1018,7 +1021,7 @@ class MemorySystem:
                 tmp_path.unlink(missing_ok=True)
             raise LeyaAtomicWriteError(
                 f"Сбой атомарной записи состояния памяти [path='{state_path}', error='{exc}']",
-                context={"path": str(state_path), "error": str(exc)}
+                context={"path": str(state_path), "error": str(exc)},
             ) from exc
 
     async def _load_state(self) -> None:
@@ -1027,14 +1030,14 @@ class MemorySystem:
         Поддержает отключение HMAC-проверки для тестов.
         """
         # Defensive guard
-        if not hasattr(self, 'state_path') or self.state_path is None:
-            if hasattr(self, 'memory_config') and self.memory_config:
+        if not hasattr(self, "state_path") or self.state_path is None:
+            if hasattr(self, "memory_config") and self.memory_config:
                 self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
             else:
                 self.state_path = Path("./leya_brain/memory_state.json")
-    
+
         state_path = self.state_path.expanduser().resolve()
-    
+
         if not state_path.exists():
             self.engrams = {}
             self.synapses = {}
@@ -1042,11 +1045,11 @@ class MemorySystem:
             return
 
         hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
-    
+
         # Проверка HMAC (если не отключена)
         if not self._disable_hmac_check:
             key = self._get_hmac_key()
-        
+
             if hmac_path.exists():
                 expected = hmac_path.read_text(encoding="utf-8").strip()
                 actual = self._compute_hmac(state_path, key)
@@ -1066,6 +1069,7 @@ class MemorySystem:
         # Десериализация
         try:
             import json
+
             with state_path.open("r", encoding="utf-8") as f:
                 raw = json.load(f)
         except (ValueError, json.JSONDecodeError) as exc:
@@ -1103,17 +1107,19 @@ class MemorySystem:
     def _ensure_state_path(self) -> Path:
         """
         Гарантирует наличие и валидность state_path.
-    
+
         Returns:
             Path: Абсолютный путь к файлу состояния.
         """
-        if not hasattr(self, 'state_path') or self.state_path is None:
-            if hasattr(self, 'memory_config') and self.memory_config:
+        if not hasattr(self, "state_path") or self.state_path is None:
+            if hasattr(self, "memory_config") and self.memory_config:
                 self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
             else:
                 self.state_path = Path("./leya_brain/memory_state.json")
-                logger.warning(f"state_path не инициализирован, используем fallback: {self.state_path}")
-    
+                logger.warning(
+                    f"state_path не инициализирован, используем fallback: {self.state_path}"
+                )
+
         return self.state_path.expanduser().resolve()
 
     async def _sync_collection(
@@ -1138,11 +1144,13 @@ class MemorySystem:
                     BATCH_SIZE = 500
                     ids_list = list(chroma_ids)
                     for i in range(0, len(ids_list), BATCH_SIZE):
-                        batch = ids_list[i:i + BATCH_SIZE]
+                        batch = ids_list[i : i + BATCH_SIZE]
                         await asyncio.to_thread(collection.delete, ids=batch)
                     report.removed_from_chroma = len(chroma_ids)
             except Exception as exc:
-                logger.error(f"Ошибка удаления осиротевших {memory_type.value}: {exc}", exc_info=True)
+                logger.error(
+                    f"Ошибка удаления осиротевших {memory_type.value}: {exc}", exc_info=True
+                )
                 report.errors += 1
             finally:
                 report.duration_ms = (time.time() - start_time) * 1000
@@ -1162,7 +1170,7 @@ class MemorySystem:
                 ids_list = list(in_memory_ids)
 
                 for i in range(0, len(ids_list), BATCH_SIZE):
-                    batch_ids = ids_list[i:i + BATCH_SIZE]
+                    batch_ids = ids_list[i : i + BATCH_SIZE]
                     batch_engrams = [type_engrams[eid] for eid in batch_ids]
 
                     batch_documents: list[str] = []
@@ -1186,20 +1194,26 @@ class MemorySystem:
                         batch_embeddings.append(emb)
                         valid_indices.append(idx)
 
-                        batch_metadatas.append({
-                            "id": engram.id,
-                            "memory_type": getattr(engram, "memory_type", memory_type).value,
-                            "timestamp": getattr(engram, "timestamp", 0),
-                            "retention_strength": getattr(engram, "retention_strength", 0.0),
-                            "emotional_boost": getattr(engram, "emotional_boost", 0.0),
-                            "retrieval_count": getattr(engram, "retrieval_count", 0),
-                            "consolidation_level": getattr(engram, "consolidation_level", 0),
-                        })
+                        batch_metadatas.append(
+                            {
+                                "id": engram.id,
+                                "memory_type": getattr(engram, "memory_type", memory_type).value,
+                                "timestamp": getattr(engram, "timestamp", 0),
+                                "retention_strength": getattr(engram, "retention_strength", 0.0),
+                                "emotional_boost": getattr(engram, "emotional_boost", 0.0),
+                                "retrieval_count": getattr(engram, "retrieval_count", 0),
+                                "consolidation_level": getattr(engram, "consolidation_level", 0),
+                            }
+                        )
 
                     if not batch_documents:
                         continue
 
-                    adj_ids = [batch_ids[v] for v in valid_indices] if len(batch_documents) < len(batch_ids) else batch_ids
+                    adj_ids = (
+                        [batch_ids[v] for v in valid_indices]
+                        if len(batch_documents) < len(batch_ids)
+                        else batch_ids
+                    )
 
                     try:
                         await asyncio.to_thread(
@@ -1213,7 +1227,7 @@ class MemorySystem:
                         report.errors += 1
                         raise LeyaMemoryError(
                             f"Сбой upsert в ChromaDB ({memory_type.value})",
-                            context={"error": str(exc)}
+                            context={"error": str(exc)},
                         ) from exc
 
                 report.added_to_chroma = len(ids_to_add)
@@ -1223,7 +1237,7 @@ class MemorySystem:
                 BATCH_SIZE = 500
                 rem_list = list(ids_to_remove)
                 for i in range(0, len(rem_list), BATCH_SIZE):
-                    batch = rem_list[i:i + BATCH_SIZE]
+                    batch = rem_list[i : i + BATCH_SIZE]
                     try:
                         await asyncio.to_thread(collection.delete, ids=batch)
                     except Exception:
@@ -1238,11 +1252,9 @@ class MemorySystem:
 
         return report
 
-
-    
     async def _sync_chroma_from_memory(self) -> SyncReport:
         """Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
-    
+
         ИСПРАВЛЕНО: Убран дублирующий вызов синхронизации семантической коллекции.
         """
         logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
@@ -1292,14 +1304,12 @@ class MemorySystem:
 
         return total_report
 
-    
-
     def _compute_hmac(self, path: Path, key: bytes) -> str:
         """
         Вычисление HMAC-SHA256 для файла.
-        
-        Примечание: Файл всегда открывается в бинарном режиме ("rb"), 
-        чтобы избежать проблем с хешем из-за конвертации переносов строк 
+
+        Примечание: Файл всегда открывается в бинарном режиме ("rb"),
+        чтобы избежать проблем с хешем из-за конвертации переносов строк
         (CRLF/LF) между разными ОС при работе с текстовыми (JSON) файлами.
         """
         h = hmac.new(key, digestmod=hashlib.sha256)
@@ -1310,12 +1320,12 @@ class MemorySystem:
 
     def _get_hmac_key(self) -> bytes:
         key = os.environ.get("LEYA_STATE_HMAC_KEY")
-    
+
         if not key or len(key.strip()) < 32:
             raise LeyaConfigError(
                 "LEYA_STATE_HMAC_KEY не установлен или слишком короткий (нужно минимум 32 символа). "
                 "Сгенерируй ключ командой: python -c 'import secrets; print(secrets.token_urlsafe(32))' "
                 "и добавь в файл .env: LEYA_STATE_HMAC_KEY=твой_ключ"
             )
-    
+
         return key.encode("utf-8")

@@ -144,7 +144,9 @@ class GlobalWorkspace:
         if removed:
             logger.debug(f"GlobalWorkspace: Удалено {len(removed)} устаревших proposals")
 
-    def select_winner(self, drive_state: dict[str, float] | None = None, inhibit_internal: bool = False) -> WorkspaceProposal | None:
+    def select_winner(
+        self, drive_state: dict[str, float] | None = None, inhibit_internal: bool = False
+    ) -> WorkspaceProposal | None:
         """
         Выбор победителя из proposals.
         """
@@ -164,7 +166,7 @@ class GlobalWorkspace:
         adjusted_proposals = []
         for proposal in self.proposals:
             adjusted = proposal
-            
+
             if inhibit_internal and proposal.source in ("homeostasis", "meta_cognition"):
                 # Понижение приоритета на 1 уровень
                 priority_map = {
@@ -182,7 +184,7 @@ class GlobalWorkspace:
                     drive_relevance=proposal.drive_relevance,
                     metadata=proposal.metadata,
                 )
-            
+
             adjusted_proposals.append(adjusted)
 
         # Вычисление scores
