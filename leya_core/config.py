@@ -328,10 +328,7 @@ class SoulConfig:
             self.max_history_size = 1000
 
         if not self.hmac_key:
-            logger.warning(
-                "⚠️ Soul HMAC key не задан. Защита целостности soul отключена. "
-                "Для production установите SOUL_HMAC_KEY в .env"
-            )
+            logger.debug("Soul HMAC key не задан — работаем в режиме без HMAC-защиты")
 
 
 @dataclass
