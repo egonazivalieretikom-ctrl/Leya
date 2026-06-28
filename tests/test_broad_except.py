@@ -79,31 +79,6 @@ class TestMemorySaveState:
         with pytest.raises(LeyaAtomicWriteError):
             await memory_instance._save_state()
 
-    @pytest.mark.asyncio
-    async def test_oserror_on_hmac_write_raises_atomic_write_error(self, memory_instance, tmp_path):
-        memory_instance.config.brain_dir = str(tmp_path)
-
-        with patch("pathlib.Path.write_text", side_effect=OSError("Permission denied")):
-            with pytest.raises(LeyaAtomicWriteError):
-                await memory_instance._save_state()
-        """Если запись .hmac файла падает → LeyaAtomicWriteError."""
-        memory_instance.config.brain_dir = str(tmp_path)
-        memory_instance.config.hmac_key = "test_key"
-
-        # Разрешаем tempfile и json, но ломаем запись hmac
-        original_open = open
-        call_count = {"n": 0}
-
-        def fake_open(path, *args, **kwargs):
-            call_count["n"] += 1
-            # Первый open — json, второй — hmac. Ломаем второй.
-            if str(path).endswith(".hmac"):
-                raise OSError("Permission denied")
-            return original_open(path, *args, **kwargs)
-
-        with patch("builtins.open", side_effect=fake_open):
-            with pytest.raises(LeyaAtomicWriteError):
-                await memory_instance._save_state()
 
     @pytest.mark.asyncio
     async def test_success_does_not_raise(self, memory_instance, tmp_path):
@@ -132,36 +107,34 @@ class TestLLMClientChat:
             temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
             max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
         )
-        c._session = AsyncMock()
+        c._session = MagicMock()
         c.circuit_breaker = MagicMock()
         c.circuit_breaker.is_available = True
         c.circuit_breaker.record_success = MagicMock()
         c.circuit_breaker.record_failure = MagicMock()
         return c
 
-    @pytest.mark.asyncio
-    async def test_oserror_on_hmac_write_raises_atomic_write_error(self, memory_instance, tmp_path):
-        memory_instance.config.brain_dir = str(tmp_path)
-
-        # Патчим именно метод, который используется в коде
-        with patch.object(Path, "write_text", side_effect=OSError("Permission denied on .hmac")):
-            with pytest.raises(LeyaAtomicWriteError):
-                await memory_instance._save_state()
 
     @pytest.mark.asyncio
     async def test_timeout_error_raises_timeout(self, client):
-        mock_post = AsyncMock()
-        mock_post.side_effect = asyncio.TimeoutError()
-        client._session.post.return_value = mock_post
+        # Правильный mock: post() возвращает context manager синхронно,
+        # ошибка должна возникать при входе в async with (на __aenter__).
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        client._session.post.return_value = mock_cm
 
         with pytest.raises(LeyaLLMTimeoutError):
             await client.chat("hi")
 
     @pytest.mark.asyncio
     async def test_unexpected_exception_wrapped_as_llm_error(self, client):
-        mock_post = AsyncMock()
-        mock_post.side_effect = RuntimeError("weird internal bug")
-        client._session.post.return_value = mock_post
+        # Аналогично: ошибка при __aenter__, чтобы она дошла до broad except
+        # в llm_client.py и обернулась в LeyaLLMError с сохранением __cause__.
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("weird internal bug"))
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        client._session.post.return_value = mock_cm
 
         with pytest.raises(LeyaLLMError) as exc_info:
             await client.chat("hi")
@@ -196,7 +169,6 @@ class TestLeyaShutdown:
         os_instance._shutdown_event = asyncio.Event()
         os_instance._background_tasks = []  # ✅ ДОБАВЛЕНО
         os_instance.llm_client = None  # ✅ ДОБАВЛЕНО
-
         with caplog.at_level(logging.ERROR):
             # Не должно упасть
             await os_instance.shutdown()

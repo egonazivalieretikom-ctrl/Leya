@@ -1097,6 +1097,11 @@ class MemorySystem:
             f"Состояние памяти загружено: {len(self.engrams)} энграмм, {len(self.synapses)} синапсов"
         )
 
+        try:
+            await self._sync_chroma_from_memory()
+        except Exception as exc:
+            logger.warning(f"Sync после _load_state не удался (graceful degradation): {exc}")
+
     def _ensure_state_path(self) -> Path:
         """
         Гарантирует наличие и валидность state_path.

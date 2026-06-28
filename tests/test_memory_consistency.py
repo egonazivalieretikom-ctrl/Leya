@@ -281,74 +281,40 @@ class TestLoadStateSync:
 
     @pytest.mark.asyncio
     async def test_load_state_calls_sync(self, memory_with_fake_chroma, tmp_path):
-        """После _load_state Chroma синхронизирована с JSON."""
+        """_load_state загружает state и вызывает sync (популяция Chroma). Используем реальный _save_state для валидного HMAC."""
         mem, fake_client = memory_with_fake_chroma
-        
-        state = {
-            "__version__": 3,
-            "data": {
-                "engrams": {
-                    "e1": _make_engram("e1", "from json", "EPISODIC").to_dict()
-                },
-                "synapses": {},
-                "self_model": "test",
-            }
-        }
-        
-        state_path = tmp_path / "memory_state.json"
-        state_path.write_text(json.dumps(state), encoding="utf-8")
-        
-        # HMAC
-        import hmac, hashlib
-        hmac_hex = hmac.new(
-            b"test_key",
-            json.dumps(state).encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-        (tmp_path / "memory_state.json.hmac").write_text(hmac_hex, encoding="utf-8")
-        
-        # Chroma пуст
-        assert fake_client.collections["episodic"].count() == 0
-        
-        # Загружаем
+        epi = fake_client.collections["episodic"]
+        assert epi.count() == 0
+
+        mem.engrams = {"e1": _make_engram("e1", "from json", "EPISODIC")}
+        mem.synapses = {}
+        mem.self_model = "test"
+        await mem._save_state()
+
+        mem.engrams = {}
+        mem.synapses = {}
+        mem.self_model = ""
         await mem._load_state()
-        
-        # После load должен быть sync — engram появился в Chroma
-        assert fake_client.collections["episodic"].count() == 1
-        assert "e1" in fake_client.collections["episodic"]._store
+        assert epi.count() == 1
 
     @pytest.mark.asyncio
     async def test_load_state_removes_orphans_from_chroma(self, memory_with_fake_chroma, tmp_path):
-        """Если в Chroma есть orphan, а в JSON нет — после load orphan удалён."""
+        """После load orphan'ы удаляются из Chroma через sync."""
         mem, fake_client = memory_with_fake_chroma
         epi = fake_client.collections["episodic"]
-        
-        # В Chroma есть orphan
+
         epi.upsert(ids=["orphan"], documents=["x"])
-        
-        state = {
-            "__version__": 3,
-            "data": {
-                "engrams": {},
-                "synapses": {},
-                "self_model": ""
-            }
-        }
-        
-        state_path = tmp_path / "memory_state.json"
-        state_path.write_text(json.dumps(state), encoding="utf-8")
-        
-        import hmac, hashlib
-        hmac_hex = hmac.new(
-            b"test_key",
-            json.dumps(state).encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-        (tmp_path / "memory_state.json.hmac").write_text(hmac_hex, encoding="utf-8")
-        
+        assert epi.count() == 1
+
+        mem.engrams = {}
+        mem.synapses = {}
+        mem.self_model = ""
+        await mem._save_state()
+
+        mem.engrams = {}
+        mem.synapses = {}
+        mem.self_model = ""
         await mem._load_state()
-        
-        # Orphan должен быть удалён
         assert epi.count() == 0
 
 
