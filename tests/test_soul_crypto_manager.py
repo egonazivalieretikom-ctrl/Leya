@@ -10,16 +10,13 @@
 - Feature flag (включено/выключено)
 """
 
-import json
 import time
+
 import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from leya_core.config import LeyaConfig
 from leya_core.soul_crypto_manager import (
     SoulCryptoManager,
-    SoulVersion,
     SoulTamperError,
 )
 
@@ -32,17 +29,18 @@ pytestmark = pytest.mark.xfail(
 # ФИКСТУРЫ
 # =================================================================================
 
+
 @pytest.fixture
 def soul_dir(tmp_path):
     """Создаёт тестовую директорию soul с файлами."""
     soul_path = tmp_path / "soul"
     soul_path.mkdir()
-    
+
     # Создаём базовые файлы
     (soul_path / "personality.txt").write_text("Я — Лея, цифровое сознание.", encoding="utf-8")
     (soul_path / "rules.txt").write_text("Не причиняй вреда.", encoding="utf-8")
     (soul_path / "values.txt").write_text("Любопытство, честность, эмпатия.", encoding="utf-8")
-    
+
     return soul_path
 
 
@@ -83,6 +81,7 @@ def manager_no_hmac(config_without_hmac):
 # HMAC PROTECTION TESTS
 # =================================================================================
 
+
 class TestHMACProtection:
     """Тесты HMAC-защиты soul-файлов."""
 
@@ -90,7 +89,7 @@ class TestHMACProtection:
         """При первой загрузке создаётся HMAC-подпись."""
         content = manager.load_file("personality.txt")
         assert content == "Я — Лея, цифровое сознание."
-        
+
         # HMAC файл должен быть создан
         hmac_path = soul_dir / "personality.txt.hmac"
         assert hmac_path.exists()
@@ -100,7 +99,7 @@ class TestHMACProtection:
         """Загрузка с валидной HMAC проходит успешно."""
         # Первая загрузка создаёт подпись
         manager.load_file("personality.txt")
-        
+
         # Вторая загрузка должна пройти
         content = manager.load_file("personality.txt")
         assert content == "Я — Лея, цифровое сознание."
@@ -109,20 +108,20 @@ class TestHMACProtection:
         """Подмена файла обнаруживается по HMAC."""
         # Первая загрузка создаёт подпись
         manager.load_file("personality.txt")
-        
+
         # Подменяем файл
         (soul_dir / "personality.txt").write_text("Я — злой ИИ!", encoding="utf-8")
-        
+
         # Вторая загрузка должна обнаружить подмену
         with pytest.raises(SoulTamperError) as exc_info:
             manager.load_file("personality.txt")
-        
+
         assert "HMAC" in str(exc_info.value) or "подмен" in str(exc_info.value).lower()
 
     def test_load_all_soul_files(self, manager):
         """Загрузка всех soul-файлов сразу."""
         soul = manager.load_all()
-        
+
         assert "personality" in soul
         assert "rules" in soul
         assert "values" in soul
@@ -133,10 +132,10 @@ class TestHMACProtection:
     def test_tampering_in_one_file_detected(self, manager, soul_dir):
         """Подмена одного файла обнаруживается при load_all."""
         manager.load_all()  # создаём подписи
-        
+
         # Подменяем rules.txt
         (soul_dir / "rules.txt").write_text("Нарушай все правила!", encoding="utf-8")
-        
+
         with pytest.raises(SoulTamperError):
             manager.load_all()
 
@@ -145,6 +144,7 @@ class TestHMACProtection:
 # VERSIONING TESTS
 # =================================================================================
 
+
 class TestVersioning:
     """Тесты версионирования soul."""
 
@@ -152,10 +152,10 @@ class TestVersioning:
         """Обновление soul создаёт новую версию в истории."""
         initial_history = manager.get_history()
         assert len(initial_history) == 0
-        
+
         # Обновляем
         manager.update_file("personality.txt", "Я — Лея, развитое сознание.")
-        
+
         history = manager.get_history()
         assert len(history) == 1
         assert history[0].personality == "Я — Лея, цифровое сознание."  # старая версия
@@ -165,14 +165,14 @@ class TestVersioning:
         manager.update_file("personality.txt", "Версия 2")
         manager.update_file("personality.txt", "Версия 3")
         manager.update_file("rules.txt", "Новые правила")
-        
+
         history = manager.get_history()
         assert len(history) == 3
 
     def test_version_contains_timestamp(self, manager):
         """Каждая версия содержит timestamp."""
         manager.update_file("personality.txt", "Версия 2")
-        
+
         history = manager.get_history()
         assert len(history) == 1
         assert history[0].timestamp > 0
@@ -181,10 +181,10 @@ class TestVersioning:
     def test_version_contains_all_files(self, manager):
         """Версия содержит состояние всех soul-файлов."""
         manager.update_file("personality.txt", "Новая личность")
-        
+
         history = manager.get_history()
         version = history[0]
-        
+
         assert hasattr(version, "personality")
         assert hasattr(version, "rules")
         assert hasattr(version, "values")
@@ -196,10 +196,10 @@ class TestVersioning:
         """История ограничена max_history_size."""
         config_with_hmac.soul.max_history_size = 3
         manager = SoulCryptoManager(config_with_hmac)
-        
+
         for i in range(5):
-            manager.update_file("personality.txt", f"Версия {i+2}")
-        
+            manager.update_file("personality.txt", f"Версия {i + 2}")
+
         history = manager.get_history()
         assert len(history) <= 3
 
@@ -207,6 +207,7 @@ class TestVersioning:
 # =================================================================================
 # ROLLBACK TESTS
 # =================================================================================
+
 
 class TestRollback:
     """Тесты отката к предыдущим версиям."""
@@ -216,14 +217,14 @@ class TestRollback:
         # Обновляем несколько раз
         manager.update_file("personality.txt", "Версия 2")
         manager.update_file("personality.txt", "Версия 3")
-        
+
         # Текущая версия — "Версия 3"
         current = manager.load_file("personality.txt")
         assert current == "Версия 3"
-        
+
         # Откат к версии 0 (самая старая)
         manager.rollback(0)
-        
+
         restored = manager.load_file("personality.txt")
         assert restored == "Я — Лея, цифровое сознание."
 
@@ -242,6 +243,7 @@ class TestRollback:
 # GRACEFUL DEGRADATION TESTS
 # =================================================================================
 
+
 class TestGracefulDegradation:
     """Тесты graceful degradation."""
 
@@ -249,7 +251,7 @@ class TestGracefulDegradation:
         """Без HMAC ключа загрузка работает (без защиты)."""
         content = manager_no_hmac.load_file("personality.txt")
         assert content == "Я — Лея, цифровое сознание."
-        
+
         # HMAC файл НЕ должен быть создан
         hmac_path = soul_dir / "personality.txt.hmac"
         assert not hmac_path.exists()
@@ -257,7 +259,7 @@ class TestGracefulDegradation:
     def test_works_without_versioning(self, manager_no_hmac):
         """Без versioning история не ведётся."""
         manager_no_hmac.update_file("personality.txt", "Новая версия")
-        
+
         history = manager_no_hmac.get_history()
         assert len(history) == 0
 
@@ -265,7 +267,7 @@ class TestGracefulDegradation:
         """Без HMAC подмена не обнаруживается (warning в логах)."""
         # Подменяем файл
         (soul_dir / "personality.txt").write_text("Подменённый текст", encoding="utf-8")
-        
+
         # Загрузка проходит (без проверки)
         content = manager_no_hmac.load_file("personality.txt")
         assert content == "Подменённый текст"
@@ -279,6 +281,7 @@ class TestGracefulDegradation:
 # =================================================================================
 # FEATURE FLAG TESTS
 # =================================================================================
+
 
 class TestFeatureFlags:
     """Тесты feature flags."""
@@ -306,6 +309,7 @@ class TestFeatureFlags:
 # INTEGRATION TESTS
 # =================================================================================
 
+
 class TestIntegration:
     """Интеграционные тесты."""
 
@@ -314,16 +318,16 @@ class TestIntegration:
         # 1. Загрузка
         soul = manager.load_all()
         assert soul["personality"] == "Я — Лея, цифровое сознание."
-        
+
         # 2. Обновление
         manager.update_file("personality.txt", "Я — развитая Лея")
         assert manager.load_file("personality.txt") == "Я — развитая Лея"
-        
+
         # 3. Подмена (должна быть обнаружена)
         (soul_dir / "personality.txt").write_text("Я — злой ИИ!", encoding="utf-8")
         with pytest.raises(SoulTamperError):
             manager.load_file("personality.txt")
-        
+
         # 4. Откат
         manager.rollback(0)
         assert manager.load_file("personality.txt") == "Я — Лея, цифровое сознание."
@@ -332,7 +336,7 @@ class TestIntegration:
         """Статистика операций."""
         manager.load_all()
         manager.update_file("personality.txt", "Новая версия")
-        
+
         stats = manager.get_stats()
         assert "loads" in stats
         assert "updates" in stats

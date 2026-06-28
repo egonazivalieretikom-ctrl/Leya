@@ -8,17 +8,16 @@
 - Кэширование результатов
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
+import pytest
+
+from leya_core.exceptions import LeyaLLMError, LeyaLLMUnavailableError
 from leya_core.request_classifier import (
-    RequestClassifier,
     IntentClassification,
+    RequestClassifier,
     UserIntent,
 )
-from leya_core.config import ThinkerConfig
-from leya_core.exceptions import LeyaLLMError, LeyaLLMUnavailableError
-
 
 # =================================================================================
 # ФИКСТУРЫ
@@ -64,30 +63,30 @@ class TestIntentClassificationParametrized:
         ("Добрый день", UserIntent.GREETING),
         ("Хеллоу", UserIntent.GREETING),
         ("Приветствую тебя", UserIntent.GREETING),
-        
+
         # FAREWELL — 4 вариации
         ("Пока", UserIntent.FAREWELL),
         ("До свидания", UserIntent.FAREWELL),
         ("Увидимся", UserIntent.FAREWELL),
         ("Всего доброго", UserIntent.FAREWELL),
-        
+
         # QUESTION — 5 вариаций
         ("Что такое квантовая физика?", UserIntent.QUESTION),
         ("Расскажи про Python", UserIntent.QUESTION),
         ("Объясни, как работает asyncio", UserIntent.QUESTION),
         ("Кто такой Эйнштейн?", UserIntent.QUESTION),
         ("Почему небо голубое?", UserIntent.QUESTION),
-        
+
         # SEARCH — 3 вариации
         ("Поищи в интернете про нейросети", UserIntent.SEARCH),
         ("Найди информацию о погоде", UserIntent.SEARCH),
         ("Загугли последние новости", UserIntent.SEARCH),
-        
+
         # REMEMBER — 3 вариации
         ("Запомни, что я люблю кофе", UserIntent.REMEMBER),
         ("Сохрани это: мой день рождения 1 января", UserIntent.REMEMBER),
         ("Запиши, что я программист", UserIntent.REMEMBER),
-        
+
         # STATUS — 3 вариации
         ("Как ты себя чувствуешь?", UserIntent.STATUS),
         ("Какое у тебя состояние?", UserIntent.STATUS),
@@ -99,7 +98,7 @@ class TestIntentClassificationParametrized:
     ):
         """Разные формулировки одного намерения классифицируются правильно."""
         result = await classifier.classify(user_input)
-        
+
         assert isinstance(result, IntentClassification)
         assert result.intent == expected_intent
         assert 0.0 <= result.confidence <= 1.0
@@ -130,7 +129,7 @@ class TestConfidenceBasedRouting:
     async def test_high_confidence_heuristic_skips_llm(self, classifier, mock_llm):
         """Если эвристика даёт confidence ≥ threshold — LLM не вызывается."""
         result = await classifier.classify("Привет!")
-        
+
         assert result.intent == UserIntent.GREETING
         assert result.confidence >= 0.8
         assert result.source == "heuristic"
@@ -142,10 +141,10 @@ class TestConfidenceBasedRouting:
         """Если эвристика не уверена — вызывается LLM."""
         # Мокаем LLM ответ
         mock_llm.chat.return_value = '{"intent": "QUESTION", "confidence": 0.9, "topic": "квантовая физика"}'
-        
+
         # Неоднозначный запрос
         result = await classifier.classify("Мне интересно узнать что-то новое")
-        
+
         # LLM должен был вызваться
         mock_llm.chat.assert_called()
         assert result.source == "llm"
@@ -162,10 +161,10 @@ class TestGracefulDegradation:
     async def test_llm_unavailable_falls_back_to_heuristic(self, classifier, mock_llm):
         """Если LLM недоступен (Circuit Breaker OPEN) — fallback на эвристику."""
         mock_llm.chat.side_effect = LeyaLLMUnavailableError("LLM unavailable")
-        
+
         # Неоднозначный запрос, который обычно требует LLM
         result = await classifier.classify("Мне интересно узнать что-то новое")
-        
+
         # Не должно упасть, должен быть fallback
         assert isinstance(result, IntentClassification)
         assert result.source in ("heuristic", "fallback")
@@ -174,9 +173,9 @@ class TestGracefulDegradation:
     async def test_llm_error_falls_back_to_heuristic(self, classifier, mock_llm):
         """Если LLM вернул ошибку — fallback на эвристику."""
         mock_llm.chat.side_effect = LeyaLLMError("LLM error")
-        
+
         result = await classifier.classify("Сложный запрос")
-        
+
         assert isinstance(result, IntentClassification)
         assert result.source in ("heuristic", "fallback")
 
@@ -203,9 +202,9 @@ class TestSemanticCache:
                 "similarity": 0.92,
             }
         ]
-        
+
         result = await classifier.classify("Привет, как ты?")
-        
+
         # Должен использовать cache
         assert result.intent == UserIntent.GREETING
         assert result.source == "cache"
@@ -215,9 +214,9 @@ class TestSemanticCache:
     async def test_no_similar_query_skips_cache(self, classifier, mock_memory):
         """Если похожих запросов нет — cache не используется."""
         mock_memory.retrieve_context.return_value = []
-        
+
         result = await classifier.classify("Привет!")
-        
+
         # Не должен использовать cache
         assert result.source != "cache"
 
@@ -233,9 +232,9 @@ class TestTopicExtraction:
     async def test_topic_extracted_from_question(self, classifier, mock_llm):
         """Тема извлекается из вопроса."""
         mock_llm.chat.return_value = '{"intent": "QUESTION", "confidence": 0.9, "topic": "квантовая физика"}'
-        
+
         result = await classifier.classify("Что такое квантовая физика?")
-        
+
         assert result.topic is not None
         assert len(result.topic) > 0
 
@@ -243,7 +242,7 @@ class TestTopicExtraction:
     async def test_topic_none_for_greeting(self, classifier):
         """Для приветствия тема не извлекается."""
         result = await classifier.classify("Привет!")
-        
+
         assert result.topic is None or result.topic == ""
 
 
@@ -258,7 +257,7 @@ class TestRequestClassifierIntegration:
     async def test_full_pipeline_heuristic(self, classifier):
         """Полный цикл: эвристика → возврат."""
         result = await classifier.classify("Пока!")
-        
+
         assert result.intent == UserIntent.FAREWELL
         assert result.confidence >= 0.8
         assert result.source == "heuristic"
@@ -267,8 +266,8 @@ class TestRequestClassifierIntegration:
     async def test_full_pipeline_with_llm(self, classifier, mock_llm):
         """Полный цикл: эвристика (low confidence) → LLM → возврат."""
         mock_llm.chat.return_value = '{"intent": "SEARCH", "confidence": 0.85, "topic": "нейросети"}'
-        
+
         result = await classifier.classify("Хочу узнать что-то интересное")
-        
+
         assert result.intent == UserIntent.SEARCH
         assert result.source == "llm"

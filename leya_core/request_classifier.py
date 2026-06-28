@@ -314,37 +314,33 @@ class RequestClassifier:
     async def _cache_lookup(self, user_input: str) -> Optional[IntentClassification]:
         """Уровень 2: Semantic cache через memory.
 
-        Ищет похожие запросы в памяти. Если similarity ≥ threshold —
-        возвращает кэшированный результат.
+        Ищет похожие запросы в памяти. Если среди релевантных есть
+        сохранённая классификация (в metadata) — используем её.
         """
         if not self.memory:
             return None
 
         try:
-            # Ищем похожие запросы в памяти
-            similar = await self.memory.retrieve_context(
+            # Используем актуальный API MemorySystem
+            similar: list[Engram] = await self.memory.retrieve_context(
                 query=user_input,
-                top_k=3,
-                memory_type="EPISODIC",
-                filters={"type": "user_request"},
+                max_results=5,
+                min_retention=0.05,  # чуть ниже, чтобы поймать кандидатов для кэша
             )
 
             if not similar:
                 return None
 
-            # Проверяем similarity
-            for item in similar:
-                similarity = item.get("similarity", 0.0)
-                if similarity >= self.cache_similarity_threshold:
-                    metadata = item.get("metadata", {})
-                    cached_intent = metadata.get("intent")
-                    cached_confidence = metadata.get("confidence", 0.0)
-                    cached_topic = metadata.get("topic")
-
-                    if cached_intent and cached_confidence > 0:
+            for engram in similar:
+                meta = getattr(engram, "metadata", {}) or {}
+                cached_intent = meta.get("intent") or meta.get("classification_intent")
+                if cached_intent:
+                    cached_confidence = meta.get("confidence", 0.75)
+                    cached_topic = meta.get("topic")
+                    if cached_confidence >= 0.6:  # мягкий порог, т.к. retrieval уже семантический
                         return IntentClassification(
                             intent=UserIntent(cached_intent),
-                            confidence=cached_confidence,
+                            confidence=float(cached_confidence),
                             topic=cached_topic,
                             source="cache",
                             raw_input=user_input,

@@ -90,11 +90,14 @@ class CircuitBreaker:
         return self.state != CircuitState.OPEN
 
     def record_success(self) -> None:
-        """Записать успешный запрос."""
-        if self._state == CircuitState.HALF_OPEN or (
-            self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold
-        ):
-            self._transition_to(CircuitState.OPEN)
+        if self._state == CircuitState.HALF_OPEN:
+            self._success_count += 1
+            if self._success_count >= self.success_threshold:
+                self._transition_to(CircuitState.CLOSED)
+        elif self._state == CircuitState.CLOSED:
+            # Сбрасываем счётчик ошибок при успехе
+            if self._failure_count > 0:
+                self._failure_count = max(0, self._failure_count - 1)
 
     def record_failure(self) -> None:
         """Записать отказ."""
@@ -319,10 +322,23 @@ class OllamaClient:
             raise
 
         # Last-resort: неожиданная ошибка (НО НЕ ловим CancelledError, KeyboardInterrupt, SystemExit)
+        except asyncio.CancelledError:
+            raise  # Просто пробрасываем — это нормальное отключение
+        except KeyboardInterrupt:
+            raise  # Ctrl+C должен работать
+        except SystemExit:
+            raise  # Команда выхода
         except Exception as e:
-            # Проверяем, не является ли это критическим исключением
-            if isinstance(e, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
-                raise  # Пробрасываем критические исключения
+            logger.error(
+                f"Неожиданная ошибка в LLM client: {e}",
+                exc_info=True,
+                extra={"context": {"url": url, "model": self.model}}
+            )
+            self.circuit_breaker.record_failure()
+            raise LeyaLLMError(
+                f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
+                context={"error_type": type(e).__name__, "detail": str(e)}
+            ) from e
         
             logger.error(
                 f"Неожиданная ошибка в LLM client: {e}",

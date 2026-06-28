@@ -166,8 +166,9 @@ class IMemorySystem(Protocol):
         self,
         query: str,
         max_results: int = 5,
-    ) -> list["Engram"]:  # ✅ ИСПРАВЛЕНО: было -> list[Any]
-        """Получение релевантного контекста из памяти."""
+        min_retention: float = 0.1,
+    ) -> list["Engram"]:
+        """Получение релевантного контекста из памяти (семантический поиск + Эббингауз + emotional_boost)."""
         ...
     
     async def consolidate_memories(self) -> dict[str, Any]:
@@ -422,14 +423,13 @@ class IThinker(Protocol):
 
     async def generate_plan(
         self,
-        stimulus: Any,
-        drive_state: str,
-        memory_context: str,
-        self_model: str,
-        tools: list[dict[str, Any]] | None = None,
-        tool_context: str | None = None,
-    ) -> Any:
-        """Генерирует когнитивный план."""
+        stimulus: dict,
+        soul_context: str,
+        drive_context: str,
+        memory_context: list[dict],
+        tools: list[dict],
+    ) -> dict:
+        """Генерирует когнитивный план (soul + drives + memory + tools → structured JSON)."""
         ...
 
 

@@ -10,23 +10,25 @@
 """
 
 import json
+
 import pytest
-from hypothesis import given, strategies as st, settings, assume
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
-from leya_core.thinker import (
-    CognitiveOutput,
-    ActionIntent,
-    repair_json,
-    _safe_parse_json,
-    _estimate_tokens,
-    _truncate_context,
-)
 from leya_core.exceptions import LeyaJSONParseError
-
+from leya_core.thinker import (
+    ActionIntent,
+    CognitiveOutput,
+    _estimate_tokens,
+    _safe_parse_json,
+    _truncate_context,
+    repair_json,
+)
 
 # =================================================================================
 # PYDANTIC MODEL TESTS
 # =================================================================================
+
 
 class TestCognitiveOutputModel:
     """Проверяем Pydantic модель CognitiveOutput."""
@@ -101,42 +103,41 @@ class TestCognitiveOutputModel:
 # REPAIR_JSON TESTS (parametrized)
 # =================================================================================
 
+
 class TestRepairJson:
     """Проверяем repair_json на известных edge cases."""
 
-    @pytest.mark.parametrize("malformed,expected_key", [
-        # Markdown code blocks
-        ('```json\n{"response": "test"}\n```', "response"),
-        ('```\n{"response": "test"}\n```', "response"),
-        
-        # Trailing commas
-        ('{"response": "test",}', "response"),
-        ('{"response": "test", "internal_monologue": "x",}', "response"),
-        
-        # Unclosed brackets
-        ('{"response": "test"', "response"),
-        ('{"response": "test", "internal_monologue": "x"', "response"),
-        
-        # Trailing text after JSON
-        ('{"response": "test"}\nSome trailing text', "response"),
-        ('{"response": "test"} // comment', "response"),
-        
-        # Unicode in strings
-        ('{"response": "Привет мир!"}', "response"),
-        ('{"response": "Hello 世界 🌍"}', "response"),
-        
-        # Nested objects
-        ('{"tool_call": {"tool_name": "search", "parameters": {"query": "test"}}}', "tool_call"),
-        
-        # Deeply nested
-        ('{"a": {"b": {"c": {"d": "value"}}}}', "a"),
-        
-        # Empty strings
-        ('{"response": ""}', "response"),
-        
-        # Escaped quotes
-        ('{"response": "He said \\"hello\\""}', "response"),
-    ])
+    @pytest.mark.parametrize(
+        "malformed,expected_key",
+        [
+            # Markdown code blocks
+            ('```json\n{"response": "test"}\n```', "response"),
+            ('```\n{"response": "test"}\n```', "response"),
+            # Trailing commas
+            ('{"response": "test",}', "response"),
+            ('{"response": "test", "internal_monologue": "x",}', "response"),
+            # Unclosed brackets
+            ('{"response": "test"', "response"),
+            ('{"response": "test", "internal_monologue": "x"', "response"),
+            # Trailing text after JSON
+            ('{"response": "test"}\nSome trailing text', "response"),
+            ('{"response": "test"} // comment', "response"),
+            # Unicode in strings
+            ('{"response": "Привет мир!"}', "response"),
+            ('{"response": "Hello 世界 🌍"}', "response"),
+            # Nested objects
+            (
+                '{"tool_call": {"tool_name": "search", "parameters": {"query": "test"}}}',
+                "tool_call",
+            ),
+            # Deeply nested
+            ('{"a": {"b": {"c": {"d": "value"}}}}', "a"),
+            # Empty strings
+            ('{"response": ""}', "response"),
+            # Escaped quotes
+            ('{"response": "He said \\"hello\\""}', "response"),
+        ],
+    )
     def test_repair_known_edge_cases(self, malformed, expected_key):
         """repair_json должен обрабатывать известные edge cases."""
         repaired = repair_json(malformed)
@@ -144,13 +145,16 @@ class TestRepairJson:
         parsed = json.loads(repaired)
         assert expected_key in parsed or len(parsed) > 0
 
-    @pytest.mark.parametrize("malformed", [
-        'not json at all',
-        '',
-        '   ',
-        '{invalid json}',
-        '{"unclosed": "string',
-    ])
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            "not json at all",
+            "",
+            "   ",
+            "{invalid json}",
+            '{"unclosed": "string',
+        ],
+    )
     def test_repair_invalid_input_returns_empty_or_raises(self, malformed):
         """repair_json на полностью невалидном входе возвращает "{}" или бросает."""
         try:
@@ -165,6 +169,7 @@ class TestRepairJson:
 # =================================================================================
 # REPAIR_JSON PROPERTY-BASED TESTS
 # =================================================================================
+
 
 class TestRepairJsonPropertyBased:
     """Property-based тесты для repair_json."""
@@ -183,8 +188,8 @@ class TestRepairJsonPropertyBased:
 
     @pytest.mark.xfail(
         reason="Hypothesis нашёл edge case: ',}' — это невалидный JSON (trailing comma), "
-               "и repair_json правильно его чинит. Тест ожидает, что repair_json не изменит "
-               "валидный JSON, но ',}' невалиден. Требует пересмотра теста."
+        "и repair_json правильно его чинит. Тест ожидает, что repair_json не изменит "
+        "валидный JSON, но ',}' невалиден. Требует пересмотра теста."
     )
     @given(
         response=st.text(min_size=0, max_size=100),
@@ -193,21 +198,24 @@ class TestRepairJsonPropertyBased:
     @settings(max_examples=50)
     def test_repair_valid_json_with_random_strings(self, response, monologue):
         """repair_json не должен ломать валидный JSON со случайными строками.
-        
+
         Используется json.dumps() для корректного экранирования всех
         специальных символов (control characters, кавычки, backslash и т.д.).
         """
         # Правильное построение JSON через json.dumps
         # Он автоматически экранирует control characters (\x00-\x1f),
         # кавычки, backslash и все остальные спецсимволы
-        valid_json = json.dumps({
-            "response": response,
-            "internal_monologue": monologue,
-        }, ensure_ascii=False)
-        
+        valid_json = json.dumps(
+            {
+                "response": response,
+                "internal_monologue": monologue,
+            },
+            ensure_ascii=False,
+        )
+
         repaired = repair_json(valid_json)
         parsed = json.loads(repaired)
-        
+
         # repair_json не должен ломать валидный JSON
         assert "response" in parsed
         assert "internal_monologue" in parsed
@@ -220,18 +228,21 @@ class TestRepairJsonPropertyBased:
 # SAFE_PARSE_JSON TESTS
 # =================================================================================
 
+
 class TestSafeParseJson:
     """Проверяем _safe_parse_json с Pydantic-first подходом."""
 
     def test_parse_valid_json_with_pydantic(self):
         """Валидный JSON → CognitiveOutput через Pydantic."""
-        raw = json.dumps({
-            "response": "test",
-            "internal_monologue": "thinking",
-            "action_intent": "RESPOND",
-            "tool_call": None,
-            "self_reflection": "reflected",
-        })
+        raw = json.dumps(
+            {
+                "response": "test",
+                "internal_monologue": "thinking",
+                "action_intent": "RESPOND",
+                "tool_call": None,
+                "self_reflection": "reflected",
+            }
+        )
         output = _safe_parse_json(raw)
         assert isinstance(output, CognitiveOutput)
         assert output.response == "test"
@@ -259,6 +270,7 @@ class TestSafeParseJson:
 # =================================================================================
 # TOKEN ESTIMATION TESTS
 # =================================================================================
+
 
 class TestTokenEstimation:
     """Проверяем _estimate_tokens с реальным токенизатором."""
@@ -290,6 +302,7 @@ class TestTokenEstimation:
 # =================================================================================
 # TRUNCATE CONTEXT TESTS
 # =================================================================================
+
 
 class TestTruncateContext:
     """Проверяем _truncate_context с relevance-based подходом."""
@@ -327,6 +340,7 @@ class TestTruncateContext:
 # GENERATE_PLAN STRUCTURED ERROR TESTS
 # =================================================================================
 
+
 class TestGeneratePlanStructuredError:
     """Проверяем generate_plan с structured error при failure."""
 
@@ -334,9 +348,10 @@ class TestGeneratePlanStructuredError:
     async def test_generate_plan_returns_structured_error_on_failure(self):
         """generate_plan при failure возвращает structured error, не просто static dict."""
         from unittest.mock import AsyncMock, MagicMock
-        from leya_core.thinker import CoreThinker
+
         from leya_core.config import ThinkerConfig
         from leya_core.exceptions import LeyaLLMError
+        from leya_core.thinker import CoreThinker
 
         # Мокаем LLM client, который всегда падает
         mock_llm = AsyncMock()

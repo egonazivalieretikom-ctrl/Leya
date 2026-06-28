@@ -235,104 +235,6 @@ class HomeostasisEngine:
 
         return None
 
-    async def generate_goal(
-        self,
-        drive_state: dict[str, float],
-        predicted_state: dict[str, float] | None = None,
-        recent_episodes: list[Any] | None = None,
-        action_values: dict[str, float] | None = None,
-    ) -> dict[str, Any] | None:
-        """
-        Генерация цели на основе дисбаланса драйвов.
-        """
-        # Проверка rest period
-        time_since_last_action = time.time() - self.last_action_time
-        if time_since_last_action < self.config.rest_period:
-            logger.debug(
-                f"HomeostasisEngine: Rest period "
-                f"({self.config.rest_period - time_since_last_action:.1f}с осталось)"
-            )
-            return None
-
-        # Вычисление дисбаланса для каждого драйва
-        max_disbalance = 0.0
-        target_drive: DriveType | None = None
-
-        for drive_type_raw, current_value in drive_state.items():
-            # Унификация ключей: поддерживаем как DriveType, так и строковые значения
-            if isinstance(drive_type_raw, str):
-                try:
-                    drive_type = DriveType(drive_type_raw)
-                except ValueError:
-                    logger.warning(f"HomeostasisEngine: Неизвестный тип драйва в drive_state: {drive_type_raw}")
-                    continue
-            else:
-                drive_type = drive_type_raw
-
-            threshold = self.thresholds.get(drive_type, 0.6)
-            # predicted_state может использовать те же ключи, что и drive_state
-            predicted_value = predicted_state.get(drive_type_raw, current_value) if predicted_state else current_value
-
-            # Дисбаланс = отклонение от порога + предсказание (с меньшим весом)
-            current_disbalance = max(0.0, current_value - threshold)
-            predicted_disbalance = max(0.0, predicted_value - threshold) * 0.5
-            total_disbalance = current_disbalance + predicted_disbalance
-
-            if total_disbalance > max_disbalance:
-                max_disbalance = total_disbalance
-                target_drive = drive_type
-
-        # Проверка минимального порога
-        if max_disbalance < self.config.min_reward_threshold:
-            logger.debug(
-                f"HomeostasisEngine: Дисбаланс недостаточен "
-                f"({max_disbalance:.3f} < {self.config.min_reward_threshold})"
-            )
-            return None
-
-        # RPE feedback: корректируем urgency на основе предыдущего опыта
-        urgency_adjustment = self._calculate_rpe_adjustment(action_values)
-
-        # Генерация цели для выбранного драйва
-        if target_drive:
-            goal = self._generate_goal_for_drive(
-                drive_type=target_drive,
-                recent_episodes=recent_episodes,
-                action_values=action_values,
-                urgency_adjustment=urgency_adjustment,
-            )
-
-            if goal:
-                self.current_goal = goal
-                self.last_action_time = time.time()
-
-                # Сохранение в историю (безопасное извлечение value для ключей)
-                self.action_history.append(
-                    {
-                        "goal": goal,
-                        "timestamp": time.time(),
-                        "drive_state": {
-                            (k.value if hasattr(k, 'value') else k): v 
-                            for k, v in drive_state.items()
-                        },
-                    }
-                )
-
-                # Ограничение истории
-                if len(self.action_history) > self.max_action_history:
-                    self.action_history = self.action_history[-self.max_action_history:]
-
-                logger.info(
-                    f"HomeostasisEngine: Сгенерирована цель для {target_drive.value}: "
-                    f"{goal.get('name', 'unknown')} "
-                    f"(urgency={goal.get('urgency', 0.5):.2f}, "
-                    f"disbalance={max_disbalance:.3f})"
-                )
-
-                return goal
-
-        return None
-
     def _generate_goal_for_drive(
         self,
         drive_type: DriveType,
@@ -530,27 +432,7 @@ class HomeostasisEngine:
     
         return facts[:5]  # Не более 5 фактов
 
-    async def extract_new_terms(self, text: str) -> list[str]:
-        """
-        Извлечение новых терминов из текста.
-    
-        Args:
-            text: Текст для анализа
-    
-        Returns:
-            Список новых терминов
-        """
-        if not text:
-            return []
-    
-        # Простая эвристика: слова в кавычках или с заглавной буквы
-        import re
-        terms = re.findall(r'"([^"]+)"', text)
-        terms.extend(re.findall(r'\b([A-ZА-ЯЁ][a-zа-яё]{3,})\b', text))
-    
-        return list(set(terms))[:10]  # Уникальные, не более 10
-
-    async def extract_new_terms(
+    async def extract_new_terms_with_llm(
         self,
         article_text: str,
         llm_client: Callable,

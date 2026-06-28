@@ -91,72 +91,47 @@ class LeyaOS:
         self.name = "Лея"
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
-        self._shutdown_event = asyncio.Event()  # ✅ ДОБАВЛЕНО
-        from leya_core.state_persistence import StatePersistence
-        from pathlib import Path
-
-        self.persistence = StatePersistence(
-            state_file=str(Path(config.memory.brain_dir) / "leya_state.json")
-        )
-        # Конфигурация
+        self._shutdown_event = asyncio.Event()
         self.config = config or LeyaConfig.from_env()
-
+    
         # Конституционный слой
-        self.constitutional: IConstitutionalLayer = ConstitutionalLayer(
+        self.constitutional = ConstitutionalLayer(
             config=self.config.constitutional
         )
-
         self.state_path = Path(config.memory.brain_dir) / "memory_state.json"
-
+    
         # Глобальное рабочее пространство
-        self.workspace: IGlobalWorkspace = GlobalWorkspace(config=self.config.workspace)
-
+        self.workspace = GlobalWorkspace(config=self.config.workspace)
+    
         logger.info("Инициализация когнитивной архитектуры...")
-
+    
         # Ядро когнитивной системы
-        self.drives: IDriveSystem = DriveSystem(config=self.config.drives)
-        self.memory: IMemorySystem = MemorySystem(config=self.config.memory) 
-
-        # Инициализация StatePersistence
-        from leya_core.state_persistence import StatePersistence
+        self.drives = DriveSystem(config=self.config.drives)
+        self.memory = MemorySystem(config=self.config.memory)
+    
+        # Персистентность
         self.persistence = StatePersistence(
             brain_dir=config.memory.brain_dir
         )
-
-        # Инициализация Soul Manager
-        from leya_core.soul_manager import SoulManager
+    
+        # Soul Manager
         self.soul_manager = SoulManager(
             soul_dir=self.config.soul.soul_dir,
             hmac_key=os.environ.get("SOUL_HMAC_KEY"),
         )
         logger.info("SoulManager инициализирован")
-
+    
         # Проверка Protocol-интерфейсов
         if not isinstance(self.memory, IMemorySystem):
-            raise TypeError(f"memory должен реализовывать IMemorySystem, получено {type(self.memory)}")
+            raise TypeError(f"memory должен реализовывать IMemorySystem")
         if not isinstance(self.drives, IDriveSystem):
-            raise TypeError(f"drives должен реализовывать IDriveSystem, получено {type(self.drives)}")
+            raise TypeError(f"drives должен реализовывать IDriveSystem")
         if not isinstance(self.workspace, IGlobalWorkspace):
-            raise TypeError(f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}")
+            raise TypeError(f"workspace должен реализовывать IGlobalWorkspace")
         if not isinstance(self.constitutional, IConstitutionalLayer):
-            raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer, получено {type(self.constitutional)}")
-
-        # Окружение (Web или CLI)
-        if use_web and self.config.web.enabled:
-            self.env: IEnvironment = WebEnvironment(leya_os=self)
-            logger.info("🌐 Используется веб-интерфейс")
-        else:
-            self.env = CLIEnvironment(leya_os=self)
-            logger.info("💻 Используется CLI-интерфейс")
-
-        def __init__(self, config: LeyaConfig, use_web: bool = True):
-
-            from leya_core.state_persistence import StatePersistence
-            self.persistence = StatePersistence(
-                brain_dir=config.memory.brain_dir
-            )
-
-        # ✅ 1. СНАЧАЛА создаём LLM-клиент
+            raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer")
+    
+        # LLM-клиент
         self.llm_client = OllamaClient(
             base_url=self.config.ollama.base_url,
             model=self.config.ollama.model,
@@ -168,100 +143,83 @@ class LeyaOS:
             repeat_penalty=self.config.ollama.repeat_penalty,
         )
         self.llm_client.set_fallback(self._llm_fallback)
-
-        # ✅ 2. Потом thinker
-        self.thinker: ICoreThinker = CoreThinker(
+    
+        # Thinker
+        self.thinker = CoreThinker(
             config=self.config.thinker,
             llm_client=self._llm_call,
         )
-
-        # ✅ 3. Потом request_classifier (использует self.llm_client)
+    
+        # Request Classifier
         self.request_classifier = RequestClassifier(
-            llm_client=self.llm_client,  # ✅ Теперь self.llm_client уже существует
+            llm_client=self.llm_client,
             memory=self.memory,
             use_llm_threshold=0.7,
             cache_similarity_threshold=0.85,
         )
-
+    
         # Гомеостаз
-        self.homeostasis: IHomeostasisEngine = HomeostasisEngine(config=self.config.homeostasis)
-
+        self.homeostasis = HomeostasisEngine(config=self.config.homeostasis)
+    
         # Мета-когниция
-        self.reflection: IMetaCognition = MetaCognition(
+        self.reflection = MetaCognition(
             leya_os=self,
             llm_client=self._llm_call,
             config=self.config.reflection,
         )
-
+    
+        # Окружение
+        if use_web and self.config.web.enabled:
+            self.env = WebEnvironment(leya_os=self)
+            logger.info("Используется веб-интерфейс")
+        else:
+            self.env = CLIEnvironment(leya_os=self)
+            logger.info("Используется CLI-интерфейс")
+    
         # Инструменты
         try:
             self.tools_description = self.env.tool_registry.get_all_descriptions()
-        except LeyaToolError as exc:
-            logger.warning(f"Не удалось получить описания инструментов: {exc}")
+        except Exception:
             self.tools_description = ""
-        except Exception as exc:
-            logger.error(f"Неожиданная ошибка инициализации инструментов: {exc}", exc_info=True)
-            self.tools_description = ""
-
-        # Генератор инструментов
+    
+        # Tool Generator
         self.tool_generator = None
-        if hasattr(self.env, "tool_registry") and self.env.tool_registry is not None:
+        if hasattr(self.env, "tool_registry") and self.env.tool_registry:
             try:
                 self.tool_generator = ToolGenerator(
                     tool_registry=self.env.tool_registry,
                     llm_client=self._llm_call,
                 )
-                logger.info("ToolGenerator инициализирован успешно")
-            except LeyaToolError as exc:
-                logger.warning(f"Не удалось инициализировать ToolGenerator: {exc}")
+            except Exception:
                 self.tool_generator = None
-            except Exception as exc:
-                logger.error(f"Неожиданная ошибка ToolGenerator: {exc}", exc_info=True)
-                self.tool_generator = None
-        else:
-            logger.warning("tool_registry недоступен, ToolGenerator не будет инициализирован")
-
+    
         # Состояние
         self.self_model = ""
         self.running = False
-
-        # Персистентность и метрики
-        self.persistence = StatePersistence()
         self.system_metrics = SystemMetrics()
-
-        # Блокировки и задачи
         self._perceive_lock = asyncio.Lock()
-        self._background_tasks: list[asyncio.Task] = []
-
-        # ✅ 4. Experimental компоненты (feature flags) — ПОСЛЕ self.llm_client
-        self.decision_engine: Optional[IDecisionEngine] = None
-        self.emotional_support: Optional[IEmotionalSupport] = None
+        self._background_tasks = []
+    
+        # Experimental (по умолчанию выключено)
+        self.decision_engine = None
+        self.emotional_support = None
     
         if self.config.experimental.enable_decision_engine:
             try:
                 self.decision_engine = DecisionEngine(self.config)
-                assert isinstance(self.decision_engine, IDecisionEngine)
-                logger.info("✅ DecisionEngine включён (feature flag)")
-            except Exception as e:
-                logger.error(f"Не удалось инициализировать DecisionEngine: {e}", exc_info=True)
+                logger.info("DecisionEngine включён")
+            except Exception:
                 self.decision_engine = None
     
         if self.config.experimental.enable_emotional_support:
             try:
                 self.emotional_support = EmotionalSupport(self.config, self.memory)
-                assert isinstance(self.emotional_support, IEmotionalSupport)
-                logger.info("✅ EmotionalSupport включён (feature flag)")
-            except Exception as e:
-                logger.error(f"Не удалось инициализировать EmotionalSupport: {e}", exc_info=True)
+                logger.info("EmotionalSupport включён")
+            except Exception:
                 self.emotional_support = None
-
-
-        from leya_core.state_persistence import StatePersistence
-        self.persistence = StatePersistence(
-            brain_dir=config.memory.brain_dir
-        )
-
+    
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
+
 
     # =========================================================================
     # Публичные методы
@@ -840,16 +798,7 @@ class LeyaOS:
 
                 # Постобработка
                 response = cognitive_output.get("response", "...")
-                # Пост-обработка: эмоциональная поддержка в ответе — этап 2.2
-                if self.emotional_support and emotion_state and emotion_state.intensity > 0.6:
-                    try:
-                        emotional_response = await self.emotional_support.generate_support_response(
-                            emotion_state, context=response
-                        )
-                        # Объединяем эмоциональный ответ с основным
-                        response = f"{emotional_response}\n\n{response}"
-                    except Exception as e:
-                        logger.error(f"Ошибка генерации эмоционального ответа: {e}", exc_info=True)
+
                 internal_monologue = cognitive_output.get("internal_monologue", "")
                 action_intent = cognitive_output.get("action_intent", "none")
                 self_reflection = cognitive_output.get("self_reflection", "")
@@ -940,6 +889,8 @@ class LeyaOS:
                 except Exception as e:
                     logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
                     # Graceful degradation — продолжаем без эмоционального контекста
+
+
     async def _process_action_intent(
         self, action_intent: str, cognitive_output: dict, stimulus: str
     ) -> None:

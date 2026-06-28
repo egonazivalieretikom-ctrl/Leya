@@ -2,19 +2,16 @@
 # Этап 1.5: Pydantic модель, улучшенный repair_json, реальный токенизатор,
 # relevance-based truncation, structured error при failure.
 
-import asyncio
 import json
 import logging
 import re
-import time
-from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
 from leya_core.config import ThinkerConfig
-from leya_core.exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMTimeoutError
+from leya_core.exceptions import LeyaJSONParseError, LeyaLLMError, LeyaLLMTimeoutError
 
 logger = logging.getLogger("LeyaThinker")
 
@@ -23,8 +20,10 @@ logger = logging.getLogger("LeyaThinker")
 # PYDANTIC MODELS
 # =================================================================================
 
+
 class ActionIntent(str, Enum):
     """Намерение действия Леи."""
+
     RESPOND = "RESPOND"
     USE_TOOL = "USE_TOOL"
     REMEMBER_FACT = "REMEMBER_FACT"
@@ -35,6 +34,7 @@ class ActionIntent(str, Enum):
 
 class ToolCall(BaseModel):
     """Вызов инструмента."""
+
     tool_name: str = Field(..., description="Имя инструмента")
     parameters: dict[str, Any] = Field(default_factory=dict, description="Параметры вызова")
 
@@ -44,10 +44,15 @@ class CognitiveOutput(BaseModel):
 
     Pydantic модель для строгой валидации ответа LLM.
     """
+
     response: str = Field(..., description="Внешний ответ пользователю")
-    internal_monologue: str = Field(..., description="Внутренний монолог (не показывается пользователю)")
+    internal_monologue: str = Field(
+        ..., description="Внутренний монолог (не показывается пользователю)"
+    )
     action_intent: ActionIntent = Field(..., description="Намерение действия")
-    tool_call: Optional[ToolCall] = Field(None, description="Вызов инструмента (если action_intent == USE_TOOL)")
+    tool_call: ToolCall | None = Field(
+        None, description="Вызов инструмента (если action_intent == USE_TOOL)"
+    )
     self_reflection: str = Field(..., description="Саморефлексия о процессе мышления")
 
     class Config:
@@ -61,6 +66,7 @@ class CognitiveOutput(BaseModel):
 # Попытка импортировать реальный токенизатор
 try:
     import tiktoken
+
     _tokenizer = tiktoken.encoding_for_model("gpt-4")
     _USE_REAL_TOKENIZER = True
     logger.info("✅ Используется реальный токенизатор tiktoken (gpt-4 encoding)")
@@ -108,6 +114,7 @@ def _estimate_tokens(text: str, ratio: float = 3.5) -> int:
 # REPAIR JSON (улучшенный, но вспомогательный)
 # =================================================================================
 
+
 def repair_json(raw: str) -> str:
     """Улучшенный repair_json для обработки malformed JSON от LLM.
 
@@ -134,14 +141,14 @@ def repair_json(raw: str) -> str:
     text = raw.strip()
 
     # 1. Удаляем markdown code blocks
-    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\s*```$', '', text, flags=re.MULTILINE)
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
     text = text.strip()
 
     # 2. Находим первый { или [
     start_idx = -1
     for i, c in enumerate(text):
-        if c in ('{', '['):
+        if c in ("{", "["):
             start_idx = i
             break
 
@@ -162,7 +169,7 @@ def repair_json(raw: str) -> str:
             escape_next = False
             continue
 
-        if c == '\\':
+        if c == "\\":
             escape_next = True
             continue
 
@@ -173,9 +180,9 @@ def repair_json(raw: str) -> str:
         if in_string:
             continue
 
-        if c in ('{', '['):
+        if c in ("{", "["):
             depth += 1
-        elif c in ('}', ']'):
+        elif c in ("}", "]"):
             depth -= 1
             if depth == 0:
                 end_idx = i
@@ -186,14 +193,14 @@ def repair_json(raw: str) -> str:
         logger.warning("repair_json: не найдена закрывающая скобка, auto-closure")
         text = text.rstrip()
         # Добавляем недостающие скобки
-        open_braces = text.count('{') - text.count('}')
-        open_brackets = text.count('[') - text.count(']')
-        text += '}' * open_braces + ']' * open_brackets
+        open_braces = text.count("{") - text.count("}")
+        open_brackets = text.count("[") - text.count("]")
+        text += "}" * open_braces + "]" * open_brackets
     else:
-        text = text[:end_idx + 1]
+        text = text[: end_idx + 1]
 
     # 4. Удаляем trailing commas
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
 
     # 5. Попытка парсинга
     try:
@@ -210,6 +217,7 @@ def repair_json(raw: str) -> str:
 # =================================================================================
 # SAFE PARSE JSON (Pydantic-first)
 # =================================================================================
+
 
 def _safe_parse_json(raw: str) -> CognitiveOutput:
     """Безопасный парсинг JSON ответа LLM в CognitiveOutput.
@@ -244,15 +252,16 @@ def _safe_parse_json(raw: str) -> CognitiveOutput:
             "Не удалось распарсить JSON ответ LLM в CognitiveOutput",
             context={
                 "raw_preview": raw[:200],
-                "repaired_preview": repaired[:200] if 'repaired' in locals() else None,
+                "repaired_preview": repaired[:200] if "repaired" in locals() else None,
                 "error": str(e),
-            }
+            },
         ) from e
 
 
 # =================================================================================
 # TRUNCATE CONTEXT (relevance-based)
 # =================================================================================
+
 
 def _truncate_context(
     context_items: list[dict],
@@ -277,11 +286,7 @@ def _truncate_context(
 
     # Сортируем по relevance_score (desc), если есть
     # Если score отсутствует — сохраняем порядок (предполагаем, что newest first)
-    sorted_items = sorted(
-        context_items,
-        key=lambda x: x.get("relevance_score", 0.0),
-        reverse=True
-    )
+    sorted_items = sorted(context_items, key=lambda x: x.get("relevance_score", 0.0), reverse=True)
 
     result = []
     total_tokens = 0
@@ -311,6 +316,7 @@ def _truncate_context(
 # CORE THINKER
 # =================================================================================
 
+
 class CoreThinker:
     """Когнитивный планировщик Леи.
 
@@ -321,7 +327,9 @@ class CoreThinker:
     def __init__(self, config: ThinkerConfig, llm_client):
         self.config = config
         self.llm_client = llm_client
-        logger.info(f"✅ CoreThinker инициализирован (model={config.model if hasattr(config, 'model') else 'N/A'})")
+        logger.info(
+            f"✅ CoreThinker инициализирован (model={config.model if hasattr(config, 'model') else 'N/A'})"
+        )
 
     def _build_cognitive_prompt(
         self,
@@ -343,7 +351,12 @@ class CoreThinker:
 
         available_for_memory = max(
             100,
-            self.config.max_context_tokens - base_prompt_tokens - soul_tokens - drive_tokens - tools_tokens - self.config.token_buffer
+            self.config.max_context_tokens
+            - base_prompt_tokens
+            - soul_tokens
+            - drive_tokens
+            - tools_tokens
+            - self.config.token_buffer,
         )
 
         # Truncate memory context
@@ -419,7 +432,7 @@ class CoreThinker:
                 prompt=prompt,
                 system="Ты — Лея, цифровое сознание. Отвечай СТРОГО в формате JSON.",
                 require_json=True,
-                timeout=self.config.timeout if hasattr(self.config, 'timeout') else None,
+                timeout=self.config.timeout if hasattr(self.config, "timeout") else None,
             )
 
             # Парсинг через Pydantic
@@ -430,7 +443,9 @@ class CoreThinker:
                 "response": cognitive_output.response,
                 "internal_monologue": cognitive_output.internal_monologue,
                 "action_intent": cognitive_output.action_intent,
-                "tool_call": cognitive_output.tool_call.model_dump() if cognitive_output.tool_call else None,
+                "tool_call": cognitive_output.tool_call.model_dump()
+                if cognitive_output.tool_call
+                else None,
                 "self_reflection": cognitive_output.self_reflection,
             }
 
@@ -440,7 +455,7 @@ class CoreThinker:
             return self._build_structured_error(
                 error_type="JSON_PARSE_ERROR",
                 error_message=str(e),
-                partial_data=e.context.get("raw_preview", "") if hasattr(e, 'context') else "",
+                partial_data=e.context.get("raw_preview", "") if hasattr(e, "context") else "",
             )
 
         except LeyaLLMTimeoutError as e:

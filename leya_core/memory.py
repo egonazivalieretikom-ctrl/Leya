@@ -793,7 +793,7 @@ class MemorySystem:
                 batch_embeddings.append(embedding)
                 batch_metadatas.append({
                     "memory_type": engram.memory_type.value,
-                    "timestamp": engram.timestamp,                    # ← ИСПРАВЛЕНО: было created_at
+                    "timestamp": getattr(engram, "timestamp", 0),                 # ← ИСПРАВЛЕНО: было created_at
                     "retention_strength": engram.retention_strength,  # ← ИСПРАВЛЕНО: было recentness_strength
                     "emotional_boost": engram.emotional_boost,
                     "retrieval_count": engram.retrieval_count,
@@ -1327,37 +1327,13 @@ class MemorySystem:
         return h.hexdigest()
 
     def _get_hmac_key(self) -> bytes:
-        """
-        Получение ключа HMAC из окружения.
-
-        Security: Ключ ОБЯЗАТЕЛЕН для работы системы.
-        Слабый дефолт намеренно удалён — использование hardcoded ключа
-        делает HMAC-SHA256 бесполезным (ключ публичен в репозитории).
-
-        Returns:
-            Ключ HMAC в виде bytes
-
-        Raises:
-            LeyaConfigError: Если LEYA_STATE_HMAC_KEY не установлен.
-        """
         key = os.environ.get("LEYA_STATE_HMAC_KEY")
     
-        if not key:
+        if not key or len(key.strip()) < 32:
             raise LeyaConfigError(
-                "LEYA_STATE_HMAC_KEY не установлен в окружении. "
-                "Безопасная персистентность памяти невозможна. "
-                "Добавьте в .env: LEYA_STATE_HMAC_KEY=<сильный-секретный-ключ>",
-                context={
-                    "required_env": "LEYA_STATE_HMAC_KEY",
-                    "hint": "Сгенерируйте ключ: python -c 'import secrets; print(secrets.token_urlsafe(32))'",
-                },
-            )
-    
-        # Проверка минимальной длины (рекомендация NIST: минимум 256 бит = 32 байта)
-        if len(key) < 32:
-            logger.warning(
-                f"LEYA_STATE_HMAC_KEY слишком короткий ({len(key)} символов). "
-                f"Рекомендуется минимум 32 символа (256 бит)."
+                "LEYA_STATE_HMAC_KEY не установлен или слишком короткий (нужно минимум 32 символа). "
+                "Сгенерируй ключ командой: python -c 'import secrets; print(secrets.token_urlsafe(32))' "
+                "и добавь в файл .env: LEYA_STATE_HMAC_KEY=твой_ключ"
             )
     
         return key.encode("utf-8")

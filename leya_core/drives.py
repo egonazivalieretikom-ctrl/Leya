@@ -403,15 +403,6 @@ class DriveSystem:
                 ...
             }
         """
-        return {
-            drive_type.value: {
-                "current": drive.current,
-                "tension": drive.tension,
-                "target": drive.baseline,
-                "satisfaction": getattr(drive, "satisfaction", 0.0),
-            }
-            for drive_type, drive in self.drives.items()
-        }
 
         result = {}
         for drive_type, drive in self.drives.items():
@@ -419,9 +410,7 @@ class DriveSystem:
                 "current": drive.current,
                 "tension": drive.tension,
                 "target": drive.target,
-                "satisfaction": (
-                    drive.current - drive.tension if drive.current > drive.tension else 0.0
-                ),
+                "satisfaction": max(0.0, drive.baseline - drive.current),
             }
         return result
 
@@ -441,7 +430,10 @@ class DriveSystem:
         Возвращает предсказанный дисбаланс для всех драйвов.
         Используется HomeostasisEngine для проактивного планирования.
         """
-        return {drive_type: drive.predicted_deviation for drive_type, drive in self.drives.items()}
+        return {
+            drive_type: drive.predicted - drive.baseline
+            for drive_type, drive in self.drives.items()
+        }
 
     def update_from_system_metrics(self, modifiers: dict[str, float]) -> None:
         """Применяет модификаторы от системных метрик к драйвам."""
