@@ -783,17 +783,26 @@ class LeyaOS:
                     query=stimulus_content, max_results=5
                 )
 
-                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-                self_model_dict = {"self_model": self.self_model}
+                # === Подготовка контекстов под новую сигнатуру CoreThinker.generate_plan ===
+                soul_context = await self.memory.get_self_model_context()
+                drive_context = self.drives.get_internal_state_prompt()
 
-                # Генерация плана
+                # Преобразуем Engram'ы в список словарей (как ожидает thinker)
+                memory_context_for_thinker = [
+                    {
+                        "content": e.content,
+                        "metadata": getattr(e, "metadata", {})
+                    }
+                    for e in memory_context
+                ]
+
+                # Генерация плана (новая чистая сигнатура)
                 cognitive_output = await self.thinker.generate_plan(
                     stimulus=stimulus,
-                    memory_context=[{"content": e.content} for e in memory_context],
-                    drive_state=drive_state,
-                    self_model=self_model_dict,
-                    tools_description=self.tools_description,
-                    tool_context=tool_context,
+                    soul_context=soul_context,
+                    drive_context=drive_context,
+                    memory_context=memory_context_for_thinker,
+                    tools=self.tools_description,   # list[dict] с описаниями инструментов
                 )
 
                 # Постобработка

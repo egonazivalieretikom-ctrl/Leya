@@ -72,6 +72,11 @@ class Drive:
         """Синоним current — напряжение драйва."""
         return self.current
 
+    @property
+    def target(self) -> float:
+        """Целевое значение драйва (baseline как точка гомеостаза)."""
+        return self.baseline
+
 
 class DriveSystem:
     """

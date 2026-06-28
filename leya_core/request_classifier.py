@@ -329,9 +329,8 @@ class RequestClassifier:
             # Используем актуальный API MemorySystem
             similar: list[Engram] = await self.memory.retrieve_context(
                 query=user_input,
-                top_k=3,
-                memory_type="EPISODIC",
-                filters={"type": "user_request"},
+                max_results=5,              # ← правильно
+                min_retention=0.05,
             )
 
             if not similar:
