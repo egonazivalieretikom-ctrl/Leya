@@ -27,7 +27,8 @@ from leya_core.exceptions import (
 )
 import aiohttp 
 
-
+with patch.dict(os.environ, {"LEYA_STATE_HMAC_KEY": "testkeythatislongenoughforhmac32charsminimumxxxx"}):
+    await memory_instance._save_state()
 # =================================================================================
 # MEMORY._save_state
 # =================================================================================

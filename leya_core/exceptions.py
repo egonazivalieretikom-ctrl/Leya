@@ -46,10 +46,6 @@ class LeyaStateVersionMismatchError(LeyaPersistenceError):
     """Версия формата состояния несовместима с текущей."""
 
 
-class LeyaAtomicWriteError(LeyaPersistenceError):
-    """Ошибка атомарной записи (не удалось заменить tmp-файл)."""
-
-
 # --- Memory ---
 class LeyaMemoryError(LeyaError):
     """Базовое исключение для ошибок памяти (ChromaDB, engrams, synapses)."""
