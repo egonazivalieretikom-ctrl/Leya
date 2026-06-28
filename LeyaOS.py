@@ -803,6 +803,7 @@ class LeyaOS:
                     drive_context=drive_context,
                     memory_context=memory_context_for_thinker,
                     tools=self.tools_description,   # list[dict] с описаниями инструментов
+                    tool_context=tool_context,
                 )
 
                 # Постобработка

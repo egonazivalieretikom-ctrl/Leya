@@ -330,6 +330,7 @@ class CoreThinker:
         drive_context: str,
         memory_context: list[dict],
         tools: list[dict],
+        tool_context: str = "",
     ) -> str:
         """Построение когнитивного промпта для LLM.
 
@@ -400,6 +401,7 @@ class CoreThinker:
         drive_context: str,
         memory_context: list[dict],
         tools: list[dict],
+        tool_context: str = "",
     ) -> dict:
         """Генерация когнитивного плана.
 
@@ -410,7 +412,7 @@ class CoreThinker:
             dict с полями CognitiveOutput или structured error
         """
         prompt = self._build_cognitive_prompt(
-            stimulus, soul_context, drive_context, memory_context, tools
+            stimulus, soul_context, drive_context, memory_context, tools, tool_context,
         )
 
         try:
