@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 import os
 from datetime import datetime
 from typing import Any
@@ -23,7 +24,9 @@ logger = logging.getLogger(__name__)
 class StatePersistence:
     """Сохраняет и загружает состояние Леи из JSON файла."""
 
-    def __init__(self, state_file: str = "./leya_brain/leya_state.json") -> None:
+    def __init__(self, state_file: str | None = None, brain_dir: str = "./leya_brain") -> None:
+        if state_file is None:
+            state_file = str(Path(brain_dir) / "leya_state.json")
         self.state_file = state_file
         self._ensure_directory()
 
