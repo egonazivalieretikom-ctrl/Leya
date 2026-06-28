@@ -141,81 +141,63 @@ class IDriveSystem(Protocol):
 
 @runtime_checkable
 class IMemorySystem(Protocol):
-    """
-    Интерфейс системы памяти Леи.
-    Реализация: leya_core.memory.MemorySystem
-
-    Биологически вдохновлённая память: энграммы, синапсы,
-    забывание по Эббингаузу, консолидация во сне, LTP/LTD-подобные механизмы.
-    """
-
+    """Протокол системы памяти Леи."""
+    
     async def store_perception(
-        self, content: str, emotional_boost: float = 0.0, metadata: dict[str, Any] | None = None
-    ) -> Engram:
-        """Сохраняет восприятие как энграмму + эмбеддинг + формирует синапсы (LTP)."""
-        ...
-
-    async def retrieve_context(
-        self, query: str, max_results: int = 5, min_retention: float = 0.1
-    ) -> list[Engram]:
-        """Извлекает релевантный контекст с фильтром забывания + усилением синапсов."""
-        ...
-
-    async def store_fact(
-        self, content: str, metadata: dict[str, Any] | None = None
-    ) -> Engram:
-        """Сохраняет семантический факт."""
-        ...
-
-    async def consolidate_memories(self) -> dict[str, Any]:
-        """
-        Консолидация: replay эпизодов + извлечение семантических фактов + забывание слабых.
-        Возвращает статистику: {replayed, facts_extracted, forgotten, new_semantic}.
-        """
-        ...
-
-    async def update_self_model(self, reflection: str) -> None:
-        """Обновляет само-модель Леи на основе рефлексии/инсайта."""
-        ...
-
-    async def get_self_model_context(self) -> str:
-        """Возвращает текущую само-модель как строку для промпта."""
-        ...
-
-    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
-        """Возвращает недавние спонтанные мысли."""
-        ...
-
-    async def get_recent_episodes(self, limit: int = 10) -> list[Engram]:
-        """Возвращает недавние эпизодические энграммы."""
-        ...
-
-    async def get_recent_semantic_facts(self, limit: int = 5) -> list[str]:
-        """Возвращает недавние семантические факты (используется MetaCognition)."""
-        ...
-
-    async def forget_weak_memories(self, threshold: float = 0.1) -> int:
-        """Удаляет энграммы с retention_strength ниже порога. Возвращает кол-во удалённых."""
-        ...
-
-    async def get_memory_graph_data(
         self,
-        min_retention: float = 0.1,
-        max_nodes: int = 100,
-        include_synapses: bool = True,
-    ) -> dict[str, Any]:
-        """
-        Возвращает данные для визуализации графа памяти.
-        {"nodes": [...], "edges": [...], "total_engrams": int, "total_synapses": int}
-        """
+        content: str,
+        emotional_boost: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Сохранение восприятия в память."""
         ...
-
+    
+    async def store_fact(
+        self,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Сохранение факта в семантическую память."""
+        ...
+    
+    async def retrieve_context(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> list[Any]:
+        """Получение релевантного контекста из памяти."""
+        ...
+    
+    async def consolidate_memories(self) -> dict[str, Any]:
+        """Консолидация памяти (фоновая задача)."""
+        ...
+    
+    async def update_self_model(self, reflection: str) -> None:
+        """Обновление модели себя на основе рефлексии."""
+        ...
+    
+    async def get_self_model_context(self) -> str:
+        """Получение контекста модели себя для промптов."""
+        ...
+    
+    async def get_recent_episodes(self, limit: int = 10) -> list[Any]:
+        """Получение недавних эпизодов."""
+        ...
+    
+    async def forget_weak_memories(self) -> int:
+        """Забывание слабых воспоминаний."""
+        ...
+    
+    def get_memory_graph_data(self) -> dict[str, Any]:
+        """Получение данных графа памяти для визуализации."""
+        ...
+    
     async def _save_state(self) -> None:
-        """Атомарное сохранение состояния в JSON с HMAC-подписью."""
+        """Сохранение состояния памяти (приватный метод)."""
         ...
-
+    
     async def _load_state(self) -> None:
-        """Загрузка состояния из JSON с проверкой HMAC и версии."""
+        """Загрузка состояния памяти (приватный метод)."""
         ...
 
 

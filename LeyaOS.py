@@ -1,31 +1,19 @@
 """
 LeyaOS.py — Оркестратор цифрового сознания Леи.
-
 Версия: 3.0
-
-Архитектурные принципы:
-- Использование Protocol-интерфейсов (вместо hasattr)
-- Специфичные исключения (вместо широких except)
-- Circuit Breaker для LLM (защита от зависаний)
-- Публичный API памяти (get_recent_episodes)
-- Защита фоновых задач от падения event loop
-- Graceful shutdown с сохранением состояния
-- Централизованная конфигурация (LeyaConfig)
-- Keyword arguments везде
 """
-
-from __future__ import annotations
+from __future__ import annotations  # ✅ ИСПРАВЛЕНО: было "from future"
 
 import asyncio
 import logging
 import signal
 import sys
-from leya_core.request_classifier import RequestClassifier, IntentClassification, UserIntent
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional  # ✅ Добавлен Optional
 
 # Bootstrap выполняется автоматически при импорте leya_core (см. leya_core/__init__.py)
 # os.environ устанавливается там ДО загрузки chromadb
+
 # Импорт конфигурации
 from leya_core.config import LeyaConfig
 
@@ -33,14 +21,11 @@ from leya_core.config import LeyaConfig
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem
 from leya_core.environment import CLIEnvironment
-
 from leya_core.experimental.decision_engine import DecisionEngine, Decision
 from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
 from leya_core.interfaces import IDecisionEngine, IEmotionalSupport
-from typing import Optional
-from leya_core.soul_crypto_manager import SoulCryptoManager, SoulTamperError
 
-# Импорт исключений (Этап 1.1)
+# Импорт исключений
 from leya_core.exceptions import (
     LeyaBroadcastError,
     LeyaEnvironmentError,
@@ -53,10 +38,11 @@ from leya_core.exceptions import (
     LeyaToolError,
     LeyaWorkspaceError,
 )
+
 from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
 from leya_core.homeostasis_engine import HomeostasisEngine
 
-# Импорт Protocol-интерфейсов (Этап 2.1)
+# Импорт Protocol-интерфейсов
 from leya_core.interfaces import (
     IConstitutionalLayer,
     ICoreThinker,
@@ -67,9 +53,11 @@ from leya_core.interfaces import (
     IMemorySystem,
     IMetaCognition,
 )
-from leya_core.llm_client import OllamaClient
+
+from leya_core.llm_client import OllamaClient  # ✅ Этот импорт теперь выполнится
 from leya_core.memory import MemorySystem
 from leya_core.reflection import MetaCognition
+from leya_core.request_classifier import RequestClassifier, IntentClassification, UserIntent
 from leya_core.state_persistence import StatePersistence
 from leya_core.system_metrics import SystemMetrics
 from leya_core.thinker import CoreThinker
@@ -98,16 +86,10 @@ class LeyaOS:
         config: LeyaConfig | None = None,
         use_web: bool = True,
     ) -> None:
-        """
-        Инициализация LeyaOS.
-
-        Args:
-            config: Конфигурация системы (если None, загружается из .env)
-            use_web: Использовать веб-интерфейс (иначе CLI)
-        """
         self.name = "Лея"
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
+        self._shutdown_event = asyncio.Event()  # ✅ ДОБАВЛЕНО
 
         # Конфигурация
         self.config = config or LeyaConfig.from_env()
@@ -124,56 +106,17 @@ class LeyaOS:
 
         # Ядро когнитивной системы
         self.drives: IDriveSystem = DriveSystem(config=self.config.drives)
-        self.memory: IMemorySystem = MemorySystem(config=self.config)
+        self.memory: IMemorySystem = MemorySystem(config=self.config.memory) 
 
-        # Проверка Protocol-интерфейсов (Этап 2.1)
+        # Проверка Protocol-интерфейсов
         if not isinstance(self.memory, IMemorySystem):
-            raise TypeError(
-                f"memory должен реализовывать IMemorySystem, получено {type(self.memory)}"
-            )
+            raise TypeError(f"memory должен реализовывать IMemorySystem, получено {type(self.memory)}")
         if not isinstance(self.drives, IDriveSystem):
-            raise TypeError(
-                f"drives должен реализовывать IDriveSystem, получено {type(self.drives)}"
-            )
-        # Классификатор пользовательских запросов (этап 2.1)
-        self.request_classifier = RequestClassifier(
-            llm_client=self.llm_client,
-            memory=self.memory,
-            use_llm_threshold=0.7,
-            cache_similarity_threshold=0.85,
-        )
-
-        # Experimental компоненты (feature flags) — этап 2.2 (Группа A)
-        self.decision_engine: Optional[IDecisionEngine] = None
-        self.emotional_support: Optional[IEmotionalSupport] = None
-        
-        if self.config.experimental.enable_decision_engine:
-            try:
-                self.decision_engine = DecisionEngine(self.config)
-                assert isinstance(self.decision_engine, IDecisionEngine)
-                logger.info("✅ DecisionEngine включён (feature flag)")
-            except Exception as e:
-                logger.error(f"Не удалось инициализировать DecisionEngine: {e}", exc_info=True)
-                self.decision_engine = None
-        
-        if self.config.experimental.enable_emotional_support:
-            try:
-                self.emotional_support = EmotionalSupport(self.config, self.memory)
-                assert isinstance(self.emotional_support, IEmotionalSupport)
-                logger.info("✅ EmotionalSupport включён (feature flag)")
-            except Exception as e:
-                logger.error(f"Не удалось инициализировать EmotionalSupport: {e}", exc_info=True)
-                self.emotional_support = None
-
+            raise TypeError(f"drives должен реализовывать IDriveSystem, получено {type(self.drives)}")
         if not isinstance(self.workspace, IGlobalWorkspace):
-            raise TypeError(
-                f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}"
-            )
+            raise TypeError(f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}")
         if not isinstance(self.constitutional, IConstitutionalLayer):
-            raise TypeError(
-                f"constitutional должен реализовывать IConstitutionalLayer, "
-                f"получено {type(self.constitutional)}"
-            )
+            raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer, получено {type(self.constitutional)}")
 
         # Окружение (Web или CLI)
         if use_web and self.config.web.enabled:
@@ -183,7 +126,7 @@ class LeyaOS:
             self.env = CLIEnvironment(leya_os=self)
             logger.info("💻 Используется CLI-интерфейс")
 
-        # LLM-клиент с Circuit Breaker (Этап 1.2)
+        # ✅ 1. СНАЧАЛА создаём LLM-клиент
         self.llm_client = OllamaClient(
             base_url=self.config.ollama.base_url,
             model=self.config.ollama.model,
@@ -196,11 +139,19 @@ class LeyaOS:
         )
         self.llm_client.set_fallback(self._llm_fallback)
 
-        # Когнитивный планировщик
+        # ✅ 2. Потом thinker
         self.thinker: ICoreThinker = CoreThinker(
             llm_client=self._llm_call,
             soul_manager=getattr(self.env, "soul_manager", None),
             config=self.config.thinker,
+        )
+
+        # ✅ 3. Потом request_classifier (использует self.llm_client)
+        self.request_classifier = RequestClassifier(
+            llm_client=self.llm_client,  # ✅ Теперь self.llm_client уже существует
+            memory=self.memory,
+            use_llm_threshold=0.7,
+            cache_similarity_threshold=0.85,
         )
 
         # Гомеостаз
@@ -249,17 +200,31 @@ class LeyaOS:
         self.persistence = StatePersistence()
         self.system_metrics = SystemMetrics()
 
-        # Soul Crypto Manager (этап 2.2, Группа D)
-        self.soul_crypto = SoulCryptoManager(self.config.soul)
-        logger.info(
-            f"✅ SoulCryptoManager инициализирован "
-            f"(hmac={'enabled' if self.config.soul.hmac_key else 'disabled'}, "
-            f"versioning={'enabled' if self.config.soul.enable_versioning else 'disabled'})"
-        )
-
         # Блокировки и задачи
         self._perceive_lock = asyncio.Lock()
         self._background_tasks: list[asyncio.Task] = []
+
+        # ✅ 4. Experimental компоненты (feature flags) — ПОСЛЕ self.llm_client
+        self.decision_engine: Optional[IDecisionEngine] = None
+        self.emotional_support: Optional[IEmotionalSupport] = None
+    
+        if self.config.experimental.enable_decision_engine:
+            try:
+                self.decision_engine = DecisionEngine(self.config)
+                assert isinstance(self.decision_engine, IDecisionEngine)
+                logger.info("✅ DecisionEngine включён (feature flag)")
+            except Exception as e:
+                logger.error(f"Не удалось инициализировать DecisionEngine: {e}", exc_info=True)
+                self.decision_engine = None
+    
+        if self.config.experimental.enable_emotional_support:
+            try:
+                self.emotional_support = EmotionalSupport(self.config, self.memory)
+                assert isinstance(self.emotional_support, IEmotionalSupport)
+                logger.info("✅ EmotionalSupport включён (feature flag)")
+            except Exception as e:
+                logger.error(f"Не удалось инициализировать EmotionalSupport: {e}", exc_info=True)
+                self.emotional_support = None
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 

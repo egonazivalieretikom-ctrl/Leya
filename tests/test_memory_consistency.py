@@ -13,7 +13,7 @@ import pytest
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from pathlib import Path
-
+from sentence_transformers import SentenceTransformer
 from leya_core.exceptions import LeyaMemoryError
 
 
@@ -129,7 +129,7 @@ def memory_with_fake_chroma(tmp_path):
         mock_client_cls.return_value = fake_client
 
         # Мокаем sentence-transformers (эмбеддинги)
-        with patch("leya_core.memory.SentenceTransformer") as mock_st:
+        with patch("sentence_transformers.SentenceTransformer") as mock_st:  
             mock_model = MagicMock()
             mock_model.encode.return_value = [[0.1] * 384]
             mock_st.return_value = mock_model

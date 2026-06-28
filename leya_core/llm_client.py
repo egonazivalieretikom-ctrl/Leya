@@ -156,7 +156,8 @@ class OllamaClient:
         failure_threshold: int = 3,
         recovery_timeout: float = 60.0,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.config = config
+        self.base_url = config.base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.temperature = temperature

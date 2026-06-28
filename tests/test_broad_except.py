@@ -11,6 +11,10 @@ import asyncio
 import json
 import os
 import pytest
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from LeyaOS import LeyaOS 
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 from leya_core.exceptions import (
@@ -114,13 +118,28 @@ class TestLLMClientChat:
     def client(self):
         from leya_core.llm_client import OllamaClient
         from leya_core.config import OllamaConfig
+    
         cfg = OllamaConfig()
-        c = OllamaClient(cfg)
+    
+        # Создаём OllamaClient с отдельными параметрами (как в LeyaOS.py)
+        c = OllamaClient(
+            base_url=cfg.base_url,
+            model=cfg.model,
+            timeout=cfg.timeout,
+            temperature=cfg.temperature,
+            top_p=cfg.top_p,
+            top_k=cfg.top_k,
+            max_tokens=cfg.max_tokens,
+            repeat_penalty=cfg.repeat_penalty,
+        )
+    
+        # Мокаем сессию и breaker
         c._session = AsyncMock()
         c._breaker = MagicMock()
         c._breaker.is_available.return_value = True
         c._breaker.record_success = MagicMock()
         c._breaker.record_failure = MagicMock()
+    
         return c
 
     @pytest.mark.asyncio
@@ -193,7 +212,10 @@ class TestLeyaShutdown:
     async def test_shutdown_logs_errors_but_does_not_crash(self, caplog):
         """Если один из компонентов падает при сохранении — shutdown продолжается и логирует."""
         import logging
-        from leya_core import LeyaOS
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from LeyaOS import LeyaOS
         from leya_core.config import LeyaConfig
 
         # Создаём OS без полного init
@@ -204,6 +226,8 @@ class TestLeyaShutdown:
         os_instance.drives = MagicMock()
         os_instance.homeostasis = MagicMock()
         os_instance._shutdown_event = asyncio.Event()
+        os_instance._background_tasks = []  # ✅ ДОБАВЛЕНО
+        os_instance.llm_client = None  # ✅ ДОБАВЛЕНО
 
         with caplog.at_level(logging.ERROR):
             # Не должно упасть
@@ -216,7 +240,10 @@ class TestLeyaShutdown:
     @pytest.mark.asyncio
     async def test_shutdown_succeeds_when_all_components_ok(self):
         """Если всё ок — shutdown проходит без ошибок."""
-        from leya_core import LeyaOS
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from LeyaOS import LeyaOS
         from leya_core.config import LeyaConfig
 
         os_instance = LeyaOS.__new__(LeyaOS)
@@ -226,6 +253,8 @@ class TestLeyaShutdown:
         os_instance.drives = MagicMock()
         os_instance.homeostasis = MagicMock()
         os_instance._shutdown_event = asyncio.Event()
+        os_instance._background_tasks = []  # ✅ ДОБАВЛЕНО
+        os_instance.llm_client = None  # ✅ ДОБАВЛЕНО
 
         await os_instance.shutdown()
         os_instance.memory._save_state.assert_awaited()

@@ -187,15 +187,28 @@ class TestRepairJsonPropertyBased:
     )
     @settings(max_examples=50)
     def test_repair_valid_json_with_random_strings(self, response, monologue):
-        """repair_json не должен ломать валидный JSON со случайными строками."""
-        # Экранируем кавычки для валидного JSON
-        response_escaped = response.replace('"', '\\"')
-        monologue_escaped = monologue.replace('"', '\\"')
+        """repair_json не должен ломать валидный JSON со случайными строками.
         
-        valid_json = f'{{"response": "{response_escaped}", "internal_monologue": "{monologue_escaped}"}}'
+        Используется json.dumps() для корректного экранирования всех
+        специальных символов (control characters, кавычки, backslash и т.д.).
+        """
+        # Правильное построение JSON через json.dumps
+        # Он автоматически экранирует control characters (\x00-\x1f),
+        # кавычки, backslash и все остальные спецсимволы
+        valid_json = json.dumps({
+            "response": response,
+            "internal_monologue": monologue,
+        }, ensure_ascii=False)
+        
         repaired = repair_json(valid_json)
         parsed = json.loads(repaired)
+        
+        # repair_json не должен ломать валидный JSON
         assert "response" in parsed
+        assert "internal_monologue" in parsed
+        # Значения должны совпадать (с точностью до нормализации)
+        assert parsed["response"] == response
+        assert parsed["internal_monologue"] == monologue
 
 
 # =================================================================================

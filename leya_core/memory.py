@@ -205,7 +205,7 @@ class MemorySystem:
         self.synapses: dict[str, Synapse] = {}
         self.self_model: str = ""
         self._state_version = 3
-        self.state_path = Path(self.memory_config.brain_dir) / "memory_state.pkl"
+        self.state_path = Path(self.config.brain_dir) / "memory_state.json"
 
 
         # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig

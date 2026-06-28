@@ -14,7 +14,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, ValidationError
 
 from leya_core.config import ThinkerConfig
-from .exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMTimeoutError
+from leya_core.exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMTimeoutError
 
 logger = logging.getLogger("LeyaThinker")
 
