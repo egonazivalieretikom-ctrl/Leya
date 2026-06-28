@@ -2,17 +2,22 @@
 # Этап 2.1: Трёхуровневая классификация (эвристика → cache → LLM) с
 # confidence-based routing и graceful degradation.
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Any
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from .exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMUnavailableError
+
+if TYPE_CHECKING:
+    from .memory import Engram
 
 logger = logging.getLogger("LeyaRequestClassifier")
 
