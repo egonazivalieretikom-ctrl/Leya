@@ -805,6 +805,8 @@ class LeyaOS:
                     tools=self.tools_description,   # list[dict] с описаниями инструментов
                     tool_context=tool_context,
                 )
+                logger.info(f"Лея ответила: {cognitive_output.get('response', '')[:200]}...")
+                logger.debug(f"Внутренний монолог: {cognitive_output.get('internal_monologue', '')}")
 
                 # Постобработка
                 response = cognitive_output.get("response", "...")
