@@ -195,48 +195,22 @@ class MemorySystem:
     - Эмоциональное усиление: замедление забывания для значимых событий
     """
 
-    def __init__(self, config=None,) -> None:
-        self.config = config 
-
-        # Инициализация state_path с защитой от None
-        if self.config is not None:
-            if hasattr(self.config, 'brain_dir'):
-                brain_dir = self.config.brain_dir
-            elif hasattr(self.config, 'memory') and self.config.memory is not None:
-                brain_dir = self.config.memory.brain_dir
-            else:
-                brain_dir = "./leya_brain"
-        else:
-            brain_dir = "./leya_brain"
-    
-        self.state_path = Path(brain_dir) / "memory_state.json"
-
-        # ✅ СНАЧАЛА определяем memory_config
+    def __init__(self, config=None) -> None:
         if isinstance(config, LeyaConfig):
             self.config = config
             self.memory_config = config.memory
+            brain_dir = config.memory.brain_dir
         elif isinstance(config, MemoryConfig):
             self.config = None
             self.memory_config = config
+            brain_dir = config.brain_dir
         else:
-            raise TypeError(
-                f"config должен быть LeyaConfig или MemoryConfig, получено {type(config)}"
-            )
-        self.state_path = Path(config.brain_dir) / "memory_state.json"
-
-        # ✅ ПОСЛЕ этого используем memory_config.brain_dir
-        self.engrams: dict[str, Engram] = {}
-        self.synapses: dict[str, Synapse] = {}
-        self.self_model: str = ""
-        if hasattr(self.config, 'memory') and self.config.memory is not None:
-            brain_dir = self.config.memory.brain_dir
-        elif hasattr(self.config, 'brain_dir'):
-            brain_dir = self.config.brain_dir
-        else:
-            brain_dir = "./leya_brain"
+            raise TypeError(...)
 
         self.state_path = Path(brain_dir) / "memory_state.json"
-        self.state_path = Path(config.brain_dir) / "memory_state.json"
+        self.engrams = {}
+        self.synapses = {}
+        self.self_model = ""
         self._state_version = 3
 
         # Инициализация ChromaDB
@@ -1052,6 +1026,153 @@ class MemorySystem:
             if tmp_path.exists():
                 with contextlib.suppress(OSError):
                     tmp_path.unlink()
+
+    async def _load_state(self) -> None:
+        """
+        Загрузка состояния памяти с проверкой HMAC-SHA256 и версии.
+        После успешной загрузки выполняет синхронизацию in-memory ↔ ChromaDB
+        для обеспечения consistency.
+        
+        Raises:
+            LeyaStateCorruptedError: Если файл повреждён, HMAC не совпадает
+                                     или отсутствует HMAC-файл.
+            LeyaStateVersionMismatchError: Если версия несовместима и нет
+                                           структуры data для миграции.
+            LeyaMemoryError: При ошибках чтения файла.
+        """
+        state_path = Path(self.state_path).expanduser().resolve()
+        
+        # Если файл не существует — инициализируем пустое состояние
+        if not state_path.exists():
+            logger.info(
+                f"Файл состояния памяти не найден: {state_path}. "
+                f"Инициализация пустого состояния."
+            )
+            self.engrams = {}
+            self.synapses = {}
+            self.self_model = ""
+            return
+        
+        hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+        
+        # Проверка целостности через HMAC-SHA256
+        key = self._get_hmac_key()
+        if hmac_path.exists():
+            expected = hmac_path.read_text(encoding="utf-8").strip()
+            actual = self._compute_hmac(state_path, key)
+            if not hmac.compare_digest(expected, actual):
+                raise LeyaStateCorruptedError(
+                    "HMAC memory_state не совпадает — файл мог быть подделан или повреждён",
+                    context={"path": str(state_path)},
+                )
+        else:
+            # Отсутствие HMAC — нарушение целостности (критическая уязвимость)
+            raise LeyaStateCorruptedError(
+                "Отсутствует HMAC-файл для memory_state — невозможно проверить целостность",
+                context={"path": str(state_path)},
+            )
+        
+        # Загрузка JSON с конкретными исключениями (без broad except)
+        import json
+        try:
+            with state_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise LeyaStateCorruptedError(
+                "Повреждён файл memory_state (невалидный JSON)",
+                context={"path": str(state_path), "error": str(exc)},
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise LeyaStateCorruptedError(
+                "Повреждён файл memory_state (ошибка кодировки)",
+                context={"path": str(state_path), "error": str(exc)},
+            ) from exc
+        except OSError as exc:
+            raise LeyaMemoryError(
+                "Ошибка чтения файла memory_state",
+                context={"path": str(state_path), "error": str(exc)},
+            ) from exc
+        
+        # Проверка структуры
+        if not isinstance(raw, dict):
+            raise LeyaStateCorruptedError(
+                "Файл memory_state имеет некорректную структуру (ожидается dict)",
+                context={"path": str(state_path)},
+            )
+        
+        file_version = raw.get("__version__")
+        
+        # Обработка несовпадения версий с попыткой миграции
+        if file_version != MEMORY_STATE_VERSION:
+            logger.warning(
+                f"Несовпадение версий состояния: ожидалось {MEMORY_STATE_VERSION}, "
+                f"загружено {file_version}. Попытка миграции."
+            )
+            
+            # Если есть структура data — пытаемся загрузить (миграция)
+            if "data" in raw and isinstance(raw["data"], dict):
+                data = raw["data"]
+                self.engrams = {
+                    k: Engram.from_dict(v)
+                    for k, v in data.get("engrams", {}).items()
+                }
+                self.synapses = {
+                    k: Synapse.from_dict(v)
+                    for k, v in data.get("synapses", {}).items()
+                }
+                self.self_model = data.get("self_model", "")
+                logger.info(
+                    f"Миграция состояния: загружено {len(self.engrams)} энграмм, "
+                    f"{len(self.synapses)} синапсов"
+                )
+            else:
+                raise LeyaStateVersionMismatchError(
+                    "Несовместимая версия memory_state и отсутствует структура data для миграции",
+                    context={
+                        "file_version": file_version,
+                        "expected_version": MEMORY_STATE_VERSION,
+                    },
+                )
+        else:
+            # Версия совпадает — стандартная загрузка
+            data = raw.get("data", {})
+            if not isinstance(data, dict):
+                raise LeyaStateCorruptedError(
+                    "Секция 'data' в memory_state имеет некорректную структуру",
+                    context={"path": str(state_path)},
+                )
+            
+            self.engrams = {
+                k: Engram.from_dict(v)
+                for k, v in data.get("engrams", {}).items()
+            }
+            self.synapses = {
+                k: Synapse.from_dict(v)
+                for k, v in data.get("synapses", {}).items()
+            }
+            self.self_model = data.get("self_model", "")
+        
+        logger.info(
+            f"Состояние памяти загружено: {len(self.engrams)} энграмм, "
+            f"{len(self.synapses)} синапсов"
+        )
+        
+        # Синхронизация in-memory ↔ ChromaDB для обеспечения consistency
+        try:
+            await self._sync_chroma_from_memory()
+        except LeyaMemoryError as exc:
+            # Специфичное исключение — логируем как warning, не прерываем загрузку
+            logger.warning(
+                f"Синхронизация с ChromaDB после загрузки не удалась: {exc}. "
+                f"Продолжаем работу, но consistency может быть нарушена."
+            )
+        except Exception as exc:
+            # Неожиданная ошибка — логируем, но не прерываем загрузку состояния
+            logger.warning(
+                f"Неожиданная ошибка синхронизации с ChromaDB: {exc}. "
+                f"Продолжаем работу, но consistency может быть нарушена.",
+                exc_info=True,
+            )
 
     async def _sync_collection(self, memory_type: MemoryType, collection, report) -> None:
         """Синхронизация одной коллекции (episodic или semantic)."""
