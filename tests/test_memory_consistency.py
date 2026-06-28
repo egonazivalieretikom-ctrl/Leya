@@ -275,19 +275,22 @@ class TestLoadStateSync:
     async def test_load_state_calls_sync(self, memory_with_fake_chroma, tmp_path):
         """После _load_state Chroma синхронизирована с JSON."""
         mem, fake_client = memory_with_fake_chroma
-
-        # Готовим JSON с engram
+        
+        # ИСПРАВЛЕНО: Используем "__version__" и структуру "data"
         state = {
-            "version": 3,
-            "engrams": {
-                "e1": _make_engram("e1", "from json", "EPISODIC").to_dict()
-            },
-            "synapses": {},
-            "self_model": "test",
+            "__version__": 3,
+            "data": {
+                "engrams": {
+                    "e1": _make_engram("e1", "from json", "EPISODIC").to_dict()
+                },
+                "synapses": {},
+                "self_model": "test",
+            }
         }
+        
         state_path = tmp_path / "memory_state.json"
         state_path.write_text(json.dumps(state), encoding="utf-8")
-
+        
         # HMAC
         import hmac, hashlib
         hmac_hex = hmac.new(
@@ -296,13 +299,13 @@ class TestLoadStateSync:
             hashlib.sha256
         ).hexdigest()
         (tmp_path / "memory_state.json.hmac").write_text(hmac_hex, encoding="utf-8")
-
+        
         # Chroma пуст
         assert fake_client.collections["episodic"].count() == 0
-
+        
         # Загружаем
         await mem._load_state()
-
+        
         # После load должен быть sync — engram появился в Chroma
         assert fake_client.collections["episodic"].count() == 1
         assert "e1" in fake_client.collections["episodic"]._store
@@ -312,15 +315,23 @@ class TestLoadStateSync:
         """Если в Chroma есть orphan, а в JSON нет — после load orphan удалён."""
         mem, fake_client = memory_with_fake_chroma
         epi = fake_client.collections["episodic"]
-
+        
         # В Chroma есть orphan
         epi.upsert(ids=["orphan"], documents=["x"])
-
-        # В JSON пусто
-        state = {"version": 3, "engrams": {}, "synapses": {}, "self_model": ""}
+        
+        # ИСПРАВЛЕНО: Используем "__version__" и структуру "data"
+        state = {
+            "__version__": 3,
+            "data": {
+                "engrams": {},
+                "synapses": {},
+                "self_model": ""
+            }
+        }
+        
         state_path = tmp_path / "memory_state.json"
         state_path.write_text(json.dumps(state), encoding="utf-8")
-
+        
         import hmac, hashlib
         hmac_hex = hmac.new(
             b"test_key",
@@ -328,9 +339,9 @@ class TestLoadStateSync:
             hashlib.sha256
         ).hexdigest()
         (tmp_path / "memory_state.json.hmac").write_text(hmac_hex, encoding="utf-8")
-
+        
         await mem._load_state()
-
+        
         # Orphan должен быть удалён
         assert epi.count() == 0
 

@@ -87,11 +87,7 @@ class LeyaOS:
     - Обработку ошибок и защиту от падения event loop
     """
 
-    def __init__(
-        self,
-        config: LeyaConfig | None = None,
-        use_web: bool = True,
-    ) -> None:
+    def __init__(self, config: LeyaConfig, use_web: bool = True):
         self.name = "Лея"
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
@@ -100,7 +96,7 @@ class LeyaOS:
         from pathlib import Path
 
         self.persistence = StatePersistence(
-            state_file=str(Path(config.memory.brain_dir) / "leya_state.json")  # ✅ Правильно
+            state_file=str(Path(config.memory.brain_dir) / "leya_state.json")
         )
         # Конфигурация
         self.config = config or LeyaConfig.from_env()
@@ -110,7 +106,7 @@ class LeyaOS:
             config=self.config.constitutional
         )
 
-        self.state_path = Path(config.brain_dir) / "memory_state.json"
+        self.state_path = Path(config.memory.brain_dir) / "memory_state.json"
 
         # Глобальное рабочее пространство
         self.workspace: IGlobalWorkspace = GlobalWorkspace(config=self.config.workspace)
@@ -476,51 +472,21 @@ class LeyaOS:
         errors: list[tuple[str, Exception]] = []
 
         # 1. Память
-        if self.memory is not None:
-            try:
-                await self.memory._save_state()
-                logger.info("✅ Состояние памяти сохранено")
-            except LeyaAtomicWriteError as e:
-                logger.error(
-                    f"Ошибка атомарной записи памяти при shutdown: {e}",
-                    exc_info=True,
-                    extra={"component": "memory"},
-                )
-                errors.append(("memory.atomic_write", e))
-            except LeyaMemoryError as e:
-                logger.error(
-                    f"Ошибка памяти при shutdown: {e}",
-                    exc_info=True,
-                    extra={"component": "memory"},
-                )
-                errors.append(("memory", e))
+        try:
+            await self.memory._save_state()
+        except Exception as e:
+            logger.error(f"Ошибка атомарной записи памяти при shutdown: {e}")
+            errors.append(f"memory: {e}")
 
         # 2. Драйвы + Гомеостаз — через StatePersistence
-        if self.persistence is not None:
+        persistence = getattr(self, 'persistence', getattr(self, 'state_persistence', None))
+        if persistence is not None:
             try:
-                state_to_save = {}
-                if self.drives is not None:
-                    state_to_save["drives"] = self.drives.get_drives_state()
-                if self.homeostasis is not None:
-                    state_to_save["homeostasis"] = {
-                        "current_goal": getattr(self.homeostasis, "current_goal", None),
-                        "last_action_time": getattr(self.homeostasis, "last_action_time", None),
-                    }
-                self.persistence.save_state(state_to_save)
-                logger.info("✅ Состояние драйвов и гомеостаза сохранено")
-            except (OSError, LeyaError) as e:
-                logger.error(
-                    f"Ошибка сохранения состояния: {e}",
-                    exc_info=True,
-                    extra={"component": "persistence"},
-                )
-                errors.append(("persistence", e))
-
-        if errors:
-            logger.warning(
-                f"⚠️ Shutdown завершился с {len(errors)} ошибкой(ами): "
-                + ", ".join(name for name, _ in errors)
-            )
+                await persistence.save_state()
+            except Exception as e:
+                logger.error(f"Ошибка сохранения состояния persistence при shutdown: {e}")
+                errors.append(f"persistence: {e}")
+                
         return errors
 
     async def shutdown(self) -> None:

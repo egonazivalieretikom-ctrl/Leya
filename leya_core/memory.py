@@ -994,7 +994,9 @@ class MemorySystem:
 
     async def _save_state(self) -> None:
         """Атомарное сохранение состояния памяти с HMAC-подписью."""
-        state_path = Path(self.state_path).expanduser().resolve()
+        # ИСПРАВЛЕНО: Используем self.config вместо self.memory_config
+        state_path_str = getattr(self, 'state_path', None) or str(Path(self.config.brain_dir) / "memory_state.json")
+        state_path = Path(state_path_str).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
 
         payload = {
@@ -1006,191 +1008,56 @@ class MemorySystem:
             },
         }
 
-        # ✅ Инициализация ПЕРЕД try
-        fd = None
-        tmp_path: Path | None = None
+        fd, tmp_path_str = tempfile.mkstemp(
+            prefix=state_path.name + ".", suffix=".tmp", dir=str(state_path.parent)
+        )
+        tmp_path = Path(tmp_path_str)
 
         try:
-            fd, tmp_path_str = tempfile.mkstemp(
-                prefix=state_path.name + ".",
-                suffix=".tmp",
-                dir=str(state_path.parent),
-            )
-            tmp_path = Path(tmp_path_str)
+            use_json = getattr(self.config, "use_json_format", True)
+            if use_json:
+                import json
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            else:
+                with os.fdopen(fd, "wb") as f:
+                    pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-            # ✅ Только JSON (pickle удалён — см. миграцию на v3)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            fd = None  # os.fdopen закрыл fd
-
-            # HMAC-подпись
             key = self._get_hmac_key()
             signature = self._compute_hmac(tmp_path, key)
             hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
             hmac_path.write_text(signature, encoding="utf-8")
 
-            # Атомарная замена
-            try:
-                os.replace(tmp_path, state_path)
-            except OSError as exc:
-                raise LeyaAtomicWriteError(
-                    "Атомарная замена memory_state не удалась",
-                    context={"path": str(state_path), "error": str(exc)},
-                ) from exc
-        except LeyaMemoryError:
-            raise
-        except LeyaAtomicWriteError:
-            raise
+            os.replace(tmp_path, state_path)
         except Exception as exc:
             raise LeyaAtomicWriteError(
-                f"Сбой атомарной записи состояния памяти: {exc}",
-                context={"path": str(state_path)},
+                "Атомарная запись memory_state не удалась",
+                context={"path": str(state_path), "error": str(exc)},
             ) from exc
         finally:
-            # ✅ Безопасная очистка
-            if tmp_path is not None:
-                try:
-                    if tmp_path.exists():
-                        with contextlib.suppress(OSError):
-                            tmp_path.unlink()
-                except Exception:
-                    pass
-            if fd is not None:
+            if tmp_path.exists():
                 with contextlib.suppress(OSError):
-                    os.close(fd)
+                    tmp_path.unlink()
 
-    async def _load_state(self) -> None:
-        """Загрузка состояния памяти из JSON + проверка HMAC.
-
-        Этап 1.4: после успешной загрузки JSON выполняется синхронизация
-        ChromaDB с in-memory engrams, чтобы гарантировать consistency.
-        """
-        from .exceptions import LeyaMemoryLoadError, LeyaAtomicWriteError
-        import hmac
-        import hashlib
-
-        # Поддержка обоих вариантов
-        if hasattr(self.config, 'memory') and self.config.memory is not None:
-            brain_dir = self.config.memory.brain_dir
-        elif hasattr(self.config, 'brain_dir'):
-            brain_dir = self.config.brain_dir
-        else:
-            brain_dir = "./leya_brain"
-
-        state_path = Path(brain_dir) / "memory_state.json"
-
-        hmac_path = Path(str(state_path) + ".hmac")
-
-        if not state_path.exists():
-            logger.info("Файл состояния памяти не найден, начинаем с пустого состояния")
-            return
+    async def _sync_chroma_from_memory(self) -> "SyncReport":
+        """Синхронизация in-memory состояния с ChromaDB."""
+        report = SyncReport()
+        logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
 
         try:
-            # 1. Читаем JSON
-            try:
-                raw_bytes = state_path.read_bytes()
-                state = json.loads(raw_bytes.decode("utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise LeyaMemoryLoadError(
-                    "Не удалось прочитать или распарсить файл состояния памяти",
-                    context={"path": str(state_path), "error": str(e)}
-                ) from e
-
-            # 2. Проверяем версию
-            loaded_version = state.get("version", 1)
-            if loaded_version != getattr(self, "_state_version", 3):
-                logger.warning(
-                    f"Несовпадение версий состояния: ожидалось {self._state_version}, "
-                    f"загружено {loaded_version}. Попытка миграции."
-                )
-
-            # 3. Проверяем HMAC (если ключ задан)
-            hmac_key = None
-            if self.config is not None:
-                if hasattr(self.config, 'hmac_key'):
-                    hmac_key = self.config.hmac_key
-                elif hasattr(self.config, 'memory') and self.config.memory is not None:
-                    hmac_key = getattr(self.config.memory, 'hmac_key', None)
-
-            if hmac_key:
-                if not hmac_path.exists():
-                    raise LeyaMemoryLoadError(
-                        "HMAC-файл отсутствует, но ключ задан. Возможна подмена данных.",
-                        context={"path": str(hmac_path)}
-                    )
-
-                try:
-                    stored_hmac = hmac_path.read_text(encoding="utf-8").strip()
-                    computed_hmac = hmac.new(
-                        self.config.hmac_key.encode("utf-8"),
-                        raw_bytes,
-                        hashlib.sha256
-                    ).hexdigest()
-
-                    if not hmac.compare_digest(stored_hmac, computed_hmac):
-                        raise LeyaMemoryLoadError(
-                            "HMAC-подпись не совпадает. Данные могли быть подменены.",
-                            context={"path": str(state_path)}
-                        )
-                except OSError as e:
-                    raise LeyaMemoryLoadError(
-                        "Не удалось прочитать HMAC-файл",
-                        context={"path": str(hmac_path), "error": str(e)}
-                    ) from e
-
-            # 4. Загружаем engrams
-            engrams_data = state.get("engrams", {})
-            for engram_id, engram_dict in engrams_data.items():
-                try:
-                    # Используем from_dict, если он есть, иначе создаём вручную
-                    if hasattr(Engram, "from_dict"):
-                        self.engrams[engram_id] = Engram.from_dict(engram_dict)
-                    else:
-                        self.engrams[engram_id] = Engram(**engram_dict)
-                except Exception as e:
-                    logger.warning(
-                        f"Не удалось загрузить engram {engram_id}: {e}",
-                        exc_info=True
-                    )
-
-            # 5. Загружаем synapses
-            synapses_data = state.get("synapses", {})
-            for synapse_key, synapse_dict in synapses_data.items():
-                try:
-                    if hasattr(Synapse, "from_dict"):
-                        self.synapses[synapse_key] = Synapse.from_dict(synapse_dict)
-                    else:
-                        self.synapses[synapse_key] = Synapse(**synapse_dict)
-                except Exception as e:
-                    logger.warning(
-                        f"Не удалось загрузить synapse {synapse_key}: {e}",
-                        exc_info=True
-                    )
-
-            # 6. Загружаем self_model
-            self.self_model = state.get("self_model", "")
-
-            logger.info(
-                f"✅ Состояние памяти загружено: {len(self.engrams)} engrams, "
-                f"{len(self.synapses)} synapses"
-            )
-
-            # 7. Этап 1.4: синхронизация Chroma с in-memory
-            logger.info("🔄 Начинаю синхронизацию ChromaDB с in-memory состоянием...")
-            sync_report = await self._sync_chroma_from_memory()
-            logger.info(f"✅ Синхронизация завершена: {sync_report}")
-
-        except LeyaMemoryLoadError:
-            raise
+            # ИСПРАВЛЕНО: Передаем report в _sync_collection
+            await self._sync_collection(MemoryType.EPISODIC, self.episodic_collection, report)
+            await self._sync_collection(MemoryType.SEMANTIC, self.semantic_collection, report)
         except Exception as e:
-            logger.error(
-                f"Неожиданная ошибка при загрузке состояния памяти: {e}",
-                exc_info=True
-            )
-            raise LeyaMemoryLoadError(
-                "Неожиданная ошибка при загрузке состояния памяти",
-                context={"error_type": type(e).__name__, "detail": str(e)}
-            ) from e
+            logger.error(f"Сбой синхронизации: {e}")
+            report.errors += 1
+
+        logger.info(
+            f"Синхронизация завершена: добавлено={report.added_to_chroma}, "
+            f"удалено={report.removed_from_chroma}, обновлено={report.updated_in_chroma}, "
+            f"ошибки={report.errors}"
+        )
+        return report
     
     async def _sync_chroma_from_memory(self) -> SyncReport:
         """
