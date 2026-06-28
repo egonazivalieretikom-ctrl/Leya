@@ -34,6 +34,12 @@ from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem
 from leya_core.environment import CLIEnvironment
 
+from leya_core.experimental.decision_engine import DecisionEngine, Decision
+from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
+from leya_core.interfaces import IDecisionEngine, IEmotionalSupport
+from typing import Optional
+from leya_core.soul_crypto_manager import SoulCryptoManager, SoulTamperError
+
 # Импорт исключений (Этап 1.1)
 from leya_core.exceptions import (
     LeyaBroadcastError,
@@ -136,6 +142,29 @@ class LeyaOS:
             use_llm_threshold=0.7,
             cache_similarity_threshold=0.85,
         )
+
+        # Experimental компоненты (feature flags) — этап 2.2 (Группа A)
+        self.decision_engine: Optional[IDecisionEngine] = None
+        self.emotional_support: Optional[IEmotionalSupport] = None
+        
+        if self.config.experimental.enable_decision_engine:
+            try:
+                self.decision_engine = DecisionEngine(self.config)
+                assert isinstance(self.decision_engine, IDecisionEngine)
+                logger.info("✅ DecisionEngine включён (feature flag)")
+            except Exception as e:
+                logger.error(f"Не удалось инициализировать DecisionEngine: {e}", exc_info=True)
+                self.decision_engine = None
+        
+        if self.config.experimental.enable_emotional_support:
+            try:
+                self.emotional_support = EmotionalSupport(self.config, self.memory)
+                assert isinstance(self.emotional_support, IEmotionalSupport)
+                logger.info("✅ EmotionalSupport включён (feature flag)")
+            except Exception as e:
+                logger.error(f"Не удалось инициализировать EmotionalSupport: {e}", exc_info=True)
+                self.emotional_support = None
+
         if not isinstance(self.workspace, IGlobalWorkspace):
             raise TypeError(
                 f"workspace должен реализовывать IGlobalWorkspace, получено {type(self.workspace)}"
@@ -220,6 +249,14 @@ class LeyaOS:
         self.persistence = StatePersistence()
         self.system_metrics = SystemMetrics()
 
+        # Soul Crypto Manager (этап 2.2, Группа D)
+        self.soul_crypto = SoulCryptoManager(self.config.soul)
+        logger.info(
+            f"✅ SoulCryptoManager инициализирован "
+            f"(hmac={'enabled' if self.config.soul.hmac_key else 'disabled'}, "
+            f"versioning={'enabled' if self.config.soul.enable_versioning else 'disabled'})"
+        )
+
         # Блокировки и задачи
         self._perceive_lock = asyncio.Lock()
         self._background_tasks: list[asyncio.Task] = []
@@ -299,20 +336,21 @@ class LeyaOS:
             self.env.soul_manager, "update_secret_key"
         ):
             try:
-                # ИСПРАВЛЕНИЕ: Унификация ключей drive_state — используем строки
-                leya_state = {
-                    "self_model": self.self_model[:500] if self.self_model else "",
-                    "drives": {d.type.value: d.current for d in self.drives.drives.values()},
-                    "state": self.state,
-                }
-                self.env.soul_manager.update_secret_key(leya_state)
-                logger.info("SoulCrypto: Секретный ключ обновлён на основе состояния Леи")
-            except LeyaSoulError as exc:
-                logger.warning(f"Не удалось обновить секретный ключ: {exc}")
-            except Exception as exc:
-                logger.error(
-                    f"Неожиданная ошибка обновления секретного ключа: {exc}", exc_info=True
+                soul_context = self.soul_crypto.load_all()
+                logger.info(
+                    f"✅ Soul загружен с HMAC-проверкой: "
+                    f"personality={len(soul_context['personality'])} символов"
                 )
+            except SoulTamperError as exc:
+                logger.error(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: {exc}", exc_info=True)
+                logger.error("Soul-файлы могли быть подменены. Остановка системы.")
+                self.running = False
+                return
+            except FileNotFoundError as exc:
+                logger.warning(f"Soul-файлы не найдены: {exc}")
+                logger.info("🆕 Начинаем с дефолтной личностью")
+            except Exception as exc:
+                logger.error(f"Неожиданная ошибка загрузки soul: {exc}", exc_info=True)
 
         # Обновление гомеостаза из self_model
         try:
@@ -735,6 +773,57 @@ class LeyaOS:
             return "Извини, произошла ошибка при обработке запроса. Попробуй ещё раз."
 
 
+    async def _execute_fast_decision(self, decision: Decision) -> None:
+        """Выполнение быстрого решения от DecisionEngine (без LLM).
+        
+        Этап 2.2 (Группа A): выполняется, когда DecisionEngine уверен в решении
+        (confidence >= 0.8). Разгружает LLM для очевидных случаев.
+        
+        Args:
+            decision: Решение с tool_name и parameters
+        """
+        if not decision.use_tool or not decision.tool_name:
+            logger.warning("Fast decision без tool_name, пропускаю")
+            return
+        
+        try:
+            # Выполняем инструмент
+            result = await self.env.tool_registry.execute(
+                tool_name=decision.tool_name,
+                parameters=decision.tool_parameters or {}
+            )
+            
+            # Формируем ответ
+            response = f"Я нашла информацию: {result}"
+            
+            # Конституциональная проверка
+            verdict = self.constitutional.verify_response(response)
+            if not verdict.allowed:
+                logger.warning(f"Fast decision ответ не прошёл проверку: {verdict.reason}")
+                response = "Извини, я не могу выполнить это действие."
+            
+            # Отправляем ответ
+            await self.env.send_message(response)
+            
+            # Сохраняем в память
+            await self.memory.store_perception(
+                content=f"[Fast decision: {decision.tool_name}] {result}",
+                emotional_boost=0.4,
+                metadata={
+                    "type": "fast_decision",
+                    "tool_name": decision.tool_name,
+                    "reasoning": decision.reasoning,
+                    "confidence": decision.confidence,
+                }
+            )
+            
+            logger.info(f"✅ Fast decision выполнен: {decision.tool_name}")
+        
+        except Exception as e:
+            logger.error(f"Ошибка выполнения fast decision: {e}", exc_info=True)
+            # Fallback — не роняем систему, просто логируем
+
+
     async def _cognitive_loop(self, stimulus: dict[str, Any], tool_context: str) -> None:
         """
         Основной когнитивный цикл: планирование → действие → постобработка.
@@ -766,6 +855,16 @@ class LeyaOS:
 
                 # Постобработка
                 response = cognitive_output.get("response", "...")
+                # Пост-обработка: эмоциональная поддержка в ответе — этап 2.2
+                if self.emotional_support and emotion_state and emotion_state.intensity > 0.6:
+                    try:
+                        emotional_response = await self.emotional_support.generate_support_response(
+                            emotion_state, context=response
+                        )
+                        # Объединяем эмоциональный ответ с основным
+                        response = f"{emotional_response}\n\n{response}"
+                    except Exception as e:
+                        logger.error(f"Ошибка генерации эмоционального ответа: {e}", exc_info=True)
                 internal_monologue = cognitive_output.get("internal_monologue", "")
                 action_intent = cognitive_output.get("action_intent", "none")
                 self_reflection = cognitive_output.get("self_reflection", "")
@@ -811,6 +910,51 @@ class LeyaOS:
                     "Произошла непредвиденная ошибка в моих когнитивных процессах."
                 )
 
+
+            # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
+            if self.decision_engine:
+                try:
+                    stimulus_content = stimulus.get("content", "")
+                    drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
+                    
+                    fast_decision = await self.decision_engine.make_decision(
+                        stimulus_content,
+                        drive_state
+                    )
+                    
+                    if fast_decision and fast_decision.use_tool and fast_decision.confidence >= 0.8:
+                        logger.info(
+                            f"🚀 Fast decision: {fast_decision.tool_name} "
+                            f"(confidence={fast_decision.confidence:.2f})"
+                        )
+                        # Выполняем быстрое решение без LLM
+                        await self._execute_fast_decision(fast_decision)
+                        return  # Пропускаем LLM
+                except Exception as e:
+                    logger.error(f"Ошибка DecisionEngine: {e}", exc_info=True)
+                    # Graceful degradation — продолжаем с LLM
+            
+            # === УРОВЕНЬ 1.5: Emotional Support (анализ эмоций) — этап 2.2 ===
+            emotion_state = None
+            if self.emotional_support:
+                try:
+                    stimulus_content = stimulus.get("content", "")
+                    emotion_state = await self.emotional_support.analyze_user_state(stimulus_content)
+                    
+                    # Влияние на drives
+                    if emotion_state and emotion_state.intensity > 0.5:
+                        await self.emotional_support.update_drives_from_emotion(
+                            emotion_state, self.drives
+                        )
+                    
+                    # Сохранение в memory (async, не блокируем)
+                    if emotion_state and emotion_state.intensity > 0.6:
+                        asyncio.create_task(
+                            self.emotional_support.save_emotion_to_memory(emotion_state)
+                        )
+                except Exception as e:
+                    logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
+                    # Graceful degradation — продолжаем без эмоционального контекста
     async def _process_action_intent(
         self, action_intent: str, cognitive_output: dict, stimulus: str
     ) -> None:

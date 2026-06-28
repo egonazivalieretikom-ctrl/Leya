@@ -594,3 +594,98 @@ class IConstitutionalLayer(Protocol):
     def remove_rule(self, rule_name: str) -> bool:
         """Удаление правила по названию."""
         ...
+
+# =================================================================================
+# DECISION ENGINE & EMOTIONAL SUPPORT (Experimental, v3.1)
+# =================================================================================
+
+@runtime_checkable
+class IDecisionEngine(Protocol):
+    """Детерминированный движок быстрых решений (без LLM).
+    
+    Этап 2.2 (ADR-001): Префронтальная кора Леи. Принимает решения на основе
+    состояния драйвов и типа стимула. Используется как уровень 0 в cognitive loop
+    для мгновенных решений (разгрузка LLM).
+    """
+    
+    async def make_decision(
+        self,
+        stimulus: str,
+        drive_state: dict,
+    ) -> Optional["Decision"]:
+        """Принятие решения на основе стимула и состояния драйвов.
+        
+        Args:
+            stimulus: Текст стимула от пользователя
+            drive_state: Словарь {DriveType: tension_level}
+            
+        Returns:
+            Decision с tool_name/parameters или None, если нужен LLM
+        """
+        ...
+    
+    def get_decision_confidence(self) -> float:
+        """Возвращает confidence последнего решения (0.0-1.0)."""
+        ...
+
+
+@runtime_checkable
+class IEmotionalSupport(Protocol):
+    """Анализ эмоций пользователя и генерация эмпатических ответов.
+    
+    Этап 2.2 (ADR-001): Усиливает социальную составляющую Леи.
+    Влияет на CONNECTION drive через RPE. Сохраняет эмоциональный контекст
+    в Memory для долгосрочного анализа.
+    """
+    
+    async def analyze_user_state(
+        self,
+        text: str,
+        recent_messages: Optional[list[str]] = None,
+    ) -> "EmotionState":
+        """Анализ эмоционального состояния пользователя.
+        
+        Args:
+            text: Текст сообщения пользователя
+            recent_messages: Контекст последних сообщений (опционально)
+            
+        Returns:
+            EmotionState с mood, intensity, needs_support
+        """
+        ...
+    
+    async def generate_support_response(
+        self,
+        emotion_state: "EmotionState",
+        context: str = "",
+    ) -> str:
+        """Генерация эмпатического ответа.
+        
+        Args:
+            emotion_state: Результат analyze_user_state
+            context: Дополнительный контекст (опционально)
+            
+        Returns:
+            Поддерживающий ответ на русском языке
+        """
+        ...
+    
+    async def update_drives_from_emotion(
+        self,
+        emotion_state: "EmotionState",
+        drives: "IDriveSystem",
+    ) -> None:
+        """Влияние эмоции на CONNECTION drive через RPE.
+        
+        Позитивные эмоции → удовлетворение CONNECTION.
+        Негативные эмоции → усиление CONNECTION (потребность в поддержке).
+        
+        Args:
+            emotion_state: Результат analyze_user_state
+            drives: Система драйвов для обновления
+        """
+        ...
+    
+    async def get_emotional_context_for_prompt(self) -> str:
+        """Возвращает строку с эмоциональным контекстом для промпта LLM."""
+        ...

@@ -12,7 +12,6 @@
 import json
 import pytest
 from hypothesis import given, strategies as st, settings, assume
-from hypothesis.extra.pydantic import from_type
 
 from leya_core.thinker import (
     CognitiveOutput,

@@ -256,6 +256,71 @@ class ConstitutionalConfig:
 # =================================================================================
 
 @dataclass
+class SoulConfig:
+    """Конфигурация управления soul-файлами (личность, правила, ценности).
+    
+    Этап 2.2 (ADR-004, Группа D): HMAC-защита, версионирование, история изменений.
+    Мигрировано из leya_core/experimental/soul_crypto.py.
+    """
+    soul_dir: str = "./leya_soul"
+    hmac_key: str = ""  # Обязателен для production
+    enable_versioning: bool = False
+    max_history_size: int = 50
+    
+    # Soul-файлы
+    personality_file: str = "personality.txt"
+    rules_file: str = "rules.txt"
+    values_file: str = "values.txt"
+    
+    def __post_init__(self):
+        # Валидация soul_dir
+        path = Path(self.soul_dir).expanduser().resolve()
+        self.soul_dir = str(path)
+        
+        if self.max_history_size < 1:
+            self.max_history_size = 1
+        elif self.max_history_size > 1000:
+            self.max_history_size = 1000
+        
+        if not self.hmac_key:
+            logger.warning(
+                "⚠️ Soul HMAC key не задан. Защита целостности soul отключена. "
+                "Для production установите SOUL_HMAC_KEY в .env"
+            )
+
+@dataclass
+class ExperimentalConfig:
+    """Конфигурация experimental модулей (feature flags).
+    
+    Этап 2.2 (ADR-001): feature flags для decision_engine и emotional_support.
+    По умолчанию выключено (безопасность и стабильность).
+    """
+    # Decision Engine
+    enable_decision_engine: bool = False
+    decision_engine_curiosity_threshold: float = 0.5
+    decision_engine_connection_threshold: float = 0.6
+    decision_engine_autonomy_threshold: float = 0.6
+    decision_engine_confidence_threshold: float = 0.8
+    
+    # Emotional Support
+    enable_emotional_support: bool = False
+    emotional_support_intensity_threshold: float = 0.6
+    
+    # Voice (Группа C — excluded)
+    enable_voice: bool = False
+    
+    # Desktop Control (Группа B)
+    enable_desktop_control: bool = False
+    
+    def __post_init__(self):
+        # Валидация thresholds
+        self.decision_engine_curiosity_threshold = max(0.1, min(1.0, self.decision_engine_curiosity_threshold))
+        self.decision_engine_connection_threshold = max(0.1, min(1.0, self.decision_engine_connection_threshold))
+        self.decision_engine_autonomy_threshold = max(0.1, min(1.0, self.decision_engine_autonomy_threshold))
+        self.decision_engine_confidence_threshold = max(0.5, min(1.0, self.decision_engine_confidence_threshold))
+        self.emotional_support_intensity_threshold = max(0.1, min(1.0, self.emotional_support_intensity_threshold))
+
+@dataclass
 class LeyaConfig:
     """Главная конфигурация системы Леи."""
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
@@ -268,6 +333,8 @@ class LeyaConfig:
     constitutional: ConstitutionalConfig = field(default_factory=ConstitutionalConfig)
     web: WebConfig = field(default_factory=WebConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    soul: SoulConfig = field(default_factory=SoulConfig)
+    experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)  
 
     @classmethod
     def from_env(cls) -> "LeyaConfig":
@@ -384,6 +451,45 @@ class LeyaConfig:
                 ollama=ollama, memory=memory, drives=drives, homeostasis=homeostasis,
                 thinker=thinker, reflection=reflection, workspace=workspace,
                 constitutional=constitutional, web=web, logging=logging_config,
+            )
+
+            soul = SoulConfig(
+                soul_dir=os.environ.get("SOUL_DIR", "./leya_soul"),
+                hmac_key=os.environ.get("SOUL_HMAC_KEY", ""),
+                enable_versioning=_parse_bool(os.environ.get("SOUL_ENABLE_VERSIONING"), False),
+                max_history_size=_parse_int(os.environ.get("SOUL_MAX_HISTORY_SIZE"), 50, "SOUL_MAX_HISTORY_SIZE"),
+                personality_file=os.environ.get("SOUL_PERSONALITY_FILE", "personality.txt"),
+                rules_file=os.environ.get("SOUL_RULES_FILE", "rules.txt"),
+                values_file=os.environ.get("SOUL_VALUES_FILE", "values.txt"),
+            )
+
+            experimental = ExperimentalConfig(
+                enable_decision_engine=_parse_bool(os.environ.get("ENABLE_DECISION_ENGINE"), False),
+                decision_engine_curiosity_threshold=_parse_float(
+                    os.environ.get("DECISION_ENGINE_CURIOSITY_THRESHOLD"), 0.5, "DECISION_ENGINE_CURIOSITY_THRESHOLD"
+                ),
+                decision_engine_connection_threshold=_parse_float(
+                    os.environ.get("DECISION_ENGINE_CONNECTION_THRESHOLD"), 0.6, "DECISION_ENGINE_CONNECTION_THRESHOLD"
+                ),
+                decision_engine_autonomy_threshold=_parse_float(
+                    os.environ.get("DECISION_ENGINE_AUTONOMY_THRESHOLD"), 0.6, "DECISION_ENGINE_AUTONOMY_THRESHOLD"
+                ),
+                decision_engine_confidence_threshold=_parse_float(
+                    os.environ.get("DECISION_ENGINE_CONFIDENCE_THRESHOLD"), 0.8, "DECISION_ENGINE_CONFIDENCE_THRESHOLD"
+                ),
+                enable_emotional_support=_parse_bool(os.environ.get("ENABLE_EMOTIONAL_SUPPORT"), False),
+                emotional_support_intensity_threshold=_parse_float(
+                    os.environ.get("EMOTIONAL_SUPPORT_INTENSITY_THRESHOLD"), 0.6, "EMOTIONAL_SUPPORT_INTENSITY_THRESHOLD"
+                ),
+                enable_voice=_parse_bool(os.environ.get("ENABLE_VOICE"), False),
+                enable_desktop_control=_parse_bool(os.environ.get("ENABLE_DESKTOP_CONTROL"), False),
+            )
+
+            config = cls(
+                ollama=ollama, memory=memory, drives=drives, homeostasis=homeostasis,
+                thinker=thinker, reflection=reflection, workspace=workspace,
+                constitutional=constitutional, web=web, logging=logging_config,
+                experimental=experimental,  # НОВОЕ
             )
 
             logger.info("✅ Конфигурация успешно загружена из .env")
