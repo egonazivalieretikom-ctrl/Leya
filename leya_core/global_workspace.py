@@ -187,6 +187,16 @@ class GlobalWorkspace:
 
             adjusted_proposals.append(adjusted)
 
+        # Простая дедупликация по контенту (для предотвращения зацикливания одинаковых целей гомеостаза)
+        seen_contents = set()
+        filtered = []
+        for p in adjusted_proposals:
+            key = (p.content or "")[:80].lower().strip()
+            if key and key not in seen_contents:
+                seen_contents.add(key)
+                filtered.append(p)
+        adjusted_proposals = filtered
+
         # Вычисление scores
         for proposal in adjusted_proposals:
             score = 0.0

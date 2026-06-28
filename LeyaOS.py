@@ -909,6 +909,14 @@ class LeyaOS:
                 if tool_call:
                     await self._execute_tool(tool_call)
 
+            elif stimulus.get("source") == "homeostasis" or action_intent in ("rest", "none"):
+                # Закрытие петли обратной связи для гомеостаза (сохраняем RPE + emotional_boost)
+                drive_type = DriveType.INTEGRITY  # или определять по goal
+                rpe = self.drives.calculate_rpe("homeostasis_goal", actual_outcome=0.7)  # пример
+                self.drives.apply_satisfaction(drive_type, base_amount=0.25, rpe=rpe)
+                if hasattr(self.homeostasis, "mark_as_researched"):
+                    self.homeostasis.mark_as_researched(goal_name)
+
             elif action_intent == "remember_fact":
                 fact = cognitive_output.get("response", "")
                 if fact:

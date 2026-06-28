@@ -44,11 +44,11 @@ class CognitiveOutput(BaseModel):
 
     Pydantic модель для строгой валидации ответа LLM.
     """
-    response: str = Field(..., description="Внешний ответ пользователю")
-    internal_monologue: str = Field(..., description="Внутренний монолог (не показывается пользователю)")
+    response: str = Field(default="", description="Внешний ответ пользователю")
+    internal_monologue: str = Field(default="", description="Внутренний монолог (не показывается пользователю)")
     action_intent: ActionIntent = Field(..., description="Намерение действия")
     tool_call: Optional[ToolCall] = Field(None, description="Вызов инструмента (если action_intent == USE_TOOL)")
-    self_reflection: str = Field(..., description="Саморефлексия о процессе мышления")
+    self_reflection: str = Field(default="", description="Саморефлексия о процессе мышления")
 
     class Config:
         use_enum_values = True
