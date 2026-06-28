@@ -969,7 +969,12 @@ class MemorySystem:
     async def _save_state(self) -> None:
         """Надёжное атомарное сохранение с HMAC."""
         if not hasattr(self, 'state_path') or self.state_path is None:
-            brain_dir = getattr(self.memory_config, 'brain_dir', './leya_brain')
+            if hasattr(self, 'memory_config') and self.memory_config is not None:
+                brain_dir = getattr(self.memory_config, 'brain_dir', './leya_brain')
+            elif hasattr(self, 'config') and self.config is not None:
+                brain_dir = getattr(self.config, 'brain_dir', './leya_brain')
+            else:
+                brain_dir = './leya_brain'
             self.state_path = Path(brain_dir) / "memory_state.json"
 
         state_path = Path(self.state_path).expanduser().resolve()
@@ -1113,234 +1118,118 @@ class MemorySystem:
         collection,
         memory_type: MemoryType,
     ) -> SyncReport:
-        """
-        Синхронизация in-memory энграмм указанного типа с ChromaDB коллекцией.
-
-        Логика:
-        1. Получаем все IDs из ChromaDB (collection.get).
-        2. Вычисляем set-diff с in-memory IDs:
-           - ids_to_add    = in_memory - chroma  (новые)
-           - ids_to_update = in_memory & chroma  (уже есть, но upsert обновит)
-           - ids_to_remove = chroma - in_memory  (удалить)
-        3. Upsert всех in-memory энграмм (Chroma upsert = add или update).
-        4. Delete отсутствующих в in-memory.
-        5. Возвращаем SyncReport с корректными счётчиками.
-
-        Исправления:
-        - Используется engram.timestamp (float), а не engram.created_at (которого нет).
-        - Возвращается SyncReport (объект с атрибутами), а не dict.
-        - Правильная агрегация added/updated/removed по set-diff.
-        - Обработка embedding failures с инкрементом report.errors.
-        - Измерение длительности в ms.
-
-        Args:
-            collection: ChromaDB collection (episodic или semantic).
-            memory_type: MemoryType.EPISODIC или MemoryType.SEMANTIC.
-
-        Returns:
-            SyncReport с информацией об операции.
-        """
         report = SyncReport()
         start_time = time.time()
 
-        # Фильтрация энграмм по типу
         type_engrams = {
             eid: engram
             for eid, engram in self.engrams.items()
-            if engram.memory_type == memory_type
+            if getattr(engram, "memory_type", None) == memory_type
         }
 
         if not type_engrams:
-            # Даже если in-memory пусто, нужно удалить "осиротевшие" записи в Chroma
             try:
                 chroma_data = await asyncio.to_thread(collection.get)
                 chroma_ids = set(chroma_data.get("ids", [])) if chroma_data else set()
                 if chroma_ids:
-                    # Удаляем батчами
-                    ids_to_remove_list = list(chroma_ids)
                     BATCH_SIZE = 500
-                    for i in range(0, len(ids_to_remove_list), BATCH_SIZE):
-                        batch = ids_to_remove_list[i:i + BATCH_SIZE]
+                    ids_list = list(chroma_ids)
+                    for i in range(0, len(ids_list), BATCH_SIZE):
+                        batch = ids_list[i:i + BATCH_SIZE]
                         await asyncio.to_thread(collection.delete, ids=batch)
                     report.removed_from_chroma = len(chroma_ids)
-                    logger.info(
-                        f"Sync {memory_type.value}: удалено {len(chroma_ids)} "
-                        f"осиротевших записей (in-memory пусто)"
-                    )
             except Exception as exc:
-                logger.error(
-                    f"Ошибка удаления осиротевших записей {memory_type.value}: {exc}",
-                    exc_info=True,
-                )
+                logger.error(f"Ошибка удаления осиротевших {memory_type.value}: {exc}", exc_info=True)
                 report.errors += 1
             finally:
                 report.duration_ms = (time.time() - start_time) * 1000
             return report
 
         try:
-            # 1. Получить все IDs из ChromaDB
             chroma_data = await asyncio.to_thread(collection.get)
             chroma_ids = set(chroma_data.get("ids", [])) if chroma_data else set()
             in_memory_ids = set(type_engrams.keys())
 
-            # 2. Set-diff для подсчёта операций
-            ids_to_add = in_memory_ids - chroma_ids       # Новые
-            ids_to_update = in_memory_ids & chroma_ids    # Существующие (будут обновлены upsert)
-            ids_to_remove = chroma_ids - in_memory_ids    # Осиротевшие
+            ids_to_add = in_memory_ids - chroma_ids
+            ids_to_update = in_memory_ids & chroma_ids
+            ids_to_remove = chroma_ids - in_memory_ids
 
-            logger.info(
-                f"Sync {memory_type.value}: "
-                f"add={len(ids_to_add)}, update={len(ids_to_update)}, "
-                f"remove={len(ids_to_remove)}, total_in_memory={len(in_memory_ids)}"
-            )
-
-            # 3. Upsert всех in-memory энграмм (Chroma upsert = add или update)
             if in_memory_ids:
                 BATCH_SIZE = 500
-                in_memory_ids_list = list(in_memory_ids)
+                ids_list = list(in_memory_ids)
 
-                for i in range(0, len(in_memory_ids_list), BATCH_SIZE):
-                    batch_ids = in_memory_ids_list[i:i + BATCH_SIZE]
+                for i in range(0, len(ids_list), BATCH_SIZE):
+                    batch_ids = ids_list[i:i + BATCH_SIZE]
                     batch_engrams = [type_engrams[eid] for eid in batch_ids]
 
                     batch_documents: list[str] = []
-                    batch_metadatas: list[dict[str, Any]] = []
+                    batch_metadatas: list[dict] = []
                     batch_embeddings: list[list[float]] = []
-                    valid_indices: list[int] = []  # Индексы энграмм с успешным embedding
+                    valid_indices: list[int] = []
 
                     for idx, engram in enumerate(batch_engrams):
-                        # Пропускаем энграммы с нулевым retention (уже забыты)
-                        if engram.retention_strength < 0.05:
+                        if getattr(engram, "retention_strength", 1.0) < 0.05:
                             continue
-
-                        # Генерация embedding (sync операция в thread)
                         try:
-                            embedding = await asyncio.to_thread(
-                                self._generate_embedding, engram.content
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                f"Не удалось сгенерировать embedding для {engram.id}: {exc}"
-                            )
+                            emb = await asyncio.to_thread(self._generate_embedding, engram.content)
+                        except Exception:
                             report.errors += 1
                             continue
-
-                        # Если embedding пустой — пропускаем
-                        if not embedding:
+                        if not emb:
                             report.errors += 1
                             continue
 
                         batch_documents.append(engram.content)
-                        batch_embeddings.append(embedding)
+                        batch_embeddings.append(emb)
                         valid_indices.append(idx)
 
-                        # Метаданные с ПРАВИЛЬНЫМИ полями из Engram
-                        # timestamp и last_retrieved — это float (time.time()), НЕ datetime!
                         batch_metadatas.append({
                             "id": engram.id,
-                            "memory_type": engram.memory_type.value,
-                            "timestamp": engram.timestamp,
-                            "retention_strength": engram.retention_strength,
-                            "emotional_boost": engram.emotional_boost,
-                            "retrieval_count": engram.retrieval_count,
-                            "consolidation_level": engram.consolidation_level,
+                            "memory_type": getattr(engram, "memory_type", memory_type).value,
+                            "timestamp": getattr(engram, "timestamp", 0),
+                            "retention_strength": getattr(engram, "retention_strength", 0.0),
+                            "emotional_boost": getattr(engram, "emotional_boost", 0.0),
+                            "retrieval_count": getattr(engram, "retrieval_count", 0),
+                            "consolidation_level": getattr(engram, "consolidation_level", 0),
                         })
 
-                    # Если нет валидных энграмм в батче — пропускаем
-                    if not batch_ids or not batch_documents:
+                    if not batch_documents:
                         continue
 
-                    # Если не все embeddings сгенерированы — корректируем batch_ids
-                    # (сохраняем только те, для которых есть embedding)
-                    if len(batch_documents) < len(batch_ids):
-                        adjusted_ids = [
-                            batch_ids[valid_idx] for valid_idx in valid_indices
-                        ]
-                    else:
-                        adjusted_ids = batch_ids
+                    adj_ids = [batch_ids[v] for v in valid_indices] if len(batch_documents) < len(batch_ids) else batch_ids
 
-                    # Выполняем upsert
                     try:
                         await asyncio.to_thread(
                             collection.upsert,
-                            ids=adjusted_ids,
+                            ids=adj_ids,
                             documents=batch_documents,
                             embeddings=batch_embeddings,
                             metadatas=batch_metadatas,
                         )
-                        logger.debug(
-                            f"Upserted {len(adjusted_ids)} энграмм типа {memory_type.value}"
-                        )
                     except Exception as exc:
-                        logger.error(
-                            f"Ошибка upsert в ChromaDB для {memory_type.value}: {exc}",
-                            exc_info=True,
-                            extra={"batch_size": len(adjusted_ids)},
-                        )
                         report.errors += 1
                         raise LeyaMemoryError(
-                            f"Сбой upsert в ChromaDB для {memory_type.value}",
-                            context={
-                                "batch_size": len(adjusted_ids),
-                                "error": str(exc),
-                            },
+                            f"Сбой upsert в ChromaDB ({memory_type.value})",
+                            context={"error": str(exc)}
                         ) from exc
 
-                # Считаем добавленные и обновлённые по set-diff (независимо от батчей)
                 report.added_to_chroma = len(ids_to_add)
                 report.updated_in_chroma = len(ids_to_update)
 
-            # 4. Удаление осиротевших записей батчами
             if ids_to_remove:
                 BATCH_SIZE = 500
-                ids_to_remove_list = list(ids_to_remove)
-
-                for i in range(0, len(ids_to_remove_list), BATCH_SIZE):
-                    batch_delete_ids = ids_to_remove_list[i:i + BATCH_SIZE]
-
+                rem_list = list(ids_to_remove)
+                for i in range(0, len(rem_list), BATCH_SIZE):
+                    batch = rem_list[i:i + BATCH_SIZE]
                     try:
-                        await asyncio.to_thread(collection.delete, ids=batch_delete_ids)
-                        logger.debug(
-                            f"Deleted {len(batch_delete_ids)} энграмм из ChromaDB "
-                            f"({memory_type.value})"
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            f"Ошибка удаления из ChromaDB для {memory_type.value}: {exc}",
-                            exc_info=True,
-                            extra={"batch_size": len(batch_delete_ids)},
-                        )
+                        await asyncio.to_thread(collection.delete, ids=batch)
+                    except Exception:
                         report.errors += 1
-                        raise LeyaMemoryError(
-                            f"Сбой удаления из ChromaDB для {memory_type.value}",
-                            context={
-                                "batch_size": len(batch_delete_ids),
-                                "error": str(exc),
-                            },
-                        ) from exc
-
                 report.removed_from_chroma = len(ids_to_remove)
 
-            logger.info(
-                f"✅ Sync {memory_type.value} завершён: "
-                f"added={report.added_to_chroma}, "
-                f"updated={report.updated_in_chroma}, "
-                f"removed={report.removed_from_chroma}, "
-                f"errors={report.errors}"
-            )
-
-        except LeyaMemoryError:
-            raise
         except Exception as exc:
-            logger.error(
-                f"Неожиданная ошибка в _sync_collection для {memory_type.value}: {exc}",
-                exc_info=True,
-            )
             report.errors += 1
-            raise LeyaMemoryError(
-                f"Сбой синхронизации коллекции {memory_type.value}",
-                context={"memory_type": memory_type.value, "error": str(exc)},
-            ) from exc
+            logger.error(f"Критическая ошибка sync {memory_type.value}: {exc}", exc_info=True)
         finally:
             report.duration_ms = (time.time() - start_time) * 1000
 
@@ -1372,7 +1261,17 @@ class MemorySystem:
             total_report.updated_in_chroma += report_episodic.updated_in_chroma
             total_report.removed_from_chroma += report_episodic.removed_from_chroma
             total_report.errors += report_episodic.errors
-            logger.info(f"Sync episodic: {report_episodic}")
+
+            report_semantic = await self._sync_collection(
+                collection=self.semantic_collection,
+                memory_type=MemoryType.SEMANTIC,
+            )
+            total_report.added_to_chroma += report_semantic.added_to_chroma
+            total_report.updated_in_chroma += report_semantic.updated_in_chroma
+            total_report.removed_from_chroma += report_semantic.removed_from_chroma
+            total_report.errors += report_semantic.errors
+
+            total_report.duration_ms = (time.time() - start_time) * 1000
         except Exception as exc:
             logger.error(f"Сбой sync episodic: {exc}", exc_info=True)
             total_report.errors += 1

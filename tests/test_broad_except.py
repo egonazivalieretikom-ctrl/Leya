@@ -27,8 +27,7 @@ from leya_core.exceptions import (
 )
 import aiohttp 
 
-with patch.dict(os.environ, {"LEYA_STATE_HMAC_KEY": "testkeythatislongenoughforhmac32charsminimumxxxx"}):
-    await memory_instance._save_state()
+
 # =================================================================================
 # MEMORY._save_state
 # =================================================================================
@@ -45,6 +44,7 @@ class TestMemorySaveState:
         # Создаём объект без вызова __init__ (чтобы не трогать Chroma и т.д.)
         mem = MemorySystem.__new__(MemorySystem)
         mem.config = MemoryConfig()
+        mem.memory_config = mem.config   # важно: MemoryConfig имеет brain_dir
         mem.engrams = {}
         mem.synapses = {}
         mem.self_model = "test self model"
@@ -122,39 +122,23 @@ class TestLLMClientChat:
         from leya_core.config import OllamaConfig
         cfg = OllamaConfig()
         c = OllamaClient(
-            base_url=cfg.base_url,
-            model=cfg.model,
-            timeout=cfg.timeout,
-            temperature=cfg.temperature,
-            top_p=cfg.top_p,
-            top_k=cfg.top_k,
-            max_tokens=cfg.max_tokens,
-            repeat_penalty=cfg.repeat_penalty,
-        )
-        c._session = AsyncMock()
-        c._breaker = MagicMock()
-        c._breaker.is_available.return_value = True
-        c._breaker.record_success = MagicMock()
-        c._breaker.record_failure = MagicMock()
-        return c
-
-    @pytest.mark.asyncio
-    async def test_aiohttp_client_error_raises_connection_error(self):
-        """aiohttp.ClientError → LeyaLLMConnectionError."""
-        from leya_core.config import OllamaConfig
-        cfg = OllamaConfig()
-        client = OllamaClient(
             base_url=cfg.base_url, model=cfg.model, timeout=cfg.timeout,
             temperature=cfg.temperature, top_p=cfg.top_p, top_k=cfg.top_k,
             max_tokens=cfg.max_tokens, repeat_penalty=cfg.repeat_penalty,
         )
-        client._session = AsyncMock()
-        client._breaker = MagicMock()
-        client._breaker.is_available.return_value = True
-        
-        # ИСПРАВЛЕНО: Корректно мокаем aiohttp.ClientError через side_effect
-        client._session.post.side_effect = aiohttp.ClientError("Connection failed")
-        
+        c._session = AsyncMock()
+        c.circuit_breaker = MagicMock()
+        c.circuit_breaker.is_available = True
+        c.circuit_breaker.record_success = MagicMock()
+        c.circuit_breaker.record_failure = MagicMock()
+        return c
+
+    @pytest.mark.asyncio
+    async def test_aiohttp_client_error_raises_connection_error(self, client):
+        mock_post = AsyncMock()
+        mock_post.side_effect = aiohttp.ClientError("Connection failed")
+        client._session.post.return_value = mock_post
+
         with pytest.raises(LeyaLLMConnectionError):
             await client.chat("hi")
 
