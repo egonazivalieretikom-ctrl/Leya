@@ -52,26 +52,28 @@ MEMORY_STATE_VERSION: int = 3
 
 @dataclass
 class SyncReport:
-    """Отчёт о синхронизации ChromaDB <-> in-memory.
-
-    Используется для observability и отладки расхождений между хранилищами.
     """
-    added_to_chroma: int = 0
-    updated_in_chroma: int = 0
-    removed_from_chroma: int = 0
-    errors: int = 0
-    skipped: int = 0
-    duration_ms: float = 0.0
+    Отчёт о операции синхронизации in-memory ↔ ChromaDB.
+    """
+
+    def __init__(self):
+        self.added_to_chrome: int = 0
+        self.updated_in_chrome: int = 0
+        self.removed_from_chrome: int = 0
+        self.errors: int = 0
+        self.duration_ms: float = 0.0
 
     @property
     def total_discrepancies(self) -> int:
-        return self.added_to_chroma + self.removed_from_chroma
+        return self.added_to_chrome + self.removed_from_chrome
 
     def __str__(self) -> str:
         return (
-            f"SyncReport(added={self.added_to_chroma}, updated={self.updated_in_chroma}, "
-            f"removed={self.removed_from_chroma}, errors={self.errors}, "
-            f"skipped={self.skipped}, {self.duration_ms:.1f}ms)"
+            f"SyncReport(added={self.added_to_chrome}, "
+            f"updated={self.updated_in_chrome}, "
+            f"removed={self.removed_from_chrome}, "
+            f"errors={self.errors}, "
+            f"duration={self.duration_ms:.1f}ms)"
         )
 
 # ============================================================================
