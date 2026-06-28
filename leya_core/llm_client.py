@@ -228,6 +228,8 @@ class OllamaClient:
 
         # Circuit Breaker check (исправлено: используем circuit_breaker, а не _breaker)
         if not self.circuit_breaker.is_available:
+            if self._fallback_fn:
+                return await self._fallback_fn(prompt)
             raise LeyaLLMUnavailableError(
                 "LLM недоступен: Circuit Breaker в состоянии OPEN",
                 context={"breaker_status": self.circuit_breaker.get_status()}
