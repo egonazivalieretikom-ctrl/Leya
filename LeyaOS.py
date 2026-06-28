@@ -3,7 +3,8 @@ LeyaOS.py — Оркестратор цифрового сознания Леи.
 Версия: 3.0
 """
 from __future__ import annotations  # ✅ ИСПРАВЛЕНО: было "from future"
-
+from dotenv import load_dotenv
+load_dotenv()
 import os 
 from pathlib import Path 
 import asyncio
@@ -94,6 +95,10 @@ class LeyaOS:
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
         self._shutdown_event = asyncio.Event()  # ✅ ДОБАВЛЕНО
+        from leya_core.state_persistence import StatePersistence
+        self.persistence = StatePersistence(
+            state_dir=Path(config.brain_dir) if hasattr(config, 'brain_dir') else Path("./leya_brain")
+        )
 
         # Конфигурация
         self.config = config or LeyaConfig.from_env()

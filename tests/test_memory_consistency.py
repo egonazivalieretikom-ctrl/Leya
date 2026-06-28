@@ -28,6 +28,11 @@ class FakeChromaCollection:
         self.upsert_calls = 0
         self.delete_calls = 0
 
+    def add(self, ids: list[str], documents: list[str], 
+            embeddings: list[list[float]], metadatas: list[dict]):
+        """Добавление записей (алиас для upsert в тестах)."""
+        self.upsert(ids, documents, embeddings, metadatas)
+
     def upsert(self, ids, documents=None, embeddings=None, metadatas=None):
         self.upsert_calls += 1
         for i, id_ in enumerate(ids):

@@ -302,6 +302,10 @@ class IHomeostasisEngine(Protocol):
     Автономная генерация целей на основе дисбаланса драйвов,
     предсказанного состояния и недавних эпизодов.
     """
+    def __init__(self, ...):
+        self._current_goal: WorkspaceProposal | None = None
+        self._last_action_time: float = 0.0
+        self._rest_period: float = config.rest_period if config else 60.0
 
     # Атрибуты состояния (в реализации это обычные поля экземпляра, а не @property)
     current_goal: dict[str, Any] | None
@@ -324,11 +328,16 @@ class IHomeostasisEngine(Protocol):
     def add_dynamic_keywords(self, keywords: list[str]) -> None: ...
 
     @property
-    def current_goal(self) -> dict[str, Any] | None: ...
+    def current_goal(self) -> WorkspaceProposal | None:
+        return self._current_goal
+    
     @property
-    def last_action_time(self) -> float: ...
+    def last_action_time(self) -> float:
+        return self._last_action_time
+    
     @property
-    def rest_period(self) -> float: ...
+    def rest_period(self) -> float:
+        return self._rest_period
 
 # =============================================================================
 # Thinker Interfaces

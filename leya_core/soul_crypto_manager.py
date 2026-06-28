@@ -93,7 +93,14 @@ class SoulCryptoManager:
             config: Конфигурация soul (soul_dir, hmac_key, versioning)
         """
         self.config = config
-        self.soul_dir = Path(config.soul_dir)
+        if hasattr(config, 'soul_dir'):
+            self.soul_dir = Path(config.soul_dir)
+        elif hasattr(config, 'soul') and hasattr(config.soul, 'soul_dir'):
+            self.soul_dir = Path(config.soul.soul_dir)
+        else:
+            raise ValueError(
+                "Конфигурация должна содержать soul_dir или soul.soul_dir"
+            )
         
         # Создаём директорию, если её нет
         try:

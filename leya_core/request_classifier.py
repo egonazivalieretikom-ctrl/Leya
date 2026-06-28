@@ -203,12 +203,32 @@ class RequestClassifier:
         logger.debug("Fallback на эвристику")
         return heuristic_result
 
-    def _heuristic_classify(self, user_input: str) -> IntentClassification:
-        """Уровень 1: Быстрая эвристика с regex и весами.
-
-        Проходит по всем паттернам, суммирует веса для каждого intent,
-        возвращает intent с максимальным score.
-        """
+    def _heuristic_classify(self, text: str) -> tuple[UserIntent, float]:
+        text_lower = text.lower().strip()
+    
+        # STATUS эвристики (ДОБАВЬТЕ перед QUESTION)
+        status_patterns = [
+            r"как(?:ое|ая|ую|ие)\s+(?:у\s+тебя\s+)?состояни",
+            r"как\s+ты\s+себя\s+чувству",
+            r"что\s+ты\s+(?:сейчас\s+)?делаешь",
+            r"как\s+твои\s+дела",
+            r"как\s+поживаешь",
+            r"что\s+нового",
+        ]
+    
+        for pattern in status_patterns:
+            if re.search(pattern, text_lower):
+                return UserIntent.STATUS, 0.85
+    
+        # QUESTION эвристики (существующие)
+        question_patterns = [
+            r"^(?:что|кто|как|где|когда|почему|зачем)\s+",
+            r"\?$",
+        ]
+    
+        for pattern in question_patterns:
+            if re.search(pattern, text_lower):
+                return UserIntent.QUESTION, 0.75
         scores: dict[UserIntent, float] = {}
 
         for intent, patterns in self._compiled_patterns.items():

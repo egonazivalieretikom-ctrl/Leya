@@ -212,6 +212,7 @@ class MemorySystem:
         self.engrams: dict[str, Engram] = {}
         self.synapses: dict[str, Synapse] = {}
         self.self_model: str = ""
+        self.state_path = Path(self.config.brain_dir) / "memory_state.json"
         self._state_version = 3
         self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
 
@@ -463,43 +464,25 @@ class MemorySystem:
     # Само-модель
     # ========================================================================
 
-    async def update_self_model(self, reflection_text: str) -> None:
-        """
-        Обновляет само-модель на основе рефлексии/инсайта.
-
-        Args:
-            reflection_text: Текст рефлексии или инсайта для добавления в self_model.
-                Пустые строки игнорируются.
-
-        Side effects:
-            - Добавляет timestamped запись в self_model
-            - Ограничивает размер self_model последними 50 записями
-            - Сохраняет состояние через _save_state()
-        """
-        if not reflection_text or not reflection_text.strip():
-            logger.warning("MemorySystem: Пустой reflection_text, обновление пропущено.")
-            return
-
+    async def update_self_model(self, new_content: str) -> None:
+        """Обновление модели себя с ограничением длины."""
         timestamp = datetime.now().isoformat()
-        entry = f"[{timestamp}] {reflection_text.strip()}"
-
-        if self.self_model:
-            # Ограничиваем размер self_model (последние 50 записей)
-            lines = self.self_model.split("\n")
-            if len(lines) >= 50:
-                lines = lines[-49:]
-            lines.append(entry)
-            self.self_model = "\n".join(lines)
-        else:
-            self.self_model = entry
-
-        logger.info(f"MemorySystem: Self-model обновлён (+{len(reflection_text)} символов)")
-
+        updated_content = f"[{timestamp}] {new_content}"
+    
+        # ДОБАВЬТЕ проверку длины:
+        max_length = self.memory_config.max_self_model_length
+        if len(updated_content) > max_length:
+            # Обрезаем с сохранением последних записей
+            updated_content = updated_content[-max_length:]
+            logger.warning(
+                f"Self-model обрезан до {max_length} символов "
+                f"(было {len(updated_content)})"
+            )
+    
+        self.self_model = updated_content
+    
         # Сохранение состояния
-        try:
-            await self._save_state()
-        except Exception as exc:
-            logger.error(f"MemorySystem: Ошибка сохранения после update_self_model: {exc}")
+        await self._save_state()
 
     def _extract_key_topics(self, text: str) -> list[str]:
         """
@@ -1158,48 +1141,54 @@ class MemorySystem:
                 context={"error_type": type(e).__name__, "detail": str(e)}
             ) from e
     
-    async def _sync_chroma_from_memory(self) -> None:
+    async def _sync_chroma_from_memory(self) -> SyncReport:
         """
-        Синхронизация in-memory состояния с ChromaDB после загрузки.
-
-        Гарантирует consistency между peristent state (JSON) и векторным хранилищем.
-        Вызывается в конце _load_state().
+        Синхронизация in-memory состояния с ChromaDB.
+    
+        Returns:
+            SyncReport с информацией о синхронизации
         """
         logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
-
-        # Получаем ID всех энграмм из in-memory
-        episodic_ids = {
-            e.id for e in self.engrams.values()
-            if e.memory_type == MemoryType.EPISODIC and e.retention_strength >= 0.05
-        }
-        semantic_ids = {
-            e.id for e in self.engrams.values()
-            if e.memory_type == MemoryType.SEMANTIC and e.retention_strength >= 0.05
-        }
-
+    
+        # Создаём общий отчёт
+        total_report = SyncReport()
+    
         # Синхронизируем эпизодическую память
         try:
-            report_episodic = await self._collect_batch(
+            report_episodic = await self._sync_collection(
                 collection=self.episodic_collection,
-                expected_ids=episodic_ids,
                 memory_type=MemoryType.EPISODIC,
             )
+            if report_episodic:
+                total_report.added_to_chrome += report_episodic.added_to_chrome
+                total_report.updated_in_chrome += report_episodic.updated_in_chrome
+                total_report.removed_from_chrome += report_episodic.removed_from_chrome
+                total_report.errors += report_episodic.errors
             logger.info(f"Sync episodic: {report_episodic}")
         except Exception as exc:
             logger.error(f"Сбой sync episodic: {exc}")
-
+            total_report.errors += 1
+    
         # Синхронизируем семантическую память
         try:
-            report_semantic = await self._collect_batch(
+            report_semantic = await self._sync_collection(
                 collection=self.semantic_collection,
-                expected_ids=semantic_ids,
                 memory_type=MemoryType.SEMANTIC,
             )
+            if report_semantic:
+                total_report.added_to_chrome += report_semantic.added_to_chrome
+                total_report.updated_in_chrome += report_semantic.updated_in_chrome
+                total_report.removed_from_chrome += report_semantic.removed_from_chrome
+                total_report.errors += report_semantic.errors
             logger.info(f"Sync semantic: {report_semantic}")
         except Exception as exc:
             logger.error(f"Сбой sync semantic: {exc}")
-
+            total_report.errors += 1
+    
         logger.info("Синхронизация завершена")
+    
+        # ВАЖНО: Возвращаем отчёт!
+        return total_report
 
     
 
