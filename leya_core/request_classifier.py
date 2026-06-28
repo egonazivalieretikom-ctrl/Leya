@@ -379,6 +379,7 @@ class RequestClassifier:
         except Exception as e:
             logger.warning(f"Ошибка LLM классификации: {e}", exc_info=True)
             raise
+    
 
     async def save_to_cache(self, classification: IntentClassification) -> None:
         """Сохранение результата классификации в memory для будущего cache.

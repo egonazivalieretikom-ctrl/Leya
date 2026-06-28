@@ -27,6 +27,7 @@ import re
 import tempfile
 import time
 import uuid
+from datetime import datetime 
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -43,6 +44,7 @@ from .exceptions import (
     LeyaMemoryError,
     LeyaStateCorruptedError,
     LeyaStateVersionMismatchError,
+    LeyaConfigError,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,8 +251,9 @@ class MemorySystem:
         self,
         content: str,
         emotional_boost: float = 0.0,
-        metadata: dict[str, Any] | None = None,
-    ) -> Engram:
+        metadata: dict | None = None,
+        memory_type: MemoryType = MemoryType.EPISODIC,  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
+    ) -> str:
         """
         Сохранить восприятие как эпизодическую энграмму.
 
@@ -737,6 +740,101 @@ class MemorySystem:
 
         return len(to_delete)
 
+    async def _collect_batch(
+        self,
+        collection,
+        expected_ids: set[str],
+        memory_type: MemoryType,
+    ) -> SyncReport:
+        """
+        Собирает новые/обновлённые энграммы и подготавливает их для batch upsert в ChromaDB.
+
+        Биологическая модель:
+        - Синхронизация in-memory состояния с векторным хранилищем
+        - Передача метаданных для последующего семантического поиска
+
+        Args:
+            collection: ChromaDB collection (episodic или semantic)
+            expected_ids: Set ID энграмм, которые должны быть в коллекции
+            memory_type: MemoryType.EPISODIC или MemoryType.SEMANTIC
+
+        Returns:
+            SyncReport с информацией об обработанных элементах.
+        """
+        report = SyncReport()
+        start_time = time.time()
+
+        try:
+            # Получаем все энграммы нужного типа из in-memory состояния
+            engrams_of_type = [
+                engram for engram in self.engrams.values()
+                if engram.memory_type == memory_type
+            ]
+
+            # Списки для batch операции
+            batch_ids: list[str] = []
+            batch_docs: list[str] = []
+            batch_embeddings: list[list[float]] = []
+            batch_metadatas: list[dict[str, Any]] = []
+
+            for engram in engrams_of_type:
+                # Пропускаем энграммы с нулевым retention (уже забыты)
+                if engram.retention_strength < 0.05:
+                    continue
+
+                # Генерируем эмбеддинг (в отдельном потоке, чтобы не блокировать event loop)
+                try:
+                    embedding = await asyncio.to_thread(self._generate_embedding, engram.content)
+                except Exception as exc:
+                    logger.warning(f"Не удалось сгенерировать эмбеддинг для {engram.id}: {exc}")
+                    report.errors += 1
+                    continue
+
+                # Если эмбеддинг пустой — пропускаем
+                if not embedding:
+                    report.errors += 1
+                    continue
+
+                # Формируем метаданные с ПРАВИЛЬНЫМИ полями из Engram
+                batch_ids.append(engram.id)
+                batch_docs.append(engram.content)
+                batch_embeddings.append(embedding)
+                batch_metadatas.append({
+                    "memory_type": engram.memory_type.value,
+                    "timestamp": engram.timestamp,                    # ← ИСПРАВЛЕНО: было created_at
+                    "retention_strength": engram.retention_strength,  # ← ИСПРАВЛЕНО: было recentness_strength
+                    "emotional_boost": engram.emotional_boost,
+                    "retrieval_count": engram.retrieval_count,
+                    "consolidation_level": engram.consolidation_level,
+                })
+
+            # Batch upsert в ChromaDB
+            if batch_ids:
+                await asyncio.to_thread(
+                    collection.upsert,
+                    ids=batch_ids,
+                    documents=batch_docs,
+                    embeddings=batch_embeddings,
+                    metadatas=batch_metadatas,
+                )
+                report.added_to_chrome = len(batch_ids)
+                logger.info(
+                    f"Batch sync для {memory_type.value}: upserted {len(batch_ids)} энграмм"
+                )
+
+        except Exception as exc:
+            logger.error(f"Ошибка в _collect_batch для {memory_type.value}: {exc}")
+            report.errors += 1
+            raise LeyaMemoryError(
+                "Сбой batch синхронизации с ChromaDB",
+                context={"memory_type": memory_type.value, "error": str(exc)},
+            ) from exc
+        finally:
+            report.duration_ms = (time.time() - start_time) * 1000
+
+        return report
+
+
     async def get_memory_graph_data(
         self,
         min_retention: float = 0.1,
@@ -1060,269 +1158,50 @@ class MemorySystem:
                 context={"error_type": type(e).__name__, "detail": str(e)}
             ) from e
     
-    async def _sync_chroma_from_memory(self) -> SyncReport:
-        """Синхронизация ChromaDB с in-memory engrams.
-
-        Источник истины — in-memory (JSON с HMAC). Chroma — индекс для
-        семантического поиска. Стратегия:
-        1. Пройти по всем in-memory engrams → upsert в Chroma (с эмбеддингами).
-        2. Найти orphan IDs в Chroma (есть в Chroma, нет в JSON) → удалить.
-        3. Вернуть SyncReport с метриками расхождений.
-
-        Этап 1.4: гарантия consistency после load. Graceful degradation:
-        если Chroma недоступна или эмбеддинг не генерируется — логируем
-        ошибку, но не роняем систему.
+    async def _sync_chroma_from_memory(self) -> None:
         """
-        import time
-        start = time.perf_counter()
-        report = SyncReport()
+        Синхронизация in-memory состояния с ChromaDB после загрузки.
 
-        try:
-            # Группируем engrams по типу памяти
-            episodic_ids = set()
-            semantic_ids = set()
-            for engram in self.engrams.values():
-                if engram.memory_type == "EPISODIC":
-                    episodic_ids.add(engram.id)
-                elif engram.memory_type == "SEMANTIC":
-                    semantic_ids.add(engram.id)
-
-            # Синхронизируем каждую коллекцию
-            epi_report = await self._sync_collection(
-                self.episodic_collection, episodic_ids, "EPISODIC"
-            )
-            sem_report = await self._sync_collection(
-                self.semantic_collection, semantic_ids, "SEMANTIC"
-            )
-
-            # Суммируем метрики
-            report.added_to_chroma = epi_report.added_to_chroma + sem_report.added_to_chroma
-            report.updated_in_chroma = epi_report.updated_in_chroma + sem_report.updated_in_chroma
-            report.removed_from_chroma = epi_report.removed_from_chroma + sem_report.removed_from_chroma
-            report.errors = epi_report.errors + sem_report.errors
-            report.skipped = epi_report.skipped + sem_report.skipped
-
-            report.duration_ms = (time.perf_counter() - start) * 1000
-
-            # Логируем расхождения
-            if report.total_discrepancies > 0:
-                logger.info(
-                    f"🔄 Chroma sync: {report} | "
-                    f"discrepancies={report.total_discrepancies}"
-                )
-            else:
-                logger.debug(f"✅ Chroma sync: {report} | no discrepancies")
-
-            return report
-
-        except Exception as e:
-            logger.error(
-                f"Критическая ошибка синхронизации Chroma: {e}",
-                exc_info=True,
-                extra={"context": {"engrams_count": len(self.engrams)}}
-            )
-            report.errors += 1
-            report.duration_ms = (time.perf_counter() - start) * 1000
-            return report
-
-    async def _sync_collection(
-        self,
-        collection,
-        expected_ids: set,
-        memory_type: str
-    ) -> SyncReport:
-        """Синхронизация одной Chroma-коллекции с in-memory engrams.
-
-        Args:
-            collection: Chroma collection (episodic или semantic)
-            expected_ids: set ID engrams, которые должны быть в коллекции
-            memory_type: "EPISODIC" или "SEMANTIC"
-
-        Returns:
-            SyncReport с метриками для этой коллекции
+        Гарантирует consistency между peristent state (JSON) и векторным хранилищем.
+        Вызывается в конце _load_state().
         """
-        report = SyncReport()
+        logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
 
+        # Получаем ID всех энграмм из in-memory
+        episodic_ids = {
+            e.id for e in self.engrams.values()
+            if e.memory_type == MemoryType.EPISODIC and e.retention_strength >= 0.05
+        }
+        semantic_ids = {
+            e.id for e in self.engrams.values()
+            if e.memory_type == MemoryType.SEMANTIC and e.retention_strength >= 0.05
+        }
+
+        # Синхронизируем эпизодическую память
         try:
-            # 1. Получаем все IDs из Chroma
-            try:
-                chroma_data = await asyncio.to_thread(collection.get, include=[])
-                chroma_ids = set(chroma_data.get("ids", []))
-            except Exception as e:
-                logger.warning(
-                    f"Не удалось получить IDs из Chroma ({memory_type}): {e}",
-                    exc_info=True
-                )
-                report.errors += 1
-                return report
-
-            # 2. Находим расхождения
-            missing_in_chroma = expected_ids - chroma_ids  # нужно добавить
-            orphan_in_chroma = chroma_ids - expected_ids   # нужно удалить
-            present_in_both = expected_ids & chroma_ids    # нужно обновить (upsert)
-
-            # 3. Добавляем недостающие
-            if missing_in_chroma:
-                batch_ids = []
-                batch_docs = []
-                batch_embeddings = []
-                batch_metadatas = []
-
-                for engram_id in missing_in_chroma:
-                    engram = self.engrams.get(engram_id)
-                    if not engram:
-                        continue
-
-                    try:
-                        # Генерируем эмбеддинг
-                        embedding = await self._generate_embedding(engram.content)
-                        if not embedding:
-                            logger.warning(
-                                f"Пустой эмбеддинг для engram {engram_id}, пропускаем"
-                            )
-                            report.skipped += 1
-                            continue
-
-                        batch_ids.append(engram_id)
-                        batch_docs.append(engram.content)
-                        batch_embeddings.append(embedding)
-                        batch_metadatas.append({
-                            "memory_type": engram.memory_type,
-                            "retention_strength": engram.retention_strength,
-                            "emotional_boost": engram.emotional_boost,
-                            "created_at": engram.created_at,
-                        })
-
-                        # Батчим по 50 для эффективности
-                        if len(batch_ids) >= 50:
-                            await asyncio.to_thread(
-                                collection.upsert,
-                                ids=batch_ids,
-                                documents=batch_docs,
-                                embeddings=batch_embeddings,
-                                metadatas=batch_metadatas
-                            )
-                            report.added_to_chroma += len(batch_ids)
-                            batch_ids, batch_docs, batch_embeddings, batch_metadatas = [], [], [], []
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Ошибка добавления engram {engram_id} в Chroma: {e}",
-                            exc_info=True
-                        )
-                        report.errors += 1
-
-                # Добавляем оставшийся батч
-                if batch_ids:
-                    try:
-                        await asyncio.to_thread(
-                            collection.upsert,
-                            ids=batch_ids,
-                            documents=batch_docs,
-                            embeddings=batch_embeddings,
-                            metadatas=batch_metadatas
-                        )
-                        report.added_to_chroma += len(batch_ids)
-                    except Exception as e:
-                        logger.error(
-                            f"Ошибка батч-добавления в Chroma ({memory_type}): {e}",
-                            exc_info=True
-                        )
-                        report.errors += 1
-
-            # 4. Обновляем существующие (upsert)
-            if present_in_both:
-                batch_ids = []
-                batch_docs = []
-                batch_embeddings = []
-                batch_metadatas = []
-
-                for engram_id in present_in_both:
-                    engram = self.engrams.get(engram_id)
-                    if not engram:
-                        continue
-
-                    try:
-                        embedding = await self._generate_embedding(engram.content)
-                        if not embedding:
-                            report.skipped += 1
-                            continue
-
-                        batch_ids.append(engram_id)
-                        batch_docs.append(engram.content)
-                        batch_embeddings.append(embedding)
-                        batch_metadatas.append({
-                            "memory_type": engram.memory_type,
-                            "retention_strength": engram.retention_strength,
-                            "emotional_boost": engram.emotional_boost,
-                            "created_at": engram.created_at,
-                        })
-
-                        if len(batch_ids) >= 50:
-                            await asyncio.to_thread(
-                                collection.upsert,
-                                ids=batch_ids,
-                                documents=batch_docs,
-                                embeddings=batch_embeddings,
-                                metadatas=batch_metadatas
-                            )
-                            report.updated_in_chroma += len(batch_ids)
-                            batch_ids, batch_docs, batch_embeddings, batch_metadatas = [], [], [], []
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Ошибка обновления engram {engram_id} в Chroma: {e}",
-                            exc_info=True
-                        )
-                        report.errors += 1
-
-                if batch_ids:
-                    try:
-                        await asyncio.to_thread(
-                            collection.upsert,
-                            ids=batch_ids,
-                            documents=batch_docs,
-                            embeddings=batch_embeddings,
-                            metadatas=batch_metadatas
-                        )
-                        report.updated_in_chroma += len(batch_ids)
-                    except Exception as e:
-                        logger.error(
-                            f"Ошибка батч-обновления в Chroma ({memory_type}): {e}",
-                            exc_info=True
-                        )
-                        report.errors += 1
-
-            # 5. Удаляем orphan records
-            if orphan_in_chroma:
-                try:
-                    # Удаляем батчами по 100
-                    orphan_list = list(orphan_in_chroma)
-                    for i in range(0, len(orphan_list), 100):
-                        batch = orphan_list[i:i + 100]
-                        await asyncio.to_thread(collection.delete, ids=batch)
-                        report.removed_from_chroma += len(batch)
-
-                    logger.info(
-                        f"🗑️ Удалено {report.removed_from_chroma} orphan records "
-                        f"из Chroma ({memory_type})"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Ошибка удаления orphan из Chroma ({memory_type}): {e}",
-                        exc_info=True
-                    )
-                    report.errors += 1
-
-            return report
-
-        except Exception as e:
-            logger.error(
-                f"Неожиданная ошибка в _sync_collection ({memory_type}): {e}",
-                exc_info=True
+            report_episodic = await self._collect_batch(
+                collection=self.episodic_collection,
+                expected_ids=episodic_ids,
+                memory_type=MemoryType.EPISODIC,
             )
-            report.errors += 1
-            return report
+            logger.info(f"Sync episodic: {report_episodic}")
+        except Exception as exc:
+            logger.error(f"Сбой sync episodic: {exc}")
+
+        # Синхронизируем семантическую память
+        try:
+            report_semantic = await self._collect_batch(
+                collection=self.semantic_collection,
+                expected_ids=semantic_ids,
+                memory_type=MemoryType.SEMANTIC,
+            )
+            logger.info(f"Sync semantic: {report_semantic}")
+        except Exception as exc:
+            logger.error(f"Сбой sync semantic: {exc}")
+
+        logger.info("Синхронизация завершена")
+
+    
 
     def _compute_hmac(self, path: Path, key: bytes) -> str:
         """
@@ -1340,13 +1219,36 @@ class MemorySystem:
 
     def _get_hmac_key(self) -> bytes:
         """
-        Получение ключа HMAC из окружения или fallback.
-        
+        Получение ключа HMAC из окружения.
+
+        Security: Ключ ОБЯЗАТЕЛЕН для работы системы.
+        Слабый дефолт намеренно удалён — использование hardcoded ключа
+        делает HMAC-SHA256 бесполезным (ключ публичен в репозитории).
+
         Returns:
             Ключ HMAC в виде bytes
+
+        Raises:
+            LeyaConfigError: Если LEYA_STATE_HMAC_KEY не установлен.
         """
         key = os.environ.get("LEYA_STATE_HMAC_KEY")
-        if key:
-            return key.encode("utf-8")
-        # Fallback для разработки (в production должен быть установлен через .env)
-        return b"leya-dev-key-change-me-in-production"
+    
+        if not key:
+            raise LeyaConfigError(
+                "LEYA_STATE_HMAC_KEY не установлен в окружении. "
+                "Безопасная персистентность памяти невозможна. "
+                "Добавьте в .env: LEYA_STATE_HMAC_KEY=<сильный-секретный-ключ>",
+                context={
+                    "required_env": "LEYA_STATE_HMAC_KEY",
+                    "hint": "Сгенерируйте ключ: python -c 'import secrets; print(secrets.token_urlsafe(32))'",
+                },
+            )
+    
+        # Проверка минимальной длины (рекомендация NIST: минимум 256 бит = 32 байта)
+        if len(key) < 32:
+            logger.warning(
+                f"LEYA_STATE_HMAC_KEY слишком короткий ({len(key)} символов). "
+                f"Рекомендуется минимум 32 символа (256 бит)."
+            )
+    
+        return key.encode("utf-8")

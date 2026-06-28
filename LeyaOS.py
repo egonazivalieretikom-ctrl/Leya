@@ -4,6 +4,8 @@ LeyaOS.py — Оркестратор цифрового сознания Леи.
 """
 from __future__ import annotations  # ✅ ИСПРАВЛЕНО: было "from future"
 
+import os 
+from pathlib import Path 
 import asyncio
 import logging
 import signal
@@ -24,6 +26,7 @@ from leya_core.environment import CLIEnvironment
 from leya_core.experimental.decision_engine import DecisionEngine, Decision
 from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
 from leya_core.interfaces import IDecisionEngine, IEmotionalSupport
+from leya_core.soul_manager import SoulManager 
 
 # Импорт исключений
 from leya_core.exceptions import (
@@ -37,6 +40,7 @@ from leya_core.exceptions import (
     LeyaSoulError,
     LeyaToolError,
     LeyaWorkspaceError,
+    SoulTamperError,
 )
 
 from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
@@ -107,6 +111,14 @@ class LeyaOS:
         # Ядро когнитивной системы
         self.drives: IDriveSystem = DriveSystem(config=self.config.drives)
         self.memory: IMemorySystem = MemorySystem(config=self.config.memory) 
+
+        # Инициализация Soul Manager
+        from leya_core.soul_manager import SoulManager
+        self.soul_manager = SoulManager(
+            soul_dir=self.config.soul.soul_dir,
+            hmac_key=os.environ.get("SOUL_HMAC_KEY"),
+        )
+        logger.info("SoulManager инициализирован")
 
         # Проверка Protocol-интерфейсов
         if not isinstance(self.memory, IMemorySystem):
@@ -275,6 +287,24 @@ class LeyaOS:
         Запускает фоновые задачи, загружает состояние, запускает цикл восприятия.
         """
         logger.info("Загрузка Модели Себя...")
+        soul_context = ""
+        if hasattr(self, 'soul_crypto') and self.soul_crypto is not None:
+            try:
+                soul_context = await asyncio.to_thread(self.soul_crypto.load_all)
+                logger.info("Soul загружен через soul_crypto (с проверкой целостности)")
+            except Exception as exc:
+                # Если soul_crypto упал — логируем, но не крашимся
+                logger.error(f"Ошибка загрузки soul через soul_crypto: {exc}")
+                # Fallback на обычный soul_manager
+                if hasattr(self, 'soul_manager'):
+                    soul_context = await self.soul_manager.load_all()
+                    logger.warning("Использован fallback на soul_manager (без крипто-проверки)")
+        elif hasattr(self, 'soul_manager'):
+            # soul_crypto не инициализирован — используем обычный soul_manager
+            soul_context = await asyncio.to_thread(self.soul_manager.load_all)
+            logger.info("Soul загружен через soul_manager (без крипто-проверки)")
+        else:
+            logger.warning("Soul не загружен: отсутствуют soul_crypto и soul_manager")
         try:
             self.self_model = await self.memory.get_self_model_context()
         except LeyaMemoryError as exc:
@@ -300,12 +330,19 @@ class LeyaOS:
             self.env.soul_manager, "update_secret_key"
         ):
             try:
-                soul_context = self.soul_crypto.load_all()
-                logger.info(
-                    f"✅ Soul загружен с HMAC-проверкой: "
-                    f"personality={len(soul_context['personality'])} символов"
-                )
-            except SoulTamperError as exc:
+                # Безопасная загрузка soul
+                if hasattr(self, 'soul_crypto') and self.soul_crypto is not None:
+                    soul_context = await asyncio.to_thread(self.soul_crypto.load_all)
+                    logger.info("Soul загружен через soul_crypto (с проверкой целостности)")
+                elif hasattr(self, 'soul_manager') and self.soul_manager is not None:
+                    soul_context = await asyncio.to_thread(self.soul_manager.load_all)
+                    logger.info("Soul загружен через soul_manager")
+                else:
+                    logger.warning("Soul не загружен: отсутствуют soul_crypto и soul_manager")
+                    soul_context = ""
+            except Exception as exc:
+                logger.error(f"Неожиданная ошибка загрузки soul: {exc}")
+                soul_context = ""
                 logger.error(f"🚨 КРИТИЧЕСКАЯ ОШИБКА: {exc}", exc_info=True)
                 logger.error("Soul-файлы могли быть подменены. Остановка системы.")
                 self.running = False

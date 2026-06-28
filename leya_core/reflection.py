@@ -61,18 +61,45 @@ class MetaCognition(IMetaCognition):
         self.llm_client = llm_client or self._default_llm_call
         self.config = config or ReflectionConfig()
 
-        # Флаг для управления циклом
-        self.is_sleeping = False
+        # КРИТИЧНО: Сначала инициализируем приватное поле НАПРЯМУЮ (без setter)
+        self._is_sleeping = False  # ← ИСПРАВЛЕНО: прямое присваивание
         self._running = True
 
         # Счётчик сессий рефлексии
         self._session_count = 0
+
+        # Теперь можно использовать setter (если нужно логирование)
+        # self.is_sleeping = False  # ← Опционально, но избыточно
 
         logger.info(
             f"MetaCognition инициализирован: "
             f"interval={self.config.consolidation_interval}с, "
             f"existential={self.config.existential_inquiry_enabled}"
         )
+
+    @property
+    def is_sleeping(self) -> bool:
+        """
+        Флаг: находится ли Лея в состоянии "сна" (рефлексии).
+    
+        Реализует интерфейс IReflection.is_sleeping (read-only для внешних потребителей).
+        Внутренне управляется через setter.
+        """
+        return self._is_sleeping
+
+    @is_sleeping.setter
+    def is_sleeping(self, value: bool) -> None:
+        """Setter для внутреннего использования."""
+        if not isinstance(value, bool):
+            raise TypeError(f"is_sleeping must be bool, got {type(value).__name__}")
+    
+        # Безопасное получение old_value (если поле ещё не инициализировано)
+        old_value = getattr(self, '_is_sleeping', None)
+        self._is_sleeping = value
+    
+        # Логируем только если значение изменилось и поле уже существовало
+        if old_value is not None and old_value != value:
+            logger.debug(f"MetaCognition: is_sleeping changed: {old_value} → {value}")
 
     async def process_action(self, stimulus: str, cognitive_output: Any, result: str) -> None:
         """

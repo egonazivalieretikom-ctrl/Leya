@@ -20,7 +20,13 @@ import logging
 import time
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import (
+    Any,
+    Callable,
+    Protocol,
+    runtime_checkable,
+    Optional, 
+)
 
 import aiohttp
 
@@ -66,7 +72,7 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time: float = 0.0
         self._last_state_change: float = time.time()
-
+    
     @property
     def state(self) -> CircuitState:
         """Текущее состояние (с автоматическим переходом в half-open)."""

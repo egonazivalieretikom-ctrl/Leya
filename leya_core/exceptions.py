@@ -24,6 +24,15 @@ class LeyaError(Exception):
         return self.message
 
 
+class SoulTamperError(LeyaError):
+    """
+    Исключение: обнаружена подмена или повреждение soul-файлов.
+    
+    Возникает при нарушении целостности soul (HMAC mismatch)
+    или при попытке загрузки несанкционированного содержимого.
+    """
+    pass
+
 # --- Persistence ---
 class LeyaPersistenceError(LeyaError):
     """Базовое исключение для ошибок персистентности."""
