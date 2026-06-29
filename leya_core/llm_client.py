@@ -358,27 +358,6 @@ class OllamaClient:
             timeout=timeout,
         )
 
-    async def generate(
-        self,
-        prompt: str,
-        system: str | None = None,
-        max_tokens: int | None = None,
-        require_json: bool = False,
-        timeout: float | None = None,
-    ) -> str:
-        """Обёртка для обратной совместимости с memory.py и старым интерфейсом ILLMClient.
-
-        Делегирует вызов в chat(). Сохраняет всю логику Circuit Breaker и обработки ошибок.
-        Не упрощает и не дублирует код — просто удобный alias.
-        """
-        return await self.chat(
-            prompt=prompt,
-            system=system,
-            require_json=require_json,
-            timeout=timeout,
-        )
-
-
     async def __aenter__(self) -> OllamaClient:
         return self
 

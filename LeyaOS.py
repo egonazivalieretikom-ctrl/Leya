@@ -46,8 +46,6 @@ from leya_core.exceptions import (
     LeyaWorkspaceError,
     SoulTamperError,
 )
-from leya_core.state_persistence import StatePersistence
-
 from leya_core.global_workspace import GlobalWorkspace, Priority, WorkspaceProposal
 from leya_core.homeostasis_engine import HomeostasisEngine
 

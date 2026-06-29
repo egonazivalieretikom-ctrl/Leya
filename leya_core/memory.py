@@ -205,7 +205,6 @@ class MemorySystem:
                     либо MemoryConfig напрямую (для тестов и упрощённого использования).
             disable_hmac_check: Если True, отключает проверку HMAC при загрузке (для тестов).
         """
-        self.state_path: Path = None
         # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
         if isinstance(config, LeyaConfig):
             self.config = config
