@@ -12,6 +12,7 @@ import logging
 logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
 import signal
 import sys
+import time
 from datetime import datetime
 from typing import Any, Optional  # ✅ Добавлен Optional
 
@@ -582,6 +583,20 @@ class LeyaOS:
             else:
                 # UNKNOWN или другие — передаём в thinker
                 response = await self._handle_via_thinker(user_input, classification.intent)
+            try:
+                await self.memory.store_perception(
+                    content=f"Пользователь: {user_input}\nЛея: {response}",
+                    memory_type="EPISODIC",
+                    emotional_boost=0.65,   # повышенное эмоциональное усиление для диалога
+                    metadata={
+                        "type": "dialogue_turn",
+                        "user_input": user_input,
+                        "response": response,
+                        "timestamp": time.time()
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось сохранить диалоговый ход в память: {e}")
         except Exception as e:
             logger.error(f"Ошибка обработки intent {classification.intent}: {e}", exc_info=True)
             response = await self._handle_via_thinker(user_input, classification.intent)
@@ -685,6 +700,12 @@ class LeyaOS:
             drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
             memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
             tools = self.tool_registry.get_tools_schema() if hasattr(self, 'tool_registry') else []
+            
+            recent_episodes = await self.memory.get_recent_episodes(limit=10)
+            recent_dialogue = [
+                e for e in recent_episodes 
+                if getattr(getattr(e, "metadata", {}), "get", lambda k, d=None: d)("type") == "dialogue_turn"
+            ]
 
             # Генерируем план через thinker
             plan = await self.thinker.generate_plan(

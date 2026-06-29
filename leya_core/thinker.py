@@ -334,6 +334,7 @@ class CoreThinker:
         memory_context: list[dict],
         tools: list[dict],
         tool_context: str = "",
+        recent_dialogue: list = None,
     ) -> str:
         """Построение когнитивного промпта для LLM.
 
@@ -353,6 +354,12 @@ class CoreThinker:
         # Truncate memory context
         truncated_memory = _truncate_context(memory_context, available_for_memory)
         memory_str = "\n".join(item.get("content", "") for item in truncated_memory)
+        dialogue_str = ""
+        if recent_dialogue:
+            dialogue_str = "\n## Недавние реплики в текущем разговоре:\n"
+            for engram in recent_dialogue[-6:]:  # последние 6 ходов
+                if hasattr(engram, "content"):
+                    dialogue_str += engram.content + "\n"
 
         stimulus_str = json.dumps(stimulus, ensure_ascii=False, indent=2)
         tools_str = json.dumps(tools, ensure_ascii=False, indent=2)
@@ -367,6 +374,7 @@ class CoreThinker:
 
 ## Твоя память (релевантный контекст)
 {memory_str}
+{dialogue_str}
 
 ## Доступные инструменты
 {tools_str}
@@ -405,6 +413,7 @@ class CoreThinker:
         memory_context: list[dict],
         tools: list[dict],
         tool_context: str = "",
+        recent_dialogue: list = None,
     ) -> dict:
         """Генерация когнитивного плана.
 
@@ -416,6 +425,7 @@ class CoreThinker:
         """
         prompt = self._build_cognitive_prompt(
             stimulus, soul_context, drive_context, memory_context, tools, tool_context,
+            recent_dialogue=recent_dialogue,
         )
 
         try:
