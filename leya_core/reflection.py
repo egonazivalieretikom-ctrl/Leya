@@ -455,6 +455,9 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             thought = await self.llm_client(prompt)
             result = thought.strip()
 
+            logger_thoughts = logging.getLogger("leya.thoughts")
+            logger_thoughts.info(f"Спонтанная мысль: {result}")
+
             # ИСПРАВЛЕНИЕ ШАГ 4: Используем repair_json для извлечения текста из JSON
             if result.startswith("{"):
                 try:

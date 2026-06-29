@@ -233,13 +233,17 @@ class LoggingConfig:
     level: str = "INFO"
     file: str = "leya_consciousness.log"
     format: str = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+    log_thoughts: bool = True
+    thoughts_log_level: str = "DEBUG"
 
     def __post_init__(self):
         valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if self.level not in valid_levels:
             logger.warning(f"Некорректный LOG_LEVEL: {self.level}. Используем INFO")
             self.level = "INFO"
-
+        if self.thoughts_log_level not in valid_levels:
+            logger.warning(f"Некорректный THOUGHTS_LOG_LEVEL: {self.thoughts_log_level}. Используем DEBUG")
+            self.thoughts_log_level = "DEBUG"
 
 @dataclass
 class ReflectionConfig:
@@ -598,19 +602,8 @@ class LeyaConfig:
                 format=os.environ.get(
                     "LOG_FORMAT", "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
                 ),
-            )
-
-            config = cls(
-                ollama=ollama,
-                memory=memory,
-                drives=drives,
-                homeostasis=homeostasis,
-                thinker=thinker,
-                reflection=reflection,
-                workspace=workspace,
-                constitutional=constitutional,
-                web=web,
-                logging=logging_config,
+                log_thoughts=_parse_bool(os.environ.get("LOG_THOUGHTS"), True),
+                thoughts_log_level=os.environ.get("THOUGHTS_LOG_LEVEL", "DEBUG"),
             )
 
             soul = SoulConfig(
@@ -670,7 +663,8 @@ class LeyaConfig:
                 constitutional=constitutional,
                 web=web,
                 logging=logging_config,
-                experimental=experimental,  # НОВОЕ
+                soul=soul,
+                experimental=experimental,
             )
 
             logger.info("✅ Конфигурация успешно загружена из .env")

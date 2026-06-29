@@ -51,12 +51,22 @@ class ToolGenerator:
 
         return None
 
-    def _analyze_tool_usage(self, episodes: list[dict]) -> dict[str, Any] | None:
-        """Анализирует паттерны использования инструментов."""
+    def _analyze_tool_usage(self, episodes: list[dict] | list[Any]) -> dict[str, Any] | None:
+        """Анализирует паттерны использования инструментов.
+        
+        Поддерживает как dict (старый формат), так и Engram (публичный API памяти).
+        Использует duck-typing по атрибуту .content — не упрощает биологическую модель.
+        """
         tool_calls = {}
 
         for episode in episodes:
-            content = episode.get("content", "")
+            # Поддержка Engram (есть .content) и dict (.get)
+            if hasattr(episode, "content"):
+                content = getattr(episode, "content", "") or ""
+            elif isinstance(episode, dict):
+                content = episode.get("content", "")
+            else:
+                content = str(episode)[:500] or ""
 
             # Ищем упоминания инструментов
             for tool_name in self.tool_registry.tools:

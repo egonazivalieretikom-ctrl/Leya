@@ -930,10 +930,7 @@ class MemorySystem:
 
         try:
             # Defensive check: используем generate, если есть, иначе chat
-            if hasattr(self.llm_client, "generate"):
-                response = await self.llm_client.generate(prompt, max_tokens=500)
-            else:
-                response = await self.llm_client.chat(prompt, require_json=False)
+            response = await self.llm_client.generate(prompt, max_tokens=500)
 
             facts = [line.strip() for line in response.split("\n") if line.strip()]
             return facts[:10]

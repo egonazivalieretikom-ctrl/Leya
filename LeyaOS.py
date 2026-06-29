@@ -9,6 +9,7 @@ import os
 from pathlib import Path 
 import asyncio
 import logging
+logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
 import signal
 import sys
 from datetime import datetime
@@ -23,7 +24,7 @@ from leya_core.config import LeyaConfig
 
 # Импорт модулей
 from leya_core.constitutional import ConstitutionalLayer
-from leya_core.drives import DriveSystem
+from leya_core.drives import DriveSystem, DriveType
 from leya_core.environment import CLIEnvironment
 from leya_core.experimental.decision_engine import DecisionEngine, Decision
 from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
@@ -800,6 +801,22 @@ class LeyaOS:
                 action_intent = cognitive_output.get("action_intent", "none")
                 self_reflection = cognitive_output.get("self_reflection", "")
 
+                # Закрытие feedback loop для целей гомеостаза
+                if stimulus.get("source") == "homeostasis":
+                    try:
+                        goal_content = str(stimulus.get("content", "")).lower()
+                        drive_type = DriveType.INTEGRITY if "integrity" in goal_content or "целостность" in goal_content else DriveType.AUTONOMY
+
+                        rpe = self.drives.calculate_rpe("homeostasis_goal", actual_outcome=0.65)
+                        self.drives.apply_satisfaction(drive_type, base_amount=0.22, rpe=rpe)
+
+                        if hasattr(self.homeostasis, "mark_as_researched"):
+                            self.homeostasis.mark_as_researched(goal_content[:60])
+
+                        logger.info(f"[Fix] Homeostasis feedback closed: {drive_type.value}")
+                    except Exception as exc:
+                        logger.warning(f"Ошибка закрытия homeostasis feedback: {exc}")
+
                 # Конституциональная проверка ответа
                 verdict = self.constitutional.verify_response(response)
                 if not verdict.allowed:
@@ -909,13 +926,6 @@ class LeyaOS:
                 if tool_call:
                     await self._execute_tool(tool_call)
 
-            elif stimulus.get("source") == "homeostasis" or action_intent in ("rest", "none"):
-                # Закрытие петли обратной связи для гомеостаза (сохраняем RPE + emotional_boost)
-                drive_type = DriveType.INTEGRITY  # или определять по goal
-                rpe = self.drives.calculate_rpe("homeostasis_goal", actual_outcome=0.7)  # пример
-                self.drives.apply_satisfaction(drive_type, base_amount=0.25, rpe=rpe)
-                if hasattr(self.homeostasis, "mark_as_researched"):
-                    self.homeostasis.mark_as_researched(goal_name)
 
             elif action_intent == "remember_fact":
                 fact = cognitive_output.get("response", "")

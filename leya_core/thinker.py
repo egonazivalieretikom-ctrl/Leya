@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
@@ -424,6 +425,17 @@ class CoreThinker:
 
             # Парсинг через Pydantic
             cognitive_output = _safe_parse_json(raw_response)
+
+            # === ЛОГИРОВАНИЕ МЫСЛИТЕЛЬНЫХ ПРОЦЕССОВ ===
+            logger_thoughts = logging.getLogger("leya.thoughts")
+            logger_thoughts.debug(
+                "=== ВНУТРЕННИЙ МЕТАБОЛИЗМ МЫШЛЕНИЯ ===\n"
+                f"Internal Monologue:\n{cognitive_output.internal_monologue}\n\n"
+                f"Self Reflection:\n{cognitive_output.self_reflection}\n"
+                f"Action Intent: {cognitive_output.action_intent}"
+            )
+            if cognitive_output.tool_call:
+                logger_thoughts.debug(f"Tool Call: {cognitive_output.tool_call}")
 
             # Конвертируем в dict для обратной совместимости
             return {

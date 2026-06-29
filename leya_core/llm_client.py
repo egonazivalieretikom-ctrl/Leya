@@ -341,17 +341,27 @@ class OllamaClient:
                 f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
                 context={"error_type": type(e).__name__, "detail": str(e)}
             ) from e
-        
-            logger.error(
-                f"Неожиданная ошибка в LLM client: {e}",
-                exc_info=True,
-                extra={"context": {"url": url, "model": self.model}}
-            )
-            self.circuit_breaker.record_failure()
-            raise LeyaLLMError(
-                f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
-                context={"error_type": type(e).__name__, "detail": str(e)}
-            ) from e
+
+    async def generate(
+        self,
+        prompt: str,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        require_json: bool = False,
+        timeout: float | None = None,
+    ) -> str:
+        """Обёртка для обратной совместимости с memory.py и старым интерфейсом ILLMClient.
+
+        Делегирует вызов в chat(). Сохраняет всю логику Circuit Breaker и обработки ошибок.
+        Не упрощает и не дублирует код — просто удобный alias.
+        """
+        return await self.chat(
+            prompt=prompt,
+            system=system,
+            require_json=require_json,
+            timeout=timeout,
+        )
+
 
     async def __aenter__(self) -> OllamaClient:
         return self
