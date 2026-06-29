@@ -146,14 +146,14 @@ class LeyaOS:
         )
         self.llm_client.set_fallback(self._llm_fallback)
 
-        # MemorySystem (создаётся ПОСЛЕ llm_client, чтобы передать его)
+        # MemorySystem (создаётся ПОСЛЕ llm_client)
         self.memory = MemorySystem(
             config=self.config.memory,
             llm_client=self.llm_client,
         )
 
         # ===================================================================
-        # Проверка Protocol-интерфейсов (ТОЛЬКО ПОСЛЕ создания всех компонентов!)
+        # ✅ Проверка Protocol-интерфейсов — ТОЛЬКО ПОСЛЕ создания всех компонентов!
         # ===================================================================
         if not isinstance(self.memory, IMemorySystem):
             raise TypeError("memory должен реализовывать IMemorySystem")
