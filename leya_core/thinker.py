@@ -36,7 +36,7 @@ class ActionIntent(str, Enum):
 
 class ToolCall(BaseModel):
     """Вызов инструмента."""
-    tool_name: str = Field(..., description="Имя инструмента")
+    tool_name: Optional[str] = Field(None, description="Имя инструмента")
     parameters: dict[str, Any] = Field(default_factory=dict, description="Параметры вызова")
 
 
@@ -347,7 +347,14 @@ class CoreThinker:
 
         # Truncate memory context
         truncated_memory = _truncate_context(memory_context, available_for_memory)
-        memory_str = "\n".join(item.get("content", "") for item in truncated_memory)
+        def get_content(x):
+            if hasattr(x, "content"):
+                return x.content or ""
+            elif isinstance(x, dict):
+                return x.get("content", "")
+            return str(x)[:500]
+
+        memory_str = "\n".join(get_content(item) for item in truncated_memory)
         dialogue_str = ""
         if recent_dialogue:
             dialogue_str = "\n## Недавние реплики в текущем разговоре:\n"
