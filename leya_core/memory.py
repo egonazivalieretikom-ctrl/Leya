@@ -196,7 +196,13 @@ class MemorySystem:
     - Эмоциональное усиление: замедление забывания для значимых событий
     """
 
-    def __init__(self, config, *, disable_hmac_check: bool = False) -> None:
+    def __init__(
+        self,
+        config,
+        *,
+        disable_hmac_check: bool = False,
+        llm_client=None,
+    ) -> None:
         """
         Инициализация MemorySystem.
 
@@ -204,6 +210,7 @@ class MemorySystem:
             config: Может быть либо LeyaConfig (тогда извлекается config.memory),
                     либо MemoryConfig напрямую (для тестов и упрощённого использования).
             disable_hmac_check: Если True, отключает проверку HMAC при загрузке (для тестов).
+            llm_client: Опциональный LLM-клиент для консолидации памяти.
         """
         # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
         if isinstance(config, LeyaConfig):
@@ -220,6 +227,9 @@ class MemorySystem:
 
         # Флаг для отключения HMAC в тестах
         self._disable_hmac_check = disable_hmac_check
+
+        # LLM-клиент для консолидации (опциональный)
+        self.llm_client = llm_client
 
         # Инициализация ChromaDB
         try:
@@ -484,12 +494,29 @@ class MemorySystem:
     async def update_self_model(self, new_content: str) -> None:
         """Обновление модели себя с ограничением длины."""
         timestamp = datetime.now().isoformat()
-        updated_content = f"[{timestamp}] {new_content}"
-
-        # ДОБАВЬТЕ проверку длины:
         max_length = self.memory_config.max_self_model_length
+
+        # Проверка длины ДО конкатенации
+        new_entry = f"[{timestamp}] {new_content}"
+    
+        if len(new_entry) > max_length:
+            # Обрезаем new_content, а не весь результат
+            available_space = max_length - len(f"[{timestamp}] ") - 10  # 10 для безопасности
+            if available_space > 0:
+                new_content = new_content[:available_space]
+                new_entry = f"[{timestamp}] {new_content}"
+            else:
+                # Если даже timestamp не помещается, пропускаем
+                logger.warning(
+                    f"Self-model entry слишком длинный, пропускаем (длина={len(new_entry)})"
+                )
+                return
+
+        updated_content = new_entry
+
+        # Если общий self_model превышает лимит, обрезаем старые записи
         if len(updated_content) > max_length:
-            # Обрезаем с сохранением последних записей
+            # Обрезаем с начала, сохраняя последние записи
             updated_content = updated_content[-max_length:]
             logger.warning(
                 f"Self-model обрезан до {max_length} символов (было {len(updated_content)})"
@@ -989,7 +1016,19 @@ class MemorySystem:
     # ========================================================================
 
     async def _save_state(self) -> None:
-        """Надёжное атомарное сохранение с HMAC."""
+        """
+        Атомарное сохранение состояния памяти в JSON + HMAC.
+
+        Биологическая модель:
+        - Сохранение всех энграмм и синапсов
+        - HMAC-SHA256 подпись для целостности
+        - Атомарная запись через tempfile + os.replace
+
+        Raises:
+            LeyaAtomicWriteError: Ошибка записи файла
+            LeyaConfigError: Отсутствие/слабость HMAC ключа
+            LeyaMemoryError: Другие ошибки памяти
+        """
         if not hasattr(self, "state_path") or self.state_path is None:
             if hasattr(self, "memory_config") and self.memory_config is not None:
                 brain_dir = getattr(self.memory_config, "brain_dir", "./leya_brain")
@@ -1034,16 +1073,36 @@ class MemorySystem:
             except OSError as ose:
                 if "cross-device" in str(ose).lower():
                     import shutil
-
                     shutil.move(str(tmp_path), str(state_path))
                 else:
                     raise
-        except Exception as exc:
+
+        except (OSError, IOError, PermissionError) as exc:
+            # Конкретные исключения для файловых операций
             if tmp_path is not None and tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass  # Игнорируем ошибки очистки
             raise LeyaAtomicWriteError(
                 f"Сбой атомарной записи состояния памяти [path='{state_path}', error='{exc}']",
-                context={"path": str(state_path), "error": str(exc)},
+                context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
+            ) from exc
+
+        except (LeyaConfigError, LeyaMemoryError, LeyaAtomicWriteError):
+            # Наши специфичные исключения — пробрасываем без обёртки
+            raise
+
+        except Exception as exc:
+            # Last resort: неизвестные ошибки (но не CancelledError/KeyboardInterrupt)
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise LeyaAtomicWriteError(
+                f"Неожиданная ошибка при сохранении состояния памяти [path='{state_path}']",
+                context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
             ) from exc
 
     async def _load_state(self) -> None:

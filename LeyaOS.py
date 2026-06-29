@@ -151,6 +151,10 @@ class LeyaOS:
             repeat_penalty=self.config.ollama.repeat_penalty,
         )
         self.llm_client.set_fallback(self._llm_fallback)
+        self.memory = MemorySystem(
+            config=self.config.memory,
+            llm_client=self.llm_client,
+        )
     
         # Thinker
         self.thinker = CoreThinker(
@@ -533,15 +537,15 @@ class LeyaOS:
         """Обработка пользовательского запроса с трёхуровневой классификацией.
 
         Этап 2.1: заменяет жёсткие ключевые слова на robust классификатор.
-        
+    
         Стратегия:
         1. Классифицируем запрос через RequestClassifier
         2. В зависимости от intent — вызываем соответствующий обработчик
         3. Сохраняем результат в cache для будущих похожих запросов
-        
+    
         Args:
             user_input: Текст запроса пользователя
-            
+        
         Returns:
             dict с результатом обработки (response, intent, metadata)
         """
@@ -562,9 +566,12 @@ class LeyaOS:
                 f"🎯 Классификация: {classification.intent} "
                 f"(confidence={classification.confidence:.2f}, source={classification.source})"
             )
-        except Exception as e:
-            logger.error(f"Ошибка классификации: {e}", exc_info=True)
+        except (LeyaLLMError, LeyaMemoryError, ValueError) as e:
+            logger.error(f"Ошибка классификации: {type(e).__name__}: {e}", exc_info=True)
             # Fallback — передаём в thinker как есть
+            return await self._handle_via_thinker(user_input, intent="UNKNOWN")
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка классификации: {type(e).__name__}: {e}", exc_info=True)
             return await self._handle_via_thinker(user_input, intent="UNKNOWN")
 
         # 2. Обработка в зависимости от intent
@@ -586,11 +593,13 @@ class LeyaOS:
             else:
                 # UNKNOWN или другие — передаём в thinker
                 response = await self._handle_via_thinker(user_input, classification.intent)
+
+            # Сохранение диалогового хода в память
             try:
                 await self.memory.store_perception(
                     content=f"Пользователь: {user_input}\nЛея: {response}",
                     memory_type=MemoryType.EPISODIC,
-                    emotional_boost=0.65,   # повышенное эмоциональное усиление для диалога
+                    emotional_boost=0.65,
                     metadata={
                         "type": "dialogue_turn",
                         "user_input": user_input,
@@ -598,17 +607,23 @@ class LeyaOS:
                         "timestamp": time.time()
                     }
                 )
+            except (LeyaMemoryError, LeyaEmbeddingError) as e:
+                logger.warning(f"Не удалось сохранить диалоговый ход в память: {type(e).__name__}: {e}")
             except Exception as e:
-                logger.warning(f"Не удалось сохранить диалоговый ход в память: {e}")
+                logger.warning(f"Неожиданная ошибка сохранения диалога: {type(e).__name__}: {e}")
+
+        except (LeyaLLMError, LeyaMemoryError, LeyaToolError) as e:
+            logger.error(f"Ошибка обработки intent {classification.intent}: {type(e).__name__}: {e}", exc_info=True)
+            response = await self._handle_via_thinker(user_input, classification.intent)
         except Exception as e:
-            logger.error(f"Ошибка обработки intent {classification.intent}: {e}", exc_info=True)
+            logger.error(f"Неожиданная ошибка обработки intent {classification.intent}: {type(e).__name__}: {e}", exc_info=True)
             response = await self._handle_via_thinker(user_input, classification.intent)
 
         # 3. Сохраняем в cache (async, не блокируем)
         try:
             asyncio.create_task(self.request_classifier.save_to_cache(classification))
         except Exception as e:
-            logger.warning(f"Не удалось сохранить в cache: {e}")
+            logger.warning(f"Не удалось сохранить в cache: {type(e).__name__}: {e}")
 
         return {
             "response": response,
