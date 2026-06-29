@@ -273,14 +273,16 @@ def _truncate_context(
     Returns:
         Обрезанный список, fitting в budget
     """
-    if not context_items:
-        return []
+    def _get_relevance(x):
+        if hasattr(x, "metadata"):
+            return x.metadata.get("relevance_score", 0.0)
+        if isinstance(x, dict):
+            return x.get("relevance_score", 0.0)
+        return 0.0
 
-    # Сортируем по relevance_score (desc), если есть
-    # Если score отсутствует — сохраняем порядок (предполагаем, что newest first)
     sorted_items = sorted(
         context_items,
-        key=lambda x: x.get("relevance_score", 0.0),
+        key=_get_relevance,
         reverse=True
     )
 

@@ -338,7 +338,10 @@ class RequestClassifier:
 
             # Проверяем similarity
             for item in similar:
-                similarity = item.get("similarity", 0.0)
+                if hasattr(item, "metadata"):
+                    similarity = item.metadata.get("similarity", 0.0)
+                else:
+                    similarity = item.get("similarity", 0.0) if isinstance(item, dict) else 0.0
                 if similarity >= self.cache_similarity_threshold:
                     metadata = item.get("metadata", {})
                     cached_intent = metadata.get("intent")
