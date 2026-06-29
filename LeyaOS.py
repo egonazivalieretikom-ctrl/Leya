@@ -36,7 +36,10 @@ from leya_core.soul_crypto_manager import SoulCryptoManager
 
 # Импорт исключений
 from leya_core.exceptions import (
+    LeyaAtomicWriteError,
     LeyaBroadcastError,
+    LeyaConfigError,
+    LeyaEmbeddingError,
     LeyaEnvironmentError,
     LeyaHomeostasisError,
     LeyaLLMError,
@@ -110,7 +113,6 @@ class LeyaOS:
     
         # Ядро когнитивной системы
         self.drives = DriveSystem(config=self.config.drives)
-        self.memory = MemorySystem(config=self.config.memory)
     
         # Персистентность
         self.persistence = StatePersistence(
@@ -534,21 +536,7 @@ class LeyaOS:
         )
 
     async def _handle_user_request(self, user_input: str) -> dict:
-        """Обработка пользовательского запроса с трёхуровневой классификацией.
-
-        Этап 2.1: заменяет жёсткие ключевые слова на robust классификатор.
-    
-        Стратегия:
-        1. Классифицируем запрос через RequestClassifier
-        2. В зависимости от intent — вызываем соответствующий обработчик
-        3. Сохраняем результат в cache для будущих похожих запросов
-    
-        Args:
-            user_input: Текст запроса пользователя
-        
-        Returns:
-            dict с результатом обработки (response, intent, metadata)
-        """
+        """Обработка пользовательского запроса с трёхуровневой классификацией."""
         if not user_input or not user_input.strip():
             return {
                 "response": "Я не услышала запрос. Повтори, пожалуйста.",
@@ -568,10 +556,9 @@ class LeyaOS:
             )
         except (LeyaLLMError, LeyaMemoryError, ValueError) as e:
             logger.error(f"Ошибка классификации: {type(e).__name__}: {e}", exc_info=True)
-            # Fallback — передаём в thinker как есть
             return await self._handle_via_thinker(user_input, intent="UNKNOWN")
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка классификации: {type(e).__name__}: {e}", exc_info=True)
+        except (LeyaBroadcastError, LeyaEnvironmentError) as e:
+            logger.error(f"Ошибка окружения при классификации: {type(e).__name__}: {e}", exc_info=True)
             return await self._handle_via_thinker(user_input, intent="UNKNOWN")
 
         # 2. Обработка в зависимости от intent
@@ -591,7 +578,6 @@ class LeyaOS:
             elif classification.intent == UserIntent.HELP:
                 response = await self._handle_help(classification)
             else:
-                # UNKNOWN или другие — передаём в thinker
                 response = await self._handle_via_thinker(user_input, classification.intent)
 
             # Сохранение диалогового хода в память
@@ -609,20 +595,20 @@ class LeyaOS:
                 )
             except (LeyaMemoryError, LeyaEmbeddingError) as e:
                 logger.warning(f"Не удалось сохранить диалоговый ход в память: {type(e).__name__}: {e}")
-            except Exception as e:
-                logger.warning(f"Неожиданная ошибка сохранения диалога: {type(e).__name__}: {e}")
+            except (LeyaAtomicWriteError, LeyaConfigError) as e:
+                logger.warning(f"Ошибка персистентности при сохранении диалога: {type(e).__name__}: {e}")
 
         except (LeyaLLMError, LeyaMemoryError, LeyaToolError) as e:
             logger.error(f"Ошибка обработки intent {classification.intent}: {type(e).__name__}: {e}", exc_info=True)
             response = await self._handle_via_thinker(user_input, classification.intent)
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка обработки intent {classification.intent}: {type(e).__name__}: {e}", exc_info=True)
+        except (LeyaWorkspaceError, LeyaBroadcastError) as e:
+            logger.error(f"Ошибка workspace/broadcast при обработке intent: {type(e).__name__}: {e}", exc_info=True)
             response = await self._handle_via_thinker(user_input, classification.intent)
 
         # 3. Сохраняем в cache (async, не блокируем)
         try:
             asyncio.create_task(self.request_classifier.save_to_cache(classification))
-        except Exception as e:
+        except (LeyaMemoryError, RuntimeError) as e:
             logger.warning(f"Не удалось сохранить в cache: {type(e).__name__}: {e}")
 
         return {

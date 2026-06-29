@@ -203,12 +203,12 @@ class DriveSystem:
             deltas[DriveType.CONNECTION] = -0.1
             deltas[DriveType.AUTONOMY] = -0.05
 
-        # Сохраняем в историю
-        current_state = {d.type: d.current for d in self.drives.values()}
+        # Сохраняем в историю (ИСПРАВЛЕНО: используем .value для единообразия)
+        current_state = {d.type.value: d.current for d in self.drives.values()}
         self.tension_history.append(current_state)
 
         if len(self.tension_history) > self.max_history_length:
-            self.tension_history = self.tension_history[-self.max_history_length :]
+            self.tension_history = self.tension_history[-self.max_history_length:]
 
         return deltas
 

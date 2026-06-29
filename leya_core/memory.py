@@ -616,7 +616,7 @@ class MemorySystem:
 
     async def forget_weak_memories(self, threshold: float = 0.1) -> int:
         """Публичный API для забывания слабых воспоминаний."""
-        return await self._forget_weak_memories(threshold)
+        return await asyncio.to_thread(self._forget_weak_memories_sync, threshold)
 
     # ========================================================================
     # Внутренние методы: биологические механизмы
@@ -749,8 +749,8 @@ class MemorySystem:
                     synapse.weight = min(1.0, synapse.weight + learning_rate)
                     synapse.activation_count += 1
 
-    async def _forget_weak_memories(self, threshold: float = 0.1) -> int:
-        """Удаление энграмм с retention_strength ниже порога."""
+    def _forget_weak_memories_sync(self, threshold: float = 0.1) -> int:
+        """Удаление энграмм с retention_strength ниже порога (sync версия)."""
         to_delete = [
             engram_id
             for engram_id, engram in self.engrams.items()
@@ -758,18 +758,6 @@ class MemorySystem:
         ]
 
         for engram_id in to_delete:
-            # Удаление из ChromaDB
-            try:
-                engram = self.engrams[engram_id]
-                collection = (
-                    self.episodic_collection
-                    if engram.memory_type == MemoryType.EPISODIC
-                    else self.semantic_collection
-                )
-                await asyncio.to_thread(collection.delete, ids=[engram_id])
-            except Exception as exc:
-                logger.warning(f"Не удалось удалить энграмму из ChromaDB: {exc}")
-
             # Удаление синапсов
             keys_to_delete = [key for key in self.synapses if engram_id in key]
             for key in keys_to_delete:
@@ -779,7 +767,6 @@ class MemorySystem:
             del self.engrams[engram_id]
 
         if to_delete:
-            await self._save_state()
             logger.info(f"Забыто энграмм: {len(to_delete)}")
 
         return len(to_delete)

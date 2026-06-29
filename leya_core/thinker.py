@@ -71,15 +71,16 @@ except ImportError:
     logger.warning("⚠️ tiktoken не установлен. Используется char-ratio estimation")
 
 
-def _estimate_tokens(text: str, ratio: float = 3.5) -> int:
+def _estimate_tokens(text: str, ratio: float = 2.5) -> int:
     """Оценка количества токенов в тексте.
-
+    
     Этап 1.5: если доступен tiktoken — используем реальный токенизатор.
     Иначе — char-ratio с динамической корректировкой.
 
     Args:
         text: Текст для оценки
         ratio: Символов на токен (fallback, если нет tiktoken)
+               Для русского/китайского ratio ниже (больше токенов на символ)
 
     Returns:
         Примерное количество токенов
@@ -97,8 +98,8 @@ def _estimate_tokens(text: str, ratio: float = 3.5) -> int:
     # Для русского/китайского ratio ниже (больше токенов на символ)
     unicode_chars = sum(1 for c in text if ord(c) > 127)
     if unicode_chars > len(text) * 0.3:
-        # Много Unicode — корректируем ratio
-        adjusted_ratio = ratio * 0.7
+        # Много Unicode — корректируем ratio ещё ниже
+        adjusted_ratio = ratio * 0.8  # Было 0.7, стало 0.8 (менее агрессивно)
     else:
         adjusted_ratio = ratio
 
@@ -258,7 +259,7 @@ def _safe_parse_json(raw: str) -> CognitiveOutput:
 def _truncate_context(
     context_items: list,
     max_tokens: int,
-    ratio: float = 3.5,
+    ratio: float = 2.5,
 ) -> list:
     """Обрезка контекста с поддержкой как Engram, так и dict."""
     if not context_items:
