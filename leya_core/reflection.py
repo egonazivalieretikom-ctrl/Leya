@@ -138,6 +138,12 @@ class MetaCognition(IMetaCognition):
                 self.is_sleeping = True
                 self._session_count += 1
 
+                logger_thoughts = logging.getLogger("leya.thoughts")
+                logger_thoughts.info(
+                    "=== КОНСОЛИДАЦИЯ ПАМЯТИ (СОН) ===\n"
+                    f"Сессия рефлексии #{self._session_count}\n"
+                )
+
                 try:
                     # 1. АНАЛИЗ ПАТТЕРНОВ ПОВЕДЕНИЯ
                     if self.config.behavioral_analysis_enabled:
@@ -182,6 +188,8 @@ class MetaCognition(IMetaCognition):
                     # 4. КОНСОЛИДАЦИЯ ПАМЯТИ
                     try:
                         await self.leya.memory.consolidate_memories()
+                        # === Логирование завершения консолидации ===
+                        logger_thoughts.info("=== КОНСОЛИДАЦИЯ ЗАВЕРШЕНА ===\n")
                     except LeyaMemoryError as exc:
                         logger.warning(f"MetaCognition: Ошибка консолидации памяти: {exc}")
                     except Exception as exc:
@@ -455,8 +463,12 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             thought = await self.llm_client(prompt)
             result = thought.strip()
 
+            # === Логирование спонтанной мысли ===
             logger_thoughts = logging.getLogger("leya.thoughts")
-            logger_thoughts.info(f"Спонтанная мысль: {result}")
+            logger_thoughts.debug(
+                "=== СПОНТАННАЯ МЫСЛЬ ===\n"
+                f"{result}\n"
+            )
 
             # ИСПРАВЛЕНИЕ ШАГ 4: Используем repair_json для извлечения текста из JSON
             if result.startswith("{"):

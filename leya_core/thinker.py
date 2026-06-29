@@ -256,52 +256,46 @@ def _safe_parse_json(raw: str) -> CognitiveOutput:
 # =================================================================================
 
 def _truncate_context(
-    context_items: list[dict],
+    context_items: list,
     max_tokens: int,
     ratio: float = 3.5,
-) -> list[dict]:
-    """Обрезка контекста по token budget с учётом релевантности.
+) -> list:
+    """Обрезка контекста с поддержкой как Engram, так и dict."""
+    if not context_items:
+        return []
 
-    Этап 1.5: сортируем по relevance_score (если есть), а не только по newest.
-    Если relevance_score отсутствует — fallback на порядок (newest first).
-
-    Args:
-        context_items: Список записей контекста (с "content" и опционально "relevance_score")
-        max_tokens: Максимальный бюджет токенов
-        ratio: Символов на токен (для оценки)
-
-    Returns:
-        Обрезанный список, fitting в budget
-    """
-    def _get_relevance(x):
+    def get_relevance(x):
         if hasattr(x, "metadata"):
             return x.metadata.get("relevance_score", 0.0)
         if isinstance(x, dict):
             return x.get("relevance_score", 0.0)
         return 0.0
 
-    sorted_items = sorted(
-        context_items,
-        key=_get_relevance,
-        reverse=True
-    )
+    sorted_items = sorted(context_items, key=get_relevance, reverse=True)
 
     result = []
     total_tokens = 0
 
     for item in sorted_items:
-        content = item.get("content", "")
+        if hasattr(item, "content"):
+            content = item.content or ""
+        elif isinstance(item, dict):
+            content = item.get("content", "")
+        else:
+            content = str(item)[:500]
+
         item_tokens = _estimate_tokens(content, ratio)
 
         if total_tokens + item_tokens > max_tokens:
-            # Не влезает — пробуем обрезать контент
-            available_tokens = max_tokens - total_tokens
-            if available_tokens > 10:  # хотя бы 10 токенов
-                # Обрезаем контент
-                max_chars = int(available_tokens * ratio)
+            if max_tokens - total_tokens > 10:
+                max_chars = int((max_tokens - total_tokens) * ratio)
                 truncated_content = content[:max_chars] + "..."
-                result.append({**item, "content": truncated_content})
-                total_tokens += available_tokens
+                if hasattr(item, "content"):
+                    new_item = type(item)(**{**item.__dict__, "content": truncated_content})
+                    result.append(new_item)
+                else:
+                    result.append({**item, "content": truncated_content})
+                total_tokens += (max_tokens - total_tokens)
             break
 
         result.append(item)

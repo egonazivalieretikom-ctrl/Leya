@@ -671,6 +671,14 @@ class MemorySystem:
                         weight=weight,
                     )
 
+                logger_thoughts = logging.getLogger("leya.thoughts")
+                logger_thoughts.debug(
+                    "=== LTP (новый синапс) ===\n"
+                    f"{new_engram_id[:8]} ↔ {related_id[:8]}\n"
+                    f"Similarity: {similarity:.3f}\n"
+                    f"Начальный вес: {weight:.3f}\n"
+                )
+
     async def _strengthen_synapses(self, activated_ids: list[str]) -> None:
         """
         Усиление синапсов между совместно активированными энграммами (LTP).
@@ -689,8 +697,18 @@ class MemorySystem:
 
                 if key1 in self.synapses:
                     synapse = self.synapses[key1]
+                    old_weight = synapse.weight
                     synapse.weight = min(1.0, synapse.weight + learning_rate)
                     synapse.activation_count += 1
+                    
+                    if synapse.weight > old_weight + 0.05:  # логируем только значимое усиление
+                        logger_thoughts = logging.getLogger("leya.thoughts")
+                        logger_thoughts.debug(
+                            "=== LTP (усиление синапса) ===\n"
+                            f"{synapse.source_id[:8]} → {synapse.target_id[:8]}\n"
+                            f"Вес: {old_weight:.3f} → {synapse.weight:.3f}\n"
+                            f"Активаций: {synapse.activation_count}\n"
+                        )
 
                 if key2 in self.synapses:
                     synapse = self.synapses[key2]

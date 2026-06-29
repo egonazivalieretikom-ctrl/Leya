@@ -227,6 +227,18 @@ class GlobalWorkspace:
         winner = adjusted_proposals[0]
         self.focus = winner
 
+        # === Логирование победителя в Global Workspace ===
+        logger_thoughts = logging.getLogger("leya.thoughts")
+        logger_thoughts.debug(
+            "=== GLOBAL WORKSPACE: ПОБЕДИТЕЛЬ ===\n"
+            f"Источник: {winner.source}\n"
+            f"Тип действия: {winner.action_type}\n"
+            f"Приоритет: {winner.priority.name}\n"
+            f"Urgency: {winner.urgency:.2f}\n"
+            f"Drive Relevance: {winner.drive_relevance:.2f}\n"
+            f"Содержание: {winner.content[:200]}...\n"
+        )
+
         # ПЕРЕМЕЩЕНИЕ В ИСТОРИЮ: очищаем proposals и сохраняем в history
         self.history.extend(self.proposals)  # Сохраняем оригинальные proposals
         self.proposals.clear()  # Очищаем текущие proposals

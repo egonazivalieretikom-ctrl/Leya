@@ -600,17 +600,32 @@ CRITICAL: Return ONLY valid JSON."""
 
         # Если Лея упоминает усталость, повышаем порог REST
         if "устал" in self_model_lower or "утомл" in self_model_lower:
+            old_value = self.thresholds[DriveType.REST]
             self.thresholds[DriveType.REST] = min(1.0, self.thresholds[DriveType.REST] + 0.1)
-            logger.info("HomeostasisEngine: Повышен порог REST (усталость)")
+            
+            logger_thoughts = logging.getLogger("leya.thoughts")
+            logger_thoughts.info(
+                "=== ИЗМЕНЕНИЕ ДРАЙВОВ ===\n"
+                f"Драйв: REST\n"
+                f"Старый порог: {old_value:.2f} → Новый: {self.thresholds[DriveType.REST]:.2f}\n"
+                f"Причина: усталость в self_model\n"
+            )
 
         # Если Лея упоминает любопытство, понижаем порог CURIOSITY
         if "любопыт" in self_model_lower or "интерес" in self_model_lower:
+            old_value = self.thresholds[DriveType.CURIOSITY]
             self.thresholds[DriveType.CURIOSITY] = max(
                 0.1, self.thresholds[DriveType.CURIOSITY] - 0.05
             )
-            logger.info("HomeostasisEngine: Понижен порог CURIOSITY (любопытство)")
-
-        logger.info(f"HomeostasisEngine: Обновление из self_model ({len(self_model)} символов)")
+            
+            logger_thoughts = logging.getLogger("leya.thoughts")
+            logger_thoughts.info(
+                "=== ИЗМЕНЕНИЕ ДРАЙВОВ ===\n"
+                f"Драйв: CURIOSITY\n"
+                f"Старый порог: {old_value:.2f} → Новый: {self.thresholds[DriveType.CURIOSITY]:.2f}\n"
+                f"Причина: любопытство в self_model\n"
+            )
+            
 
     def save_state(self) -> dict[str, Any]:
         """
