@@ -708,7 +708,7 @@ class LeyaOS:
             drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
             memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
             tools = (
-                self.env.tool_registry.get_tools_schema()
+                self.env.tool_registry.get_all_descriptions() 
                 if hasattr(self.env, "tool_registry") and self.env.tool_registry is not None
                 else []
             )
@@ -1090,10 +1090,11 @@ class LeyaOS:
             try:
                 await asyncio.sleep(self.config.homeostasis.rest_period)
 
-                # ИСПРАВЛЕНО: d.type.value вместо d.type
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
                 predicted_state = self.drives.get_predicted_disbalance()
-                recent_episodes = await self.memory.get_recent_episodes(limit=5)
+            
+                # ИСПРАВЛЕНО: убран await (get_recent_episodes теперь sync)
+                recent_episodes = self.memory.get_recent_episodes(limit=5)
 
                 goal = await self.homeostasis.generate_goal(
                     drive_state=drive_state,
@@ -1132,34 +1133,26 @@ class LeyaOS:
     async def _workspace_loop(self) -> None:
         """
         Фоновый цикл Global Workspace.
-        
-        МЕХАНИЗМ ТОРМОЖЕНИЯ (Inhibition):
-        Если идёт активный диалог с пользователем (менее 30 секунд с последнего взаимодействия),
-        внутренние proposals от homeostasis получают понижение приоритета,
-        чтобы не перебивать активный когнитивный цикл.
         """
         logger.info("Workspace loop запущен.")
         while self.running:
             try:
                 await asyncio.sleep(5)
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-                
-                # МЕХАНИЗМ ТОРМОЖЕНИЯ: проверка времени последнего взаимодействия
+            
                 time_since_interaction = datetime.now().timestamp() - self._last_interaction_time
-                active_dialogue = time_since_interaction < 30.0  # 30 секунд
-                
-                # Передаём флаг активного диалога в select_winner
+                active_dialogue = time_since_interaction < 30.0
+            
                 winner = self.workspace.select_winner(drive_state, inhibit_internal=active_dialogue)
 
                 if winner:
-                    # Если это внутренняя proposal и идёт активный диалог, логируем торможение
                     if active_dialogue and winner.source in ("homeostasis", "meta_cognition"):
                         logger.debug(
                             f"Workspace: Внутренняя proposal от {winner.source} "
                             f"тормозится из-за активного диалога "
                             f"(содержание: {winner.content[:50]}...)"
                         )
-                    
+                
                     await self.perceive(
                         {
                             "type": "workspace_focus",
