@@ -75,6 +75,14 @@ from leya_core.system_metrics import SystemMetrics
 from leya_core.thinker import CoreThinker
 from leya_core.tool_generator import ToolGenerator
 from web_interface.web_environment import WebEnvironment
+from web_interface.server import run_server
+
+try:
+    from web_interface.web_environment import WebEnvironment
+    WEB_AVAILABLE = True
+except ImportError:
+    WEB_AVAILABLE = False
+    WebEnvironment = None
 
 # Настройка логирования ПОСЛЕ всех импортов
 logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
@@ -304,6 +312,7 @@ class LeyaOS:
                 logger.info(f"Soul загружен через SoulCryptoManager ({len(soul_context)} символов)")
             except Exception as e:
                 logger.error(f"Ошибка загрузки soul через SoulCryptoManager: {e}", exc_info=True)
+                self._soul_context = ""
         try:
             self.self_model = await self.memory.get_self_model_context()
         except LeyaMemoryError as exc:
@@ -685,6 +694,7 @@ class LeyaOS:
         Это fallback для случаев, когда специализированный обработчик
         не справился или intent == UNKNOWN.
         """
+        soul_context = getattr(self, "_soul_context", "")
         try:
             # Формируем стимул для thinker
             stimulus = {
@@ -733,6 +743,9 @@ class LeyaOS:
         except Exception as e:
             logger.error(f"Ошибка обработки через thinker: {e}", exc_info=True)
             return "Извини, произошла ошибка при обработке запроса. Попробуй ещё раз."
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка: {type(e).__name__}: {e}", exc_info=True)
+            raise  
 
 
     async def _execute_fast_decision(self, decision: Decision) -> None:
@@ -1094,7 +1107,7 @@ class LeyaOS:
                 predicted_state = self.drives.get_predicted_disbalance()
             
                 # ИСПРАВЛЕНО: убран await (get_recent_episodes теперь sync)
-                recent_episodes = self.memory.get_recent_episodes(limit=5)
+                recent_episodes = await self.memory.get_recent_episodes(limit=5)
 
                 goal = await self.homeostasis.generate_goal(
                     drive_state=drive_state,

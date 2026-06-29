@@ -23,6 +23,7 @@ import contextlib
 import logging
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -443,12 +444,19 @@ class ConstitutionalLayer:
             r"import\s+os",
             r"import\s+subprocess",
             r"import\s+shutil",
+            r"import\s+ctypes",
+            r"import\s+socket",
+            r"import\s+threading",
+            r"import\s+importlib",
             r"__import__",
             r"eval\s*\(",
             r"exec\s*\(",
             r"open\s*\([^)]*['\"]w",
             r"system\s*\(",
             r"popen\s*\(",
+            r"getattr\s*\([^)]*__builtins__",
+            r"globals\s*\(",
+            r"locals\s*\(",
         ]
 
         for pattern in forbidden_patterns:
@@ -507,7 +515,7 @@ class ConstitutionalLayer:
             try:
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    ["python", temp_file],
+                    [sys.executable, temp_file],
                     capture_output=True,
                     text=True,
                     timeout=self.config.python_execution_timeout,

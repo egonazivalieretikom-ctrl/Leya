@@ -54,6 +54,7 @@ class WorkspaceProposal:
     drive_relevance: float = 0.5  # 0.0–1.0
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
+    score: float = 0.0
 
     def compute_score(self, drive_state: dict[str, float]) -> float:
         """
@@ -92,11 +93,10 @@ class GlobalWorkspace:
         self.proposals: list[WorkspaceProposal] = []
         self.focus: WorkspaceProposal | None = None
         self.history: list[WorkspaceProposal] = []
-        self.current_focus: WorkspaceProposal | None = None
 
         # Статистика
         self.total_submissions = 0
-        self.total_selections: int = 0  # Счётчик выборов победителя
+        self.total_selections: int = 0
 
         logger.info(f"GlobalWorkspace инициализирован: max_proposals={self.config.max_proposals}")
 
@@ -239,9 +239,11 @@ class GlobalWorkspace:
             f"Содержание: {winner.content[:200]}...\n"
         )
 
-        # ПЕРЕМЕЩЕНИЕ В ИСТОРИЮ: очищаем proposals и сохраняем в history
-        self.history.extend(self.proposals)  # Сохраняем оригинальные proposals
-        self.proposals.clear()  # Очищаем текущие proposals
+        # Перемещаем в историю только победителя
+        self.history.append(winner)
+    
+        # Удаляем победителя из proposals
+        self.proposals = [p for p in self.proposals if p is not winner]
 
         # Ограничение истории
         if len(self.history) > 100:
@@ -265,7 +267,7 @@ class GlobalWorkspace:
 
     def get_focus(self) -> WorkspaceProposal | None:
         """Получить текущий фокус внимания."""
-        return self.current_focus
+        return self.focus 
 
     def get_workspace_status(self) -> dict:
         """
@@ -324,11 +326,11 @@ class GlobalWorkspace:
             "history_count": len(self.history),
             "current_focus": (
                 {
-                    "source": self.current_focus.source,
-                    "content": self.current_focus.content[:100],
-                    "action_type": self.current_focus.action_type,
+                    "source": self.focus.source,
+                    "content": self.focus.content[:100],
+                    "action_type": self.focus.action_type,
                 }
-                if self.current_focus
+                if self.focus
                 else None
             ),
             "total_submissions": self.total_submissions,

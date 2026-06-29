@@ -5,6 +5,8 @@ leya_core/system_metrics.py — Мониторинг реальных ресур
 
 import logging
 import time
+import platform
+
 
 logger = logging.getLogger("SystemMetrics")
 
@@ -119,32 +121,45 @@ class SystemMetrics:
         """
         metrics = self.last_metrics or self.collect()
 
-        modifiers = {"curiosity": 0.0, "connection": 0.0, "integrity": 0.0, "autonomy": 0.0}
+        modifiers = {
+            "curiosity": 0.0,
+            "connection": 0.0,
+            "integrity": 0.0,
+            "autonomy": 0.0,
+            "rest": 0.0,
+            "creativity": 0.0,
+            "understanding": 0.0,
+            "competence": 0.0,
+            "security": 0.0,
+        }
 
-        # CPU перегрузка снижает автономию
+        # CPU high → REST растёт
         if metrics["cpu"] > 0.8:
+            modifiers["rest"] += 0.03
             modifiers["autonomy"] -= 0.02
         elif metrics["cpu"] < 0.3:
             modifiers["autonomy"] += 0.01
-
-        # RAM нехватка снижает целостность
+            modifiers["creativity"] += 0.02
+    
+        # RAM high → INTEGRITY страдает
         if metrics["ram"] > 0.85:
             modifiers["integrity"] -= 0.03
         elif metrics["ram"] < 0.5:
             modifiers["integrity"] += 0.01
-
-        # Disk I/O повышает любознательность (активное чтение)
+    
+        # Disk I/O high → CURIOSITY растёт
         if metrics["disk_io"] > 0.5:
             modifiers["curiosity"] += 0.02
-
-        # Network I/O повышает связь
+    
+        # Network I/O high → CONNECTION и UNDERSTANDING растут
         if metrics["net_io"] > 0.3:
             modifiers["connection"] += 0.02
-
-        # Батарея: низкий заряд = стресс для всех
+            modifiers["understanding"] += 0.02
+    
+        # Battery low → SECURITY растёт, все страдают
         if metrics["battery"] < 0.2:
+            modifiers["security"] += 0.05
             for key in modifiers:
-                modifiers[key] -= 0.05
-            logger.warning(f"SystemMetrics: ⚡ Низкий заряд батареи: {metrics['battery']:.0%}")
-
+                modifiers[key] -= 0.03
+    
         return modifiers

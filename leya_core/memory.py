@@ -458,16 +458,19 @@ class MemorySystem:
         await self._save_state()
         return selected
 
-    def get_recent_episodes(self, limit: int = 20) -> list[Engram]:
+    async def get_recent_episodes(self, limit: int = 20) -> list[Engram]:
         """
         Публичный API: получение последних эпизодов.
 
         Рекомендуется использовать вместо прямого доступа к episodic_collection.
         Фильтрует по retention_strength и сортирует по timestamp.
+    
+        Async для единообразия API с другими методами памяти.
         """
         if limit <= 0:
             return []
 
+        # Простая in-memory операция — не нужен to_thread
         candidates = [
             e
             for e in self.engrams.values()
@@ -476,8 +479,12 @@ class MemorySystem:
         candidates.sort(key=lambda e: e.timestamp, reverse=True)
         return candidates[:limit]
 
-    def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
-        """Получить недавние спонтанные мысли (помеченные в metadata)."""
+    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
+        """
+        Получить недавние спонтанные мысли (помеченные в metadata).
+    
+        Async для единообразия API с другими методами памяти.
+        """
         thoughts = [
             e
             for e in self.engrams.values()
@@ -486,6 +493,32 @@ class MemorySystem:
         ]
         thoughts.sort(key=lambda e: e.timestamp, reverse=True)
         return thoughts[:limit]
+
+    async def get_recent_semantic_facts(self, limit: int = 5) -> list[str]:
+        """
+        Публичный API: получение недавних семантических фактов.
+
+        Используется MetaCognition (reflection.py) для генерации инсайтов
+        и HomeostasisEngine для анализа знаний.
+
+        Args:
+            limit: Максимальное количество фактов (по умолчанию 5)
+
+        Returns:
+            Список строк — содержимое недавних семантических энграмм,
+            отсортированных по timestamp (новые первыми).
+        """
+        if limit <= 0:
+            return []
+
+        candidates = [
+            e
+            for e in self.engrams.values()
+            if e.memory_type == MemoryType.SEMANTIC
+            and e.retention_strength > 0.1
+        ]
+        candidates.sort(key=lambda e: e.timestamp, reverse=True)
+        return [e.content for e in candidates[:limit]]
 
     # ========================================================================
     # Само-модель
@@ -973,6 +1006,9 @@ class MemorySystem:
 
             facts = [line.strip() for line in response.split("\n") if line.strip()]
             return facts[:10]
+        except AttributeError as e:
+            logger.warning(f"llm_client не поддерживает generate(): {e}")
+            return []
         except Exception as exc:
             logger.warning(f"Не удалось извлечь факты через LLM: {exc}")
             return []

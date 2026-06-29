@@ -708,7 +708,13 @@ class LeyaConfig:
 # =================================================================================
 # SINGLETON
 # =================================================================================
-settings = LeyaConfig.from_env()
-if not settings.validate():
-    logger.warning("Конфигурация содержит ошибки. Проверьте .env")
-settings.print_summary()
+_settings: LeyaConfig | None = None
+
+def get_settings() -> LeyaConfig:
+    global _settings
+    if _settings is None:
+        _settings = LeyaConfig.from_env()
+        if not _settings.validate():
+            logger.warning("Конфигурация содержит ошибки. Проверьте .env")
+        _settings.print_summary()
+    return _settings

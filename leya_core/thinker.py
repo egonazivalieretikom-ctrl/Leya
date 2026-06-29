@@ -41,18 +41,17 @@ class ToolCall(BaseModel):
 
 
 class CognitiveOutput(BaseModel):
-    """Структурированный вывод когнитивного цикла Леи.
-
-    Pydantic модель для строгой валидации ответа LLM.
-    """
     response: str = Field(default="", description="Внешний ответ пользователю")
-    internal_monologue: str = Field(default="", description="Внутренний монолог (не показывается пользователю)")
-    action_intent: ActionIntent = Field(..., description="Намерение действия")
-    tool_call: Optional[ToolCall] = Field(None, description="Вызов инструмента (если action_intent == USE_TOOL)")
-    self_reflection: str = Field(default="", description="Саморефлексия о процессе мышления")
+    internal_monologue: str = Field(default="", description="Внутренний монолог")
+    action_intent: ActionIntent = Field(
+        default=ActionIntent.RESPOND,  # ✅ Добавлен default
+        description="Намерение действия"
+    )
+    tool_call: Optional[ToolCall] = Field(None, description="Вызов инструмента")
+    self_reflection: str = Field(default="", description="Саморефлексия")
 
-    class Config:
-        use_enum_values = True
+class Config:
+    use_enum_values = True
 
 
 # =================================================================================
@@ -266,6 +265,10 @@ def _truncate_context(
         return []
 
     def get_relevance(x):
+        if hasattr(x, "retention_strength"):
+            # Вычисляем relevance на основе retention и emotional_boost
+            emotional_boost = getattr(x, "emotional_boost", 0.0)
+            return x.retention_strength * (1.0 + emotional_boost)
         if hasattr(x, "metadata"):
             return x.metadata.get("relevance_score", 0.0)
         if isinstance(x, dict):

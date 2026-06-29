@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -179,7 +180,7 @@ class DriveSystem:
             f"drives={len(self.drives)}"
         )
 
-    async def evaluate_stimulus(self, stimulus: str, context: str = "") -> dict[DriveType, float]:
+    async def evaluate_stimulus(self, stimulus: str, context: str = "") -> dict[str, float]:
         """
         Оценивает влияние стимула на драйвы.
 
@@ -189,19 +190,27 @@ class DriveSystem:
         deltas: dict[DriveType, float] = {}
         stimulus_lower = stimulus.lower()
 
-        # Эвристики для оценки влияния стимула
-        if "?" in stimulus or any(kw in stimulus_lower for kw in ["почему", "как", "что", "зачем"]):
-            deltas[DriveType.CURIOSITY] = 0.1
-
-        if any(kw in stimulus_lower for kw in ["чувств", "думаю", "мне", "один", "скучно"]):
-            deltas[DriveType.CONNECTION] = 0.05
-
-        if any(kw in stimulus_lower for kw in ["должна", "обязана", "сделай", "немедленно"]):
-            deltas[DriveType.AUTONOMY] = 0.1
-
-        if any(kw in stimulus_lower for kw in ["спасибо", "отлично", "молодец", "хорошо"]):
-            deltas[DriveType.CONNECTION] = -0.1
-            deltas[DriveType.AUTONOMY] = -0.05
+        # Вопросы (исключаем "что-то", "чтобы")
+        if re.search(r'\b(почему|зачем|как\s+работает|что\s+такое)\b', stimulus_lower):
+            deltas[DriveType.CURIOSITY] = 0.15
+    
+        # Эмоциональные сообщения
+        if re.search(r'\b(чувствую|думаю|мне\s+одиноко|скучно)\b', stimulus_lower):
+            deltas[DriveType.CONNECTION] = 0.1
+    
+        # Команды
+        if re.search(r'\b(должна|обязана|немедленно|быстро)\b', stimulus_lower):
+            deltas[DriveType.AUTONOMY] = 0.15
+    
+        # Позитивная обратная связь
+        if re.search(r'\b(спасибо|отлично|молодец|супер)\b', stimulus_lower):
+            deltas[DriveType.CONNECTION] = -0.15
+            deltas[DriveType.AUTONOMY] = -0.1
+    
+        # Негативная обратная связь
+        if re.search(r'\b(плохо|ошибка|неправильно|глупая)\b', stimulus_lower):
+            deltas[DriveType.CONNECTION] = 0.1
+            deltas[DriveType.INTEGRITY] = 0.1
 
         # Сохраняем в историю (ИСПРАВЛЕНО: используем .value для единообразия)
         current_state = {d.type.value: d.current for d in self.drives.values()}
@@ -210,14 +219,14 @@ class DriveSystem:
         if len(self.tension_history) > self.max_history_length:
             self.tension_history = self.tension_history[-self.max_history_length:]
 
-        return deltas
+        return {k.value: v for k, v in deltas.items()}
 
     def apply_deltas(self, deltas: dict[DriveType, float]) -> None:
         """Применяет дельты изменений к драйвам."""
         for drive_type, delta in deltas.items():
             if drive_type in self.drives:
                 drive = self.drives[drive_type]
-                drive.current = max(0.0, min(1.0, drive.current + delta))
+                drive.current = max(0.1, min(0.9, drive.current + delta))
                 logger.debug(
                     f"DriveSystem: {drive_type.value} изменён на {delta:+.2f} → {drive.current:.2f}"
                 )
@@ -315,6 +324,7 @@ class DriveSystem:
         Returns:
             RPE (ошибка предсказания)
         """
+        actual_outcome = max(0.0, min(1.0, actual_outcome))
         expected = self.action_values.get(action_key, 0.5)
         rpe = actual_outcome - expected
 
@@ -450,6 +460,8 @@ class DriveSystem:
             "rest": DriveType.REST,
             "creativity": DriveType.CREATIVITY,
             "understanding": DriveType.UNDERSTANDING,
+            "competence": DriveType.COMPETENCE,
+            "security": DriveType.SECURITY,
         }
 
         for metric_name, modifier in modifiers.items():

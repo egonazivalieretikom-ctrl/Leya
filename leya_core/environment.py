@@ -24,6 +24,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
@@ -31,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-
+from duckduckgo_search import DDGS
 from .exceptions import (
     LeyaEnvironmentError,
     LeyaSoulError,
@@ -302,30 +303,27 @@ class ToolRegistry:
         self.register(
             Tool(
                 name="read_soul_file",
-                description="Чтение файла души (personality.txt, rules.txt, values.txt)",
-                handler=self._read_soul_file,
-                parameters={"filename": "str (имя файла)"},
-                category="self",
+                description="Чтение файла души",
+                handler=lambda filename: self._read_soul_file(filename, self.soul_manager),
+                parameters={"filename": "str"},
             )
         )
 
         self.register(
             Tool(
                 name="write_soul_file",
-                description="Запись в файл души (только personality.txt, rules.txt, values.txt)",
-                handler=self._write_soul_file,
+                description="Запись в файл души",
+                handler=lambda filename, content: self._write_soul_file(filename, content, self.soul_manager),
                 parameters={"filename": "str", "content": "str"},
-                category="self",
             )
         )
-
+    
         self.register(
             Tool(
                 name="list_soul_files",
                 description="Список файлов души",
-                handler=self._list_soul_files,
+                handler=lambda: self._list_soul_files(self.soul_manager),
                 parameters={},
-                category="self",
             )
         )
 
@@ -358,10 +356,6 @@ class ToolRegistry:
     async def _duckduckgo_search(self, query: str, max_results: int = 5) -> str:
         """Поиск в DuckDuckGo с защитой от Ratelimit."""
         try:
-            import asyncio
-
-            from duckduckgo_search import DDGS
-
             # Запускаем в потоке, так как библиотека синхронная
             def search():
                 with DDGS() as ddgs:
@@ -390,10 +384,9 @@ class ToolRegistry:
             return f"⚠️ Поиск временно недоступен (Ratelimit). Попробуйте использовать wikipedia_search для общих тем. Ошибка: {exc}"
 
     async def _github_readme(self, repo: str) -> str:
-        """Получение README из GitHub."""
         try:
             import aiohttp
-
+        
             url = f"https://api.github.com/repos/{repo}/readme"
             headers = {"Accept": "application/vnd.github.v3.raw"}
             async with (
@@ -402,13 +395,11 @@ class ToolRegistry:
             ):
                 if resp.status == 200:
                     content = await resp.text()
-                    if resp.status == 200:
-                        content = await resp.text()
-                        return content[:3000]  # Ограничение длины
-                    elif resp.status == 404:
-                        return f"Репозиторий '{repo}' не найден"
-                    else:
-                        return f"Ошибка GitHub: статус {resp.status}"
+                    return content[:3000]
+                elif resp.status == 404:
+                    return f"Репозиторий '{repo}' не найден"
+                else:
+                    return f"Ошибка GitHub: статус {resp.status}"
         except asyncio.TimeoutError:
             return "Превышено время ожидания ответа GitHub"
         except Exception as exc:
@@ -486,7 +477,7 @@ class ToolRegistry:
             try:
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    ["python", temp_file],
+                    [sys.executable, temp_file],  # ← Используем sys.executable
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -713,7 +704,7 @@ class Environment(BaseEnvironment, IEnvironment):
     def __init__(self, leya_os: Any) -> None:
         self.leya = leya_os
         self.tool_registry = ToolRegistry()
-        self.soul_manager = SoulFileManager()
+        self.soul_manager = leya_os.soul_crypto_manager
 
     async def execute_tool_call(self, tool_call_json: Any) -> str:
         """
@@ -823,7 +814,7 @@ class CLIEnvironment(Environment):
         loop = asyncio.get_event_loop()
         while True:
             try:
-                user_input = await loop.run_in_executor(None, input, "")
+                user_input = await loop.run_in_executor(None, sys.stdin.readline)
                 if user_input.strip():
                     await self.input_queue.put(
                         {

@@ -164,87 +164,85 @@ CRITICAL: Return ONLY valid JSON.
             return None
 
     def _validate_tool_spec(self, spec: dict) -> bool:
-        """Валидирует спецификацию инструмента."""
         required_fields = ["name", "description", "parameters", "code"]
         for field in required_fields:
             if field not in spec:
                 return False
-
+    
         # Проверка имени
-        if not spec["name"].startswith("custom_"):
+        name = spec["name"]
+        if not name.startswith("custom_"):
             return False
-
+    
+        # Проверка валидности имени (snake_case)
+        if not re.match(r'^[a-z_][a-z0-9_]*$', name):
+            logger.warning(f"ToolGenerator: Некорректное имя инструмента: {name}")
+            return False
+    
         # Проверка кода на запрещённые импорты
         code = spec["code"]
         banned = ["import os", "import subprocess", "import shutil", "__import__", "eval(", "exec("]
         for ban in banned:
             if ban in code:
                 return False
-
+    
         # Проверка синтаксиса
         try:
             ast.parse(code)
         except SyntaxError:
             return False
-
+    
         return True
 
     async def _test_tool(self, spec: dict) -> bool:
-        """Тестирует сгенерированный инструмент в sandbox."""
         try:
-            # Создаём временную функцию
-            exec(spec["code"], globals())
-            func = globals().get(spec["name"])
-
+            # Создаём отдельный namespace
+            namespace = {}
+            exec(spec["code"], namespace)
+            func = namespace.get(spec["name"])
+        
             if not func:
                 return False
-
-            # Пробуем вызвать с пустыми параметрами
+        
             result = await func(**{})
-
-            # Результат должен быть строкой
             return isinstance(result, str) and len(result) > 0
-
+    
         except Exception as e:
             logger.debug(f"ToolGenerator: Тест инструмента не прошёл: {e}")
             return False
 
     async def _register_generated_tool(self, spec: dict) -> str | None:
-        """Регистрирует сгенерированный инструмент."""
         try:
-            # Создаём функцию из кода
-            exec(spec["code"], globals())
-            handler = globals().get(spec["name"])
-
+            # Создаём отдельный namespace
+            namespace = {}
+            exec(spec["code"], namespace)
+            handler = namespace.get(spec["name"])
+        
             if not handler:
                 return None
-
-            # Регистрируем
+        
             from leya_core.environment import Tool
-
+        
             tool = Tool(
                 name=spec["name"],
                 description=spec["description"],
                 parameters=spec["parameters"],
                 handler=handler,
             )
-
+        
             self.tool_registry.register(tool)
-
-            # Запоминаем
-            self.generated_tools.append(
-                {
-                    "name": spec["name"],
-                    "description": spec["description"],
-                    "generated_at": datetime.now().isoformat(),
-                }
-            )
-
+        
+            self.generated_tools.append({
+                "name": spec["name"],
+                "description": spec["description"],
+                "generated_at": datetime.now().isoformat(),
+            })
+        
             return spec["name"]
-
+    
         except Exception as e:
             logger.error(f"ToolGenerator: Ошибка регистрации: {e}")
-            return None
+        return None
 
     def get_generated_tools_summary(self) -> list[dict[str, str]]:
         """Возвращает список сгенерированных инструментов."""

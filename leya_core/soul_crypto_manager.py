@@ -11,22 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import SoulConfig
-from .exceptions import LeyaError
+from .exceptions import ( LeyaError, SoulTamperError, SoulVersionError )
 
 logger = logging.getLogger("LeyaSoulCryptoManager")
-
-
-# =================================================================================
-# ИСКЛЮЧЕНИЯ
-# =================================================================================
-
-
-class SoulTamperError(LeyaError):
-    """Обнаружена подмена soul-файла (HMAC не совпадает)."""
-
-
-class SoulVersionError(LeyaError):
-    """Ошибка работы с версиями soul."""
 
 
 # =================================================================================
@@ -90,44 +77,32 @@ class SoulCryptoManager:
     """
 
     def __init__(self, config: SoulConfig):
-        """Инициализация SoulCryptoManager.
-
-        Args:
-            config: Конфигурация soul (soul_dir, hmac_key, versioning)
-        """
         self.config = config
-        if hasattr(config, "soul_dir"):
-            self.soul_dir = Path(config.soul_dir)
-        elif hasattr(config, "soul") and hasattr(config.soul, "soul_dir"):
-            self.soul_dir = Path(config.soul.soul_dir)
-        else:
-            raise ValueError("Конфигурация должна содержать soul_dir или soul.soul_dir")
-        # 2. СНАЧАЛА инициализируем _hmac_key
-        hmac_key_value = None
-        if hasattr(config, "hmac_key"):
-            hmac_key_value = config.hmac_key
-        elif hasattr(config, "soul") and hasattr(config.soul, "hmac_key"):
-            hmac_key_value = config.soul.hmac_key
+        self.soul_dir = Path(config.soul_dir)
+    
+        # Инициализация HMAC ключа
+        hmac_key_value = config.hmac_key
         self._hmac_key = hmac_key_value.encode("utf-8") if hmac_key_value else b""
-
-        # 3. СНАЧАЛА инициализируем enable_versioning
+    
+        # Версионирование (ОДИН РАЗ!)
         self._enable_versioning = (
             getattr(config, "enable_versioning", False)
             or getattr(getattr(config, "soul", None), "enable_versioning", False)
             or getattr(getattr(config, "experimental", None), "enable_versioning", False)
         )
-        # Создаём директорию, если её нет
+    
+        # Создание директории
         try:
             self.soul_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Не удалось создать soul_dir {self.soul_dir}: {e}")
             raise
-
+    
         # История версий
         self._history: list[SoulVersion] = []
         self._history_file = self.soul_dir / ".soul_history.json"
         self._load_history()
-
+    
         # Статистика
         self._stats = {
             "loads": 0,
@@ -135,24 +110,11 @@ class SoulCryptoManager:
             "tamper_attempts": 0,
             "rollbacks": 0,
         }
-
-        # Поддержка обоих вариантов: прямой enable_versioning и вложенный experimental.enable_versioning
-        enable_versioning = False
-        if hasattr(config, "enable_versioning"):
-            enable_versioning = config.enable_versioning
-        elif hasattr(config, "experimental") and hasattr(config.experimental, "enable_versioning"):
-            enable_versioning = config.experimental.enable_versioning
-
-        enable_versioning = (
-            getattr(config, "enable_versioning", False)
-            or getattr(getattr(config, "soul", None), "enable_versioning", False)
-            or getattr(getattr(config, "experimental", None), "enable_versioning", False)
-        )
-
+    
         logger.info(
             f"✅ SoulCryptoManager инициализирован: "
             f"hmac={'enabled' if self._hmac_key else 'disabled'}, "
-            f"versioning={'enabled' if enable_versioning else 'disabled'}, "
+            f"versioning={'enabled' if self._enable_versioning else 'disabled'}, "
             f"soul_dir={self.soul_dir}"
         )
 

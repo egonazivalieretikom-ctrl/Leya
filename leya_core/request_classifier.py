@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Optional
 from pydantic import BaseModel, Field
 
 from .exceptions import LeyaLLMError, LeyaJSONParseError, LeyaLLMUnavailableError
+from .memory import MemoryType
 
 if TYPE_CHECKING:
     from .memory import Engram
@@ -317,38 +318,41 @@ class RequestClassifier:
         return None
 
     async def _cache_lookup(self, user_input: str) -> Optional[IntentClassification]:
-        """Уровень 2: Semantic cache через memory.
-
-        Ищет похожие запросы в памяти. Если similarity ≥ threshold —
-        возвращает кэшированный результат.
-        """
+        """Уровень 2: Semantic cache через memory."""
         if not self.memory:
             return None
 
+        # ✅ Инициализируем ПЕРЕД try, чтобы избежать UnboundLocalError
+        similar: list = []
+
         try:
-            # Используем актуальный API MemorySystem
-            similar: list[Engram] = await self.memory.retrieve_context(
+            similar = await self.memory.retrieve_context(
                 query=user_input,
-                max_results=5,              # ← правильно
+                max_results=5,
                 min_retention=0.05,
             )
+        except Exception as e:
+            logger.warning(f"Ошибка cache lookup: {e}", exc_info=True)
+            return None
 
-            if not similar:
-                return None
+        if not similar:
+            return None
 
-            # Проверяем similarity
-            for item in similar:
-                if hasattr(item, "metadata"):
-                    similarity = item.metadata.get("similarity", 0.0)
-                else:
-                    similarity = item.get("similarity", 0.0) if isinstance(item, dict) else 0.0
-                if similarity >= self.cache_similarity_threshold:
-                    metadata = item.get("metadata", {})
-                    cached_intent = metadata.get("intent")
-                    cached_confidence = metadata.get("confidence", 0.0)
-                    cached_topic = metadata.get("topic")
+        # Проверяем similarity
+        for item in similar:
+            if hasattr(item, "metadata"):
+                similarity = item.metadata.get("similarity", 0.0)
+            else:
+                similarity = item.get("similarity", 0.0) if isinstance(item, dict) else 0.0
+        
+            if similarity >= self.cache_similarity_threshold:
+                metadata = item.metadata if hasattr(item, "metadata") else item.get("metadata", {})
+                cached_intent = metadata.get("intent")
+                cached_confidence = metadata.get("confidence", 0.0)
+                cached_topic = metadata.get("topic")
 
-                    if cached_intent and cached_confidence > 0:
+                if cached_intent and cached_confidence > 0:
+                    try:
                         return IntentClassification(
                             intent=UserIntent(cached_intent),
                             confidence=cached_confidence,
@@ -356,9 +360,9 @@ class RequestClassifier:
                             source="cache",
                             raw_input=user_input,
                         )
-
-        except Exception as e:
-            logger.warning(f"Ошибка cache lookup: {e}", exc_info=True)
+                    except (ValueError, KeyError) as e:
+                        logger.debug(f"Невалидный кэш: {e}")
+                        continue
 
         return None
 
@@ -432,18 +436,13 @@ class RequestClassifier:
     
 
     async def save_to_cache(self, classification: IntentClassification) -> None:
-        """Сохранение результата классификации в memory для будущего cache.
-
-        Вызывается после успешной обработки запроса, чтобы следующие
-        похожие запросы могли использовать cache.
-        """
         if not self.memory:
             return
-
+    
         try:
             await self.memory.store_perception(
                 content=classification.raw_input,
-                memory_type="EPISODIC",
+                memory_type=MemoryType.EPISODIC,  # ← Используем Enum
                 metadata={
                     "type": "user_request",
                     "intent": classification.intent,

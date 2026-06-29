@@ -36,6 +36,10 @@ class SoulTamperError(LeyaError):
     pass
 
 
+class SoulVersionError(LeyaError):  # ← ДОБАВЛЕНО
+    """Ошибка работы с версиями soul (откат, история, несовместимость формата)."""
+
+
 # --- Persistence ---
 class LeyaPersistenceError(LeyaError):
     """Базовое исключение для ошибок персистентности."""

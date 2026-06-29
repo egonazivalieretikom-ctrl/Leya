@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random 
 import time
 import json
 from collections.abc import Callable
@@ -402,7 +403,7 @@ class OllamaClient:
                 last_exception = e
                 if attempt < max_retries - 1:
                     # Exponential backoff: 1s, 2s, 4s
-                    wait_time = 2 ** attempt
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
                     logger.warning(
                         f"Retry {attempt + 1}/{max_retries} после {wait_time}s "
                         f"(ошибка: {type(e).__name__})"

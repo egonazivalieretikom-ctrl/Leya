@@ -39,6 +39,8 @@ from .exceptions import (
 )
 from .interfaces import IMetaCognition
 from .thinker import repair_json
+from .memory import MemoryType
+
 
 logger = logging.getLogger(__name__)
 
@@ -504,7 +506,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
         """
         try:
             # Получаем недавние семантические факты
-            recent_facts = await self._get_recent_semantic_facts(limit=5)
+            recent_facts = self._get_recent_semantic_facts(limit=5)
 
             # ПРОВЕРКА: если фактов нет, не генерируем инсайт
             if not recent_facts:
@@ -528,7 +530,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     """
 
             response = await self.llm_client(prompt)
-            data = cleaned = repair_json(response)
+            cleaned = repair_json(response) 
             data = json.loads(cleaned) if cleaned != "{}" else {}
             insight = data.get("insight", "")
 
@@ -565,7 +567,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             semantic_facts = [
                 e.content
                 for e in all_episodes
-                if hasattr(e, "memory_type") and e.memory_type.value == "semantic"
+                if hasattr(e, "memory_type") and e.memory_type == MemoryType.SEMANTIC 
             ]
             return semantic_facts[:limit]
 

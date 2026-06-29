@@ -158,11 +158,15 @@ class HomeostasisEngine:
 
         for drive_type_raw, current_value in drive_state.items():
             # Унификация ключей: поддерживаем как DriveType, так и строковые значения
+            if not isinstance(current_value, (int, float)):
+                logger.warning(f"Некорректное значение для драйва {drive_type_raw}: {current_value}")
+                continue
+        
             if isinstance(drive_type_raw, str):
                 try:
                     drive_type = DriveType(drive_type_raw)
                 except ValueError:
-                    logger.warning(f"HomeostasisEngine: Неизвестный тип драйва в drive_state: {drive_type_raw}")
+                    logger.warning(f"Неизвестный тип драйва: {drive_type_raw}")
                     continue
             else:
                 drive_type = drive_type_raw
