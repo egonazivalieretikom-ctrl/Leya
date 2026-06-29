@@ -111,37 +111,29 @@ class LeyaOS:
     
         logger.info("Инициализация когнитивной архитектуры...")
     
+        # ===================================================================
         # Ядро когнитивной системы
+        # ===================================================================
         self.drives = DriveSystem(config=self.config.drives)
-    
+
         # Персистентность
         self.persistence = StatePersistence(
             brain_dir=config.memory.brain_dir
         )
-        
+
         # SoulCryptoManager с явной передачей ключа
         hmac_key = os.environ.get("SOUL_HMAC_KEY")
         try:
             soul_config = self.config.soul
             if hmac_key:
-                soul_config.hmac_key = hmac_key          # если поле есть в конфиге
+                soul_config.hmac_key = hmac_key
             self.soul_crypto_manager = SoulCryptoManager(config=soul_config)
             logger.info("SoulCryptoManager инициализирован")
         except Exception as e:
             logger.error(f"Не удалось инициализировать SoulCryptoManager: {e}", exc_info=True)
             self.soul_crypto_manager = None
-    
-        # Проверка Protocol-интерфейсов
-        if not isinstance(self.memory, IMemorySystem):
-            raise TypeError(f"memory должен реализовывать IMemorySystem")
-        if not isinstance(self.drives, IDriveSystem):
-            raise TypeError(f"drives должен реализовывать IDriveSystem")
-        if not isinstance(self.workspace, IGlobalWorkspace):
-            raise TypeError(f"workspace должен реализовывать IGlobalWorkspace")
-        if not isinstance(self.constitutional, IConstitutionalLayer):
-            raise TypeError(f"constitutional должен реализовывать IConstitutionalLayer")
-    
-        # LLM-клиент
+
+        # LLM-клиент (создаётся ДО memory, т.к. передаётся в MemorySystem)
         self.llm_client = OllamaClient(
             base_url=self.config.ollama.base_url,
             model=self.config.ollama.model,
@@ -153,17 +145,31 @@ class LeyaOS:
             repeat_penalty=self.config.ollama.repeat_penalty,
         )
         self.llm_client.set_fallback(self._llm_fallback)
+
+        # MemorySystem (создаётся ПОСЛЕ llm_client, чтобы передать его)
         self.memory = MemorySystem(
             config=self.config.memory,
             llm_client=self.llm_client,
         )
-    
+
+        # ===================================================================
+        # Проверка Protocol-интерфейсов (ТОЛЬКО ПОСЛЕ создания всех компонентов!)
+        # ===================================================================
+        if not isinstance(self.memory, IMemorySystem):
+            raise TypeError("memory должен реализовывать IMemorySystem")
+        if not isinstance(self.drives, IDriveSystem):
+            raise TypeError("drives должен реализовывать IDriveSystem")
+        if not isinstance(self.workspace, IGlobalWorkspace):
+            raise TypeError("workspace должен реализовывать IGlobalWorkspace")
+        if not isinstance(self.constitutional, IConstitutionalLayer):
+            raise TypeError("constitutional должен реализовывать IConstitutionalLayer")
+
         # Thinker
         self.thinker = CoreThinker(
             config=self.config.thinker,
             llm_client=self._llm_call,
         )
-    
+
         # Request Classifier
         self.request_classifier = RequestClassifier(
             llm_client=self.llm_client,
@@ -171,17 +177,17 @@ class LeyaOS:
             use_llm_threshold=0.7,
             cache_similarity_threshold=0.85,
         )
-    
+
         # Гомеостаз
         self.homeostasis = HomeostasisEngine(config=self.config.homeostasis)
-    
+
         # Мета-когниция
         self.reflection = MetaCognition(
             leya_os=self,
             llm_client=self._llm_call,
             config=self.config.reflection,
         )
-    
+
         # Окружение
         if use_web and self.config.web.enabled:
             self.env = WebEnvironment(leya_os=self)
@@ -189,13 +195,13 @@ class LeyaOS:
         else:
             self.env = CLIEnvironment(leya_os=self)
             logger.info("Используется CLI-интерфейс")
-    
+
         # Инструменты
         try:
             self.tools_description = self.env.tool_registry.get_all_descriptions()
         except Exception:
             self.tools_description = ""
-    
+
         # Tool Generator
         self.tool_generator = None
         if hasattr(self.env, "tool_registry") and self.env.tool_registry:
@@ -206,32 +212,32 @@ class LeyaOS:
                 )
             except Exception:
                 self.tool_generator = None
-    
+
         # Состояние
         self.self_model = ""
         self.running = False
         self.system_metrics = SystemMetrics()
         self._perceive_lock = asyncio.Lock()
         self._background_tasks = []
-    
+
         # Experimental (по умолчанию выключено)
         self.decision_engine = None
         self.emotional_support = None
-    
+
         if self.config.experimental.enable_decision_engine:
             try:
                 self.decision_engine = DecisionEngine(self.config)
                 logger.info("DecisionEngine включён")
             except Exception:
                 self.decision_engine = None
-    
+
         if self.config.experimental.enable_emotional_support:
             try:
                 self.emotional_support = EmotionalSupport(self.config, self.memory)
                 logger.info("EmotionalSupport включён")
             except Exception:
                 self.emotional_support = None
-    
+
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
 
