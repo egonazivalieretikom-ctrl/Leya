@@ -262,10 +262,10 @@ class MemorySystem:
         content: str,
         emotional_boost: float = 0.0,
         metadata: dict | None = None,
-        memory_type: MemoryType = MemoryType.EPISODIC,  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
-    ) -> str:
+        memory_type: MemoryType = MemoryType.EPISODIC,
+    ) -> Engram:
         """
-        Сохранить восприятие как эпизодическую энграмму.
+        Сохранить восприятие как энграмму указанного типа.
 
         Биологическая модель:
         - Создание новой энграммы
@@ -276,7 +276,7 @@ class MemorySystem:
         engram = Engram(
             id=engram_id,
             content=content,
-            memory_type=MemoryType.EPISODIC,
+            memory_type=memory_type,  # ← ИСПРАВЛЕНО: используем переданный параметр
             emotional_boost=max(0.0, min(1.0, emotional_boost)),
             metadata=metadata or {},
         )
@@ -290,10 +290,17 @@ class MemorySystem:
                 context={"engram_id": engram_id, "error": str(exc)},
             ) from exc
 
+        # Выбор коллекции в зависимости от типа памяти
+        collection = (
+            self.episodic_collection
+            if memory_type == MemoryType.EPISODIC
+            else self.semantic_collection
+        )
+
         # Сохранение в ChromaDB
         try:
             await asyncio.to_thread(
-                self.episodic_collection.add,
+                collection.add,
                 ids=[engram_id],
                 embeddings=[embedding],
                 documents=[content],
@@ -302,6 +309,7 @@ class MemorySystem:
                         "timestamp": engram.timestamp,
                         "emotional_boost": engram.emotional_boost,
                         "retention_strength": engram.retention_strength,
+                        "memory_type": memory_type.value,
                     }
                 ],
             )
@@ -320,7 +328,7 @@ class MemorySystem:
         # Атомарное сохранение состояния
         await self._save_state()
 
-        logger.debug(f"Сохранена энграмма: {engram_id} (boost={emotional_boost:.2f})")
+        logger.debug(f"Сохранена энграмма: {engram_id} (type={memory_type.value}, boost={emotional_boost:.2f})")
         return engram
 
     async def store_fact(
@@ -440,7 +448,7 @@ class MemorySystem:
         await self._save_state()
         return selected
 
-    async def get_recent_episodes(self, limit: int = 20) -> list[Engram]:
+    def get_recent_episodes(self, limit: int = 20) -> list[Engram]:
         """
         Публичный API: получение последних эпизодов.
 
@@ -458,7 +466,7 @@ class MemorySystem:
         candidates.sort(key=lambda e: e.timestamp, reverse=True)
         return candidates[:limit]
 
-    async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
+    def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
         """Получить недавние спонтанные мысли (помеченные в metadata)."""
         thoughts = [
             e
@@ -1267,9 +1275,14 @@ class MemorySystem:
         return report
 
     async def _sync_chroma_from_memory(self) -> SyncReport:
-        """Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
+        """
+        Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
 
-        ИСПРАВЛЕНО: Убран дублирующий вызов синхронизации семантической коллекции.
+        Агрегирует результаты синхронизации эпизодической и семантической памяти
+        в единый SyncReport.
+
+        Returns:
+            SyncReport с суммарной информацией о синхронизации.
         """
         logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
         total_report = SyncReport()
@@ -1285,11 +1298,12 @@ class MemorySystem:
             total_report.updated_in_chroma += report_episodic.updated_in_chroma
             total_report.removed_from_chroma += report_episodic.removed_from_chroma
             total_report.errors += report_episodic.errors
+            logger.info(f"Sync episodic: {report_episodic}")
         except Exception as exc:
             logger.error(f"Сбой sync episodic: {exc}", exc_info=True)
             total_report.errors += 1
 
-        # 2. Синхронизация семантической памяти (ИСПРАВЛЕНО: только один вызов)
+        # 2. Синхронизация семантической памяти (ЕДИНСТВЕННЫЙ ВЫЗОВ)
         try:
             report_semantic = await self._sync_collection(
                 collection=self.semantic_collection,

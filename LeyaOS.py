@@ -13,6 +13,8 @@ logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
 import signal
 import sys
 import time
+import json
+import random
 from datetime import datetime
 from typing import Any, Optional  # ✅ Добавлен Optional
 
@@ -62,7 +64,7 @@ from leya_core.interfaces import (
 )
 
 from leya_core.llm_client import OllamaClient  # ✅ Этот импорт теперь выполнится
-from leya_core.memory import MemorySystem
+from leya_core.memory import MemorySystem, MemoryType
 from leya_core.reflection import MetaCognition
 from leya_core.request_classifier import RequestClassifier, IntentClassification, UserIntent
 from leya_core.state_persistence import StatePersistence
@@ -399,9 +401,13 @@ class LeyaOS:
             await self.shutdown()
 
     async def _save_all_state(self) -> list[tuple[str, Exception]]:
-        """Сохранение состояния всех компонентов при shutdown."""
-        from leya_core.exceptions import LeyaAtomicWriteError, LeyaMemoryError, LeyaError
+        """
+        Сохранение состояния всех компонентов при shutdown.
 
+        Returns:
+            Список кортежей (component_name, exception) для каждой ошибки.
+            Пустой список при успешном сохранении.
+        """
         errors: list[tuple[str, Exception]] = []
 
         # 1. Память
@@ -409,17 +415,17 @@ class LeyaOS:
             await self.memory._save_state()
         except Exception as e:
             logger.error(f"Ошибка атомарной записи памяти при shutdown: {e}")
-            errors.append(f"memory: {e}")
+            errors.append(("memory", e))
 
         # 2. Драйвы + Гомеостаз — через StatePersistence
-        persistence = getattr(self, 'persistence', getattr(self, 'state_persistence', None))
+        persistence = getattr(self, "persistence", getattr(self, "state_persistence", None))
         if persistence is not None:
             try:
                 await persistence.save_state()
             except Exception as e:
                 logger.error(f"Ошибка сохранения состояния persistence при shutdown: {e}")
-                errors.append(f"persistence: {e}")
-                
+                errors.append(("persistence", e))
+
         return errors
 
     async def shutdown(self) -> None:
@@ -508,7 +514,6 @@ class LeyaOS:
         Returns:
             JSON с базовым ответом
         """
-        import json
 
         logger.warning("Используем fallback-ответ (LLM недоступна)")
         return json.dumps(
@@ -584,7 +589,7 @@ class LeyaOS:
             try:
                 await self.memory.store_perception(
                     content=f"Пользователь: {user_input}\nЛея: {response}",
-                    memory_type="EPISODIC",
+                    memory_type=MemoryType.EPISODIC,
                     emotional_boost=0.65,   # повышенное эмоциональное усиление для диалога
                     metadata={
                         "type": "dialogue_turn",
@@ -621,7 +626,6 @@ class LeyaOS:
             "Здравствуй! Как дела?",
             "Приветствую! Чем могу помочь?",
         ]
-        import random
         return random.choice(greetings)
 
     async def _handle_farewell(self, classification: IntentClassification) -> str:
@@ -631,7 +635,6 @@ class LeyaOS:
             "Пока! Возвращайся, если захочешь поговорить.",
             "Всего доброго! Буду ждать нашей следующей встречи.",
         ]
-        import random
         return random.choice(farewells)
 
     async def _handle_question(self, classification: IntentClassification) -> str:
@@ -697,7 +700,11 @@ class LeyaOS:
                     soul_context = ""
             drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
             memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
-            tools = self.tool_registry.get_tools_schema() if hasattr(self, 'tool_registry') else []
+            tools = (
+                self.env.tool_registry.get_tools_schema()
+                if hasattr(self.env, "tool_registry") and self.env.tool_registry is not None
+                else []
+            )
             
             recent_episodes = await self.memory.get_recent_episodes(limit=10)
             recent_dialogue = [
@@ -776,19 +783,61 @@ class LeyaOS:
         """
         Основной когнитивный цикл: планирование → действие → постобработка.
 
+        Архитектура уровней:
+        - УРОВЕНЬ 0: Decision Engine (мгновенные решения без LLM, confidence >= 0.8)
+        - УРОВЕНЬ 1: CoreThinker (полный LLM-цикл с контекстом)
+        - УРОВЕНЬ 1.5: Emotional Support (анализ эмоций пользователя)
+
         Args:
             stimulus: Стимул для обработки
             tool_context: Контекст от инструмента (если есть)
         """
         async with self._perceive_lock:
             try:
+                # ===================================================================
+                # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
+                # ===================================================================
+                # ПЕРЕНОСИМ В НАЧАЛО: если DecisionEngine уверен (confidence >= 0.8),
+                # выполняем fast decision БЕЗ вызова LLM и возвращаемся.
+                if self.decision_engine:
+                    try:
+                        stimulus_content = stimulus.get("content", "")
+                        drive_state = {
+                            d.type.value: d.current
+                            for d in self.drives.drives.values()
+                        }
+
+                        fast_decision = await self.decision_engine.make_decision(
+                            stimulus_content,
+                            drive_state,
+                        )
+
+                        if (
+                            fast_decision
+                            and fast_decision.use_tool
+                            and fast_decision.confidence >= 0.8
+                        ):
+                            logger.info(
+                                f"🚀 Fast decision: {fast_decision.tool_name} "
+                                f"(confidence={fast_decision.confidence:.2f})"
+                            )
+                            # Выполняем быстрое решение без LLM и выходим
+                            await self._execute_fast_decision(fast_decision)
+                            return  # Пропускаем LLM полностью
+                    except Exception as e:
+                        logger.error(f"Ошибка DecisionEngine: {e}", exc_info=True)
+                        # Graceful degradation — продолжаем с LLM
+
+                # ===================================================================
+                # === УРОВЕНЬ 1: CoreThinker (полный LLM-цикл) ===
+                # ===================================================================
                 # Извлечение контекста из памяти
                 stimulus_content = stimulus.get("content", "")
                 memory_context = await self.memory.retrieve_context(
                     query=stimulus_content, max_results=5
                 )
 
-                # === Подготовка контекстов под новую сигнатуру CoreThinker.generate_plan ===
+                # Подготовка контекстов под новую сигнатуру CoreThinker.generate_plan
                 soul_context = await self.memory.get_self_model_context()
                 drive_context = self.drives.get_internal_state_prompt()
 
@@ -796,7 +845,7 @@ class LeyaOS:
                 memory_context_for_thinker = [
                     {
                         "content": e.content,
-                        "metadata": getattr(e, "metadata", {})
+                        "metadata": getattr(e, "metadata", {}),
                     }
                     for e in memory_context
                 ]
@@ -807,15 +856,18 @@ class LeyaOS:
                     soul_context=soul_context,
                     drive_context=drive_context,
                     memory_context=memory_context_for_thinker,
-                    tools=self.tools_description,   # list[dict] с описаниями инструментов
+                    tools=self.tools_description,  # list[dict] с описаниями инструментов
                     tool_context=tool_context,
                 )
-                logger.info(f"Лея ответила: {cognitive_output.get('response', '')[:200]}...")
-                logger.debug(f"Внутренний монолог: {cognitive_output.get('internal_monologue', '')}")
+                logger.info(
+                    f"Лея ответила: {cognitive_output.get('response', '')[:200]}..."
+                )
+                logger.debug(
+                    f"Внутренний монолог: {cognitive_output.get('internal_monologue', '')}"
+                )
 
                 # Постобработка
                 response = cognitive_output.get("response", "...")
-
                 internal_monologue = cognitive_output.get("internal_monologue", "")
                 action_intent = cognitive_output.get("action_intent", "none")
                 self_reflection = cognitive_output.get("self_reflection", "")
@@ -824,9 +876,15 @@ class LeyaOS:
                 if stimulus.get("source") == "homeostasis":
                     try:
                         goal_content = str(stimulus.get("content", "")).lower()
-                        drive_type = DriveType.INTEGRITY if "integrity" in goal_content or "целостность" in goal_content else DriveType.AUTONOMY
+                        drive_type = (
+                            DriveType.INTEGRITY
+                            if "integrity" in goal_content or "целостность" in goal_content
+                            else DriveType.AUTONOMY
+                        )
 
-                        rpe = self.drives.calculate_rpe("homeostasis_goal", actual_outcome=0.65)
+                        rpe = self.drives.calculate_rpe(
+                            "homeostasis_goal", actual_outcome=0.65
+                        )
                         self.drives.apply_satisfaction(drive_type, base_amount=0.22, rpe=rpe)
 
                         if hasattr(self.homeostasis, "mark_as_researched"):
@@ -839,10 +897,12 @@ class LeyaOS:
                 # Конституциональная проверка ответа
                 verdict = self.constitutional.verify_response(response)
                 if not verdict.allowed:
-                    logger.warning(f"Ответ не прошёл конституциональную проверку: {verdict.reason}")
+                    logger.warning(
+                        f"Ответ не прошёл конституциональную проверку: {verdict.reason}"
+                    )
                     response = "Извини, я не могу ответить на этот вопрос."
 
-                # Отправка ответа
+                # Отправка ответа (ЕДИНСТВЕННАЯ в этом пути)
                 await self.env.send_message(response)
 
                 # Broadcast внутреннего монолога
@@ -850,7 +910,9 @@ class LeyaOS:
                     try:
                         await self.env.broadcast_thought("internal", internal_monologue)
                     except LeyaBroadcastError as exc:
-                        logger.warning(f"Не удалось broadcast внутренний монолог: {exc}")
+                        logger.warning(
+                            f"Не удалось broadcast внутренний монолог: {exc}"
+                        )
 
                 # Обновление self_model
                 if self_reflection:
@@ -863,65 +925,52 @@ class LeyaOS:
                         logger.warning(f"Не удалось обновить self_model: {exc}")
 
                 # Обработка action_intent
-                await self._process_action_intent(action_intent, cognitive_output, stimulus_content)
+                await self._process_action_intent(
+                    action_intent, cognitive_output, stimulus_content
+                )
+
+                # ===================================================================
+                # === УРОВЕНЬ 1.5: Emotional Support (анализ эмоций) ===
+                # ===================================================================
+                # Выполняется ПОСЛЕ отправки ответа — не влияет на ответ,
+                # но обновляет drives и сохраняет эмоцию в память для будущего контекста.
+                if self.emotional_support:
+                    try:
+                        stimulus_content = stimulus.get("content", "")
+                        emotion_state = await self.emotional_support.analyze_user_state(
+                            stimulus_content
+                        )
+
+                        # Влияние на drives
+                        if emotion_state and emotion_state.intensity > 0.5:
+                            await self.emotional_support.update_drives_from_emotion(
+                                emotion_state, self.drives
+                            )
+
+                        # Сохранение в memory (async, не блокируем)
+                        if emotion_state and emotion_state.intensity > 0.6:
+                            asyncio.create_task(
+                                self.emotional_support.save_emotion_to_memory(emotion_state)
+                            )
+                    except Exception as e:
+                        logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
+                        # Graceful degradation — продолжаем без эмоционального контекста
 
             except LeyaLLMError as exc:
                 logger.error(f"Ошибка LLM в когнитивном цикле: {exc}", exc_info=True)
-                await self.env.send_message("Мои когнитивные процессы временно нарушены...")
+                await self.env.send_message(
+                    "Мои когнитивные процессы временно нарушены..."
+                )
             except LeyaMemoryError as exc:
                 logger.error(f"Ошибка памяти в когнитивном цикле: {exc}", exc_info=True)
                 await self.env.send_message("Я не могу вспомнить контекст...")
             except Exception as exc:
-                logger.error(f"Неожиданная ошибка в когнитивном цикле: {exc}", exc_info=True)
+                logger.error(
+                    f"Неожиданная ошибка в когнитивном цикле: {exc}", exc_info=True
+                )
                 await self.env.send_message(
                     "Произошла непредвиденная ошибка в моих когнитивных процессах."
                 )
-
-
-            # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
-            if self.decision_engine:
-                try:
-                    stimulus_content = stimulus.get("content", "")
-                    drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-                    
-                    fast_decision = await self.decision_engine.make_decision(
-                        stimulus_content,
-                        drive_state
-                    )
-                    
-                    if fast_decision and fast_decision.use_tool and fast_decision.confidence >= 0.8:
-                        logger.info(
-                            f"🚀 Fast decision: {fast_decision.tool_name} "
-                            f"(confidence={fast_decision.confidence:.2f})"
-                        )
-                        # Выполняем быстрое решение без LLM
-                        await self._execute_fast_decision(fast_decision)
-                        return  # Пропускаем LLM
-                except Exception as e:
-                    logger.error(f"Ошибка DecisionEngine: {e}", exc_info=True)
-                    # Graceful degradation — продолжаем с LLM
-            
-            # === УРОВЕНЬ 1.5: Emotional Support (анализ эмоций) — этап 2.2 ===
-            emotion_state = None
-            if self.emotional_support:
-                try:
-                    stimulus_content = stimulus.get("content", "")
-                    emotion_state = await self.emotional_support.analyze_user_state(stimulus_content)
-                    
-                    # Влияние на drives
-                    if emotion_state and emotion_state.intensity > 0.5:
-                        await self.emotional_support.update_drives_from_emotion(
-                            emotion_state, self.drives
-                        )
-                    
-                    # Сохранение в memory (async, не блокируем)
-                    if emotion_state and emotion_state.intensity > 0.6:
-                        asyncio.create_task(
-                            self.emotional_support.save_emotion_to_memory(emotion_state)
-                        )
-                except Exception as e:
-                    logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
-                    # Graceful degradation — продолжаем без эмоционального контекста
 
 
 
@@ -977,7 +1026,7 @@ class LeyaOS:
     async def _execute_tool(self, tool_call: str) -> None:
         """
         Выполнение инструмента из tool_call.
-
+        _cognitive_loop
         Args:
             tool_call: JSON-строка или dict с описанием вызова инструмента
         """
@@ -985,8 +1034,6 @@ class LeyaOS:
         if self.tool_generator is None:
             logger.warning("ToolGenerator недоступен. Пропускаем выполнение инструмента.")
             return
-
-        import json
 
         try:
             tool_data = json.loads(tool_call) if isinstance(tool_call, str) else tool_call

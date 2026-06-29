@@ -432,26 +432,6 @@ class HomeostasisEngine:
     
         return facts[:5]  # Не более 5 фактов
 
-    async def extract_new_terms(self, text: str) -> list[str]:
-        """
-        Извлечение новых терминов из текста.
-    
-        Args:
-            text: Текст для анализа
-    
-        Returns:
-            Список новых терминов
-        """
-        if not text:
-            return []
-    
-        # Простая эвристика: слова в кавычках или с заглавной буквы
-        import re
-        terms = re.findall(r'"([^"]+)"', text)
-        terms.extend(re.findall(r'\b([A-ZА-ЯЁ][a-zа-яё]{3,})\b', text))
-    
-        return list(set(terms))[:10]  # Уникальные, не более 10
-
     async def extract_new_terms(
         self,
         article_text: str,
@@ -474,7 +454,8 @@ class HomeostasisEngine:
         """
         if not article_text or len(article_text) < 50:
             logger.warning(
-                f"HomeostasisEngine: Текст слишком короткий для извлечения терминов ({len(article_text)} символов)"
+                f"HomeostasisEngine: Текст слишком короткий для извлечения терминов "
+                f"({len(article_text)} символов)"
             )
             return []
 
@@ -492,22 +473,21 @@ class HomeostasisEngine:
             ]
         )
 
-        prompt = f"""Ты — система анализа текста. Найди в тексте 3-5 научных терминов или концепций, которые достойны исследования.
+        prompt = (
+            f"Ты — система анализа текста. Найди в тексте 3-5 научных терминов "
+            f"или концепций, которые достойны исследования.\n"
+            f"ПРАВИЛА:\n"
+            f"Ищи термины, которые могут быть незнакомы широкой аудитории\n"
+            f"НЕ включай: {', '.join(list(known_topics)[:10])}\n"
+            f"Каждый термин — 1-3 слова на русском языке\n"
+            f"Термины должны быть конкретными (не \"наука\", а \"квантовая запутанность\")\n"
+            f"ТЕКСТ:\n{article_text[:2000]}\n"
+            f"Верни JSON:\n"
+            f'{{"terms": ["термин 1", "термин 2", "термин 3"]}}\n'
+            f"CRITICAL: Return ONLY valid JSON."
+        )
 
-ПРАВИЛА:
-- Ищи термины, которые могут быть незнакомы широкой аудитории
-- НЕ включай: {', '.join(list(known_topics)[:10])}
-- Каждый термин — 1-3 слова на русском языке
-- Термины должны быть конкретными (не "наука", а "квантовая запутанность")
-
-ТЕКСТ:
-{article_text[:2000]}
-
-Верни JSON:
-{{"terms": ["термин 1", "термин 2", "термин 3"]}}
-
-CRITICAL: Return ONLY valid JSON."""
-
+        response = ""
         try:
             response = await llm_client(prompt, require_json=True)
             cleaned = self._clean_json_response(response)
@@ -515,7 +495,10 @@ CRITICAL: Return ONLY valid JSON."""
             terms = data.get("terms", [])
 
             # Фильтрация известных
-            new_terms = [t for t in terms if t.lower() not in {t.lower() for t in known_topics}]
+            new_terms = [
+                t for t in terms
+                if t.lower() not in {t.lower() for t in known_topics}
+            ]
 
             if new_terms:
                 logger.info(f"HomeostasisEngine: Найдены новые термины: {new_terms}")
@@ -533,6 +516,10 @@ CRITICAL: Return ONLY valid JSON."""
                 "Ошибка LLM при извлечении терминов",
                 context={"error": str(exc)},
             ) from exc
+
+        except LeyaHomeostasisError:
+            # Не оборачиваем наши собственные исключения повторно
+            raise
 
         except Exception as exc:
             raise LeyaHomeostasisError(
