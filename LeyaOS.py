@@ -9,18 +9,16 @@ import os
 from pathlib import Path 
 import asyncio
 import logging
-logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
 import signal
 import sys
 import time
 import json
 import random
 from datetime import datetime
-from typing import Any, Optional  # ✅ Добавлен Optional
+from typing import Any, Optional  
 
-# Bootstrap выполняется автоматически при импорте leya_core (см. leya_core/__init__.py)
-# os.environ устанавливается там ДО загрузки chromadb
-
+logger = logging.getLogger("LeyaOS")
+logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
 
 # Импорт конфигурации
 from leya_core.config import LeyaConfig
@@ -29,9 +27,33 @@ from leya_core.config import LeyaConfig
 from leya_core.constitutional import ConstitutionalLayer
 from leya_core.drives import DriveSystem, DriveType
 from leya_core.environment import CLIEnvironment
-from leya_core.experimental.decision_engine import DecisionEngine, Decision
-from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
-from leya_core.interfaces import IDecisionEngine, IEmotionalSupport
+try:
+    from leya_core.experimental.decision_engine import DecisionEngine, Decision
+    from leya_core.interfaces import IDecisionEngine
+    EXPERIMENTAL_DECISION_ENGINE_AVAILABLE = True
+except ImportError as exc:
+    logger.warning(
+        f"DecisionEngine недоступен: {exc}. "
+        f"Установите модуль или отключите enable_decision_engine в .env"
+    )
+    DecisionEngine = None  # type: ignore
+    Decision = None  # type: ignore
+    IDecisionEngine = None  # type: ignore
+    EXPERIMENTAL_DECISION_ENGINE_AVAILABLE = False
+
+try:
+    from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
+    from leya_core.interfaces import IEmotionalSupport
+    EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE = True
+except ImportError as exc:
+    logger.warning(
+        f"EmotionalSupport недоступен: {exc}. "
+        f"Установите модуль или отключите enable_emotional_support в .env"
+    )
+    EmotionalSupport = None  # type: ignore
+    EmotionState = None  # type: ignore
+    IEmotionalSupport = None  # type: ignore
+    EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE = False
 from leya_core.soul_crypto_manager import SoulCryptoManager
 
 # Импорт исключений
@@ -230,23 +252,43 @@ class LeyaOS:
         self._perceive_lock = asyncio.Lock()
         self._background_tasks = []
 
-        # Experimental (по умолчанию выключено)
+        # Experimental 
         self.decision_engine = None
         self.emotional_support = None
 
-        if self.config.experimental.enable_decision_engine:
+        if (
+            self.config.experimental.enable_decision_engine
+            and EXPERIMENTAL_DECISION_ENGINE_AVAILABLE
+            and DecisionEngine is not None
+        ):
             try:
                 self.decision_engine = DecisionEngine(self.config)
                 logger.info("DecisionEngine включён")
-            except Exception:
+            except Exception as exc:
+                logger.error(f"Не удалось инициализировать DecisionEngine: {exc}", exc_info=True)
                 self.decision_engine = None
+        elif self.config.experimental.enable_decision_engine and not EXPERIMENTAL_DECISION_ENGINE_AVAILABLE:
+            logger.warning(
+                "enable_decision_engine=True в конфиге, но модуль DecisionEngine недоступен. "
+                "Пропускаю инициализацию."
+            )
 
-        if self.config.experimental.enable_emotional_support:
+        if (
+            self.config.experimental.enable_emotional_support
+            and EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE
+            and EmotionalSupport is not None
+        ):
             try:
                 self.emotional_support = EmotionalSupport(self.config, self.memory)
                 logger.info("EmotionalSupport включён")
-            except Exception:
+            except Exception as exc:
+                logger.error(f"Не удалось инициализировать EmotionalSupport: {exc}", exc_info=True)
                 self.emotional_support = None
+        elif self.config.experimental.enable_emotional_support and not EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE:
+            logger.warning(
+                "enable_emotional_support=True в конфиге, но модуль EmotionalSupport недоступен. "
+                "Пропускаю инициализацию."
+            )
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
 
@@ -444,9 +486,28 @@ class LeyaOS:
         persistence = getattr(self, "persistence", getattr(self, "state_persistence", None))
         if persistence is not None:
             try:
-                await persistence.save_state()
+                state_data = {
+                    "drives": (
+                        self.drives.save_state()
+                        if hasattr(self.drives, "save_state")
+                        else {}
+                    ),
+                    "homeostasis": (
+                        self.homeostasis.save_state()
+                        if hasattr(self.homeostasis, "save_state")
+                        else {}
+                    ),
+                }
+
+                # asyncio.to_thread делает sync вызов awaitable
+                await asyncio.to_thread(persistence.save_state, state_data)
+
+                logger.info("✅ Состояние драйвов и гомеостаза сохранено")
             except Exception as e:
-                logger.error(f"Ошибка сохранения состояния persistence при shutdown: {e}")
+                logger.error(
+                    f"Ошибка сохранения состояния persistence при shutdown: {e}",
+                    exc_info=True,
+                )
                 errors.append(("persistence", e))
 
         return errors
@@ -696,7 +757,6 @@ class LeyaOS:
         Это fallback для случаев, когда специализированный обработчик
         не справился или intent == UNKNOWN.
         """
-        soul_context = getattr(self, "_soul_context", "")
         try:
             # Формируем стимул для thinker
             stimulus = {
@@ -706,8 +766,8 @@ class LeyaOS:
             }
 
             # Получаем контекст
-            soul_context = ""
-            if hasattr(self, "soul_crypto_manager") and self.soul_crypto_manager is not None:
+            soul_context = getattr(self, "_soul_context", "")
+            if not soul_context and hasattr(self, "soul_crypto_manager") and self.soul_crypto_manager is not None:
                 try:
                     soul_data = self.soul_crypto_manager.load_all()
                     soul_context = (
@@ -715,21 +775,36 @@ class LeyaOS:
                         f"=== RULES ===\n{soul_data.get('rules', '')}\n\n"
                         f"=== VALUES ===\n{soul_data.get('values', '')}"
                     )
-                except Exception:
+                    self._soul_context = soul_context  # Кэшируем для будущих вызовов
+                except (LeyaSoulError, SoulTamperError) as exc:
+                    logger.warning(f"Не удалось загрузить soul: {exc}")
                     soul_context = ""
-            drive_context = self.drives.get_internal_state_prompt() if hasattr(self, 'drives') else ""
-            memory_context = await self.memory.retrieve_context(user_input) if hasattr(self, 'memory') else []
+                except Exception as exc:
+                    logger.error(f"Неожиданная ошибка загрузки soul: {exc}", exc_info=True)
+                    soul_context = ""
+
+            drive_context = (
+                self.drives.get_internal_state_prompt()
+                if hasattr(self, "drives") and self.drives is not None
+                else ""
+            )
+            memory_context = (
+                await self.memory.retrieve_context(user_input)
+                if hasattr(self, "memory") and self.memory is not None
+                else []
+            )
             tools = (
-                self.env.tool_registry.get_all_descriptions() 
+                self.env.tool_registry.get_all_descriptions()
                 if hasattr(self.env, "tool_registry") and self.env.tool_registry is not None
                 else []
             )
-            
+
             recent_episodes = await self.memory.get_recent_episodes(limit=10)
-            recent_dialogue = [
-                e for e in recent_episodes 
-                if getattr(getattr(e, "metadata", {}), "get", lambda k, d=None: d)("type") == "dialogue_turn"
-            ]
+            recent_dialogue = []
+            for e in recent_episodes:
+                metadata = getattr(e, "metadata", None)
+                if isinstance(metadata, dict) and metadata.get("type") == "dialogue_turn":
+                    recent_dialogue.append(e)
 
             # Генерируем план через thinker
             plan = await self.thinker.generate_plan(
@@ -742,15 +817,24 @@ class LeyaOS:
 
             return plan.get("response", "Извини, я не смогла обработать запрос.")
 
-        except Exception as e:
-            logger.error(f"Ошибка обработки через thinker: {e}", exc_info=True)
+        # ✅ ИСПРАВЛЕНО: специфичные исключения для известных ошибок → fallback-ответ
+        except (LeyaLLMError, LeyaMemoryError, LeyaToolError) as exc:
+            logger.error(
+                f"Ошибка обработки через thinker: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
             return "Извини, произошла ошибка при обработке запроса. Попробуй ещё раз."
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка: {type(e).__name__}: {e}", exc_info=True)
-            raise  
+
+        # ✅ ИСПРАВЛЕНО: все остальные исключения → пробрасываем дальше
+        except Exception as exc:
+            logger.error(
+                f"Неожиданная ошибка: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
+            raise
 
 
-    async def _execute_fast_decision(self, decision: Decision) -> None:
+    async def _execute_fast_decision(self, decision: Any) -> None:
         """Выполнение быстрого решения от DecisionEngine (без LLM).
         
         Этап 2.2 (Группа A): выполняется, когда DecisionEngine уверен в решении
@@ -956,7 +1040,10 @@ class LeyaOS:
                 # ===================================================================
                 # Выполняется ПОСЛЕ отправки ответа — не влияет на ответ,
                 # но обновляет drives и сохраняет эмоцию в память для будущего контекста.
-                if self.emotional_support:
+                if (
+                    self.emotional_support is not None
+                    and EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE
+                ):
                     try:
                         stimulus_content = stimulus.get("content", "")
                         emotion_state = await self.emotional_support.analyze_user_state(
