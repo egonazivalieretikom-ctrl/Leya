@@ -842,6 +842,67 @@ class LeyaOS:
     
         return result
 
+    def _calculate_dynamic_outcome(
+        self,
+        action_type: str,
+        drive_state_before: dict[str, Any],
+        drive_state_after: dict[str, Any],
+        success: bool = True,
+        constitutional_verdict: Any = None,
+    ) -> float:
+        """
+        Динамическое вычисление actual_outcome для RPE.
+    
+        Анализирует изменение состояния драйвов до/после действия,
+        успешность выполнения и конституциональную проверку.
+    
+        Args:
+            action_type: Тип действия ("homeostasis", "tool", "user_response")
+            drive_state_before: Состояние драйвов ДО действия
+            drive_state_after: Состояние драйвов ПОСЛЕ действия
+            success: Успешность выполнения (True/False)
+            constitutional_verdict: Результат конституциональной проверки (опционально)
+    
+        Returns:
+            float в диапазоне [0.0, 1.0] — actual_outcome для RPE
+        """
+        base_outcome = 0.5  # Базовое значение
+    
+        # 1. Успешность выполнения
+        if not success:
+            return 0.1  # Низкий outcome при неудаче
+    
+        # 2. Конституциональная проверка
+        if constitutional_verdict and not constitutional_verdict.allowed:
+            return 0.2  # Нарушение конституции — низкий outcome
+    
+        # 3. Изменение tension драйвов (биологический сигнал)
+        tension_improvement = 0.0
+        for drive_name in drive_state_before.keys():
+            before_tension = drive_state_before[drive_name].get("tension", 0)
+            after_tension = drive_state_after.get(drive_name, {}).get("tension", 0)
+        
+            # Если tension уменьшилось — это позитивный сигнал
+            if before_tension > after_tension:
+                tension_improvement += (before_tension - after_tension)
+    
+        # Нормализуем improvement (максимум 0.3 вклада)
+        tension_bonus = min(tension_improvement * 0.5, 0.3)
+    
+        # 4. Специфичные корректировки по типу действия
+        if action_type == "homeostasis":
+            # Homeostasis: высокий baseline, если tension уменьшилось
+            base_outcome = 0.6 + tension_bonus
+        elif action_type == "tool":
+            # Tool: успех выполнения + релевантность
+            base_outcome = 0.7 + tension_bonus
+        elif action_type == "user_response":
+            # User response: успешная генерация + конституция
+            base_outcome = 0.65 + tension_bonus
+    
+        # Ограничиваем диапазон [0.1, 0.95]
+        return max(0.1, min(0.95, base_outcome))
+
     async def _handle_user_request(self, user_input: str) -> dict:
         """Обработка пользовательского запроса с трёхуровневой классификацией."""
         if not user_input or not user_input.strip():
@@ -1505,15 +1566,30 @@ class LeyaOS:
                             else DriveType.AUTONOMY
                         )
 
-                        rpe = self.drives.calculate_rpe(
-                            "homeostasis_goal", actual_outcome=0.65
+                        # ===================================================================
+                        # ✅ Динамическое вычисление actual_outcome
+                        # ===================================================================
+                        actual_outcome = self._calculate_dynamic_outcome(
+                            action_type="homeostasis",
+                            drive_state_before=drive_state_before,
+                            drive_state_after=drive_state_after,
+                            success=True,
                         )
+                    
+                        # Гранулярный action_key на основе типа драйва и цели
+                        action_key = f"homeostasis_{drive_type.value}_{goal_content[:20]}"
+                    
+                        # RPE с динамическим outcome
+                        rpe = self.drives.calculate_rpe(action_key, actual_outcome=actual_outcome)
                         self.drives.apply_satisfaction(drive_type, base_amount=0.22, rpe=rpe)
 
                         if hasattr(self.homeostasis, "mark_as_researched"):
                             self.homeostasis.mark_as_researched(goal_content[:60])
 
-                        logger.info(f"[Fix] Homeostasis feedback closed: {drive_type.value}")
+                        logger.info(
+                            f"[Fix] Homeostasis feedback closed: {drive_type.value}, "
+                            f"outcome={actual_outcome:.2f}, rpe={rpe:.2f}"
+                        )
                     except Exception as exc:
                         logger.warning(f"Ошибка закрытия homeostasis feedback: {exc}")
 
@@ -1526,7 +1602,7 @@ class LeyaOS:
                     response = "Извини, я не могу ответить на этот вопрос."
 
                 # ===================================================================
-                # ✅ НОВОЕ: MetaCognition — анализ когнитивного акта
+                # ✅ MetaCognition — анализ когнитивного акта
                 # ===================================================================
                 # Сохраняем состояние драйвов ПОСЛЕ обработки
                 drive_state_after = {
@@ -1557,6 +1633,51 @@ class LeyaOS:
 
                 # Отправка ответа (ЕДИНСТВЕННАЯ в этом пути)
                 await self.env.send_message(response)
+
+                # ===================================================================
+                # ✅ RPE для пользовательского запроса
+                # ===================================================================
+                if stimulus.get("type") == "user_message" or stimulus.get("source") != "homeostasis":
+                    try:
+                        # Динамическое вычисление actual_outcome
+                        actual_outcome = self._calculate_dynamic_outcome(
+                            action_type="user_response",
+                            drive_state_before=drive_state_before,
+                            drive_state_after=drive_state_after,
+                            success=True,
+                            constitutional_verdict=verdict,
+                        )
+                    
+                        # Гранулярный action_key на основе intent
+                        intent = stimulus.get("classified_intent", "unknown")
+                        action_key = f"user_response_{intent}"
+                    
+                        # RPE для CONNECTION (социальный драйв)
+                        rpe = self.drives.calculate_rpe(action_key, actual_outcome=actual_outcome)
+                        self.drives.apply_satisfaction(
+                            DriveType.CONNECTION,
+                            base_amount=0.15,
+                            rpe=rpe,
+                        )
+                    
+                        # Если использовался инструмент — RPE для AUTONOMY
+                        if action_intent == "use_tool":
+                            rpe_tool = self.drives.calculate_rpe(
+                                f"tool_{cognitive_output.get('tool_call', 'unknown')[:20]}",
+                                actual_outcome=actual_outcome,
+                            )
+                            self.drives.apply_satisfaction(
+                                DriveType.AUTONOMY,
+                                base_amount=0.12,
+                                rpe=rpe_tool,
+                            )
+                    
+                        logger.debug(
+                            f"RPE user_response: outcome={actual_outcome:.2f}, "
+                            f"rpe={rpe:.2f}, intent={intent}"
+                        )
+                    except Exception as rpe_exc:
+                        logger.warning(f"Ошибка RPE для user_response: {rpe_exc}")
 
                 # Broadcast внутреннего монолога
                 if internal_monologue and isinstance(self.env, WebEnvironment):
@@ -1826,7 +1947,66 @@ class LeyaOS:
             if action_intent == "use_tool":
                 tool_call = cognitive_output.get("tool_call", "")
                 if tool_call:
+                    # Сохраняем состояние драйвов ДО выполнения инструмента
+                    drive_state_before_tool = {
+                        d.type.value: {
+                            "current": d.current,
+                            "tension": d.tension,
+                            "target": d.target,
+                        }
+                        for d in self.drives.drives.values()
+                    }
+
+                    # Выполняем инструмент
                     await self._execute_tool(tool_call)
+
+                    # ===================================================================
+                    # ✅ НОВОЕ: RPE для tool call
+                    # ===================================================================
+                    try:
+                        # Состояние драйвов ПОСЛЕ выполнения
+                        drive_state_after_tool = {
+                            d.type.value: {
+                                "current": d.current,
+                                "tension": d.tension,
+                                "target": d.target,
+                            }
+                            for d in self.drives.drives.values()
+                        }
+                    
+                        # Извлекаем tool_name из tool_call
+                        tool_data = json.loads(tool_call) if isinstance(tool_call, str) else tool_call
+                        tool_name = tool_data.get("tool", "unknown")
+                    
+                        # Динамическое вычисление actual_outcome
+                        actual_outcome = self._calculate_dynamic_outcome(
+                            action_type="tool",
+                            drive_state_before=drive_state_before_tool,
+                            drive_state_after=drive_state_after_tool,
+                            success=True,
+                        )
+                    
+                        # Гранулярный action_key
+                        action_key = f"tool_{tool_name}"
+                    
+                        # RPE для AUTONOMY (действие) и CURIOSITY (новая информация)
+                        rpe = self.drives.calculate_rpe(action_key, actual_outcome=actual_outcome)
+                        self.drives.apply_satisfaction(
+                            DriveType.AUTONOMY,
+                            base_amount=0.18,
+                            rpe=rpe,
+                        )
+                        self.drives.apply_satisfaction(
+                            DriveType.CURIOSITY,
+                            base_amount=0.10,
+                            rpe=rpe,
+                        )
+                    
+                        logger.debug(
+                            f"RPE tool_call: tool={tool_name}, outcome={actual_outcome:.2f}, rpe={rpe:.2f}"
+                        )
+                    except Exception as rpe_exc:
+                        logger.warning(f"Ошибка RPE для tool_call: {rpe_exc}")
 
 
             elif action_intent == "remember_fact":
