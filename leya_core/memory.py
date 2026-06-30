@@ -57,17 +57,21 @@ class SyncReport:
     """
     Отчёт о операции синхронизации in-memory ↔ ChromaDB.
     """
-
-    def __init__(self):  # ✅ Исправлено: убрано : MemoryConfig и запятая
-        self.added_to_chroma: int = 0  # ✅ Исправлено: chroma
-        self.updated_in_chroma: int = 0  # ✅ Исправлено: chroma
-        self.removed_from_chroma: int = 0  # ✅ Исправлено: chroma
-        self.errors: int = 0
-        self.duration_ms: float = 0.0
+    added_to_chroma: int = 0
+    updated_in_chroma: int = 0
+    removed_from_chroma: int = 0
+    errors: int = 0
+    duration_ms: float = 0.0
 
     @property
     def total_discrepancies(self) -> int:
+        """Общее количество расхождений (добавленные + удалённые)."""
         return self.added_to_chroma + self.removed_from_chroma
+
+    @property
+    def is_clean(self) -> bool:
+        """True если синхронизация прошла без расхождений и ошибок."""
+        return self.total_discrepancies == 0 and self.errors == 0
 
     def __str__(self) -> str:
         return (
@@ -1094,7 +1098,7 @@ class MemorySystem:
 
         Raises:
             LeyaAtomicWriteError: Ошибка записи файла
-            LeyaConfigError: Отсутствие/слабость HMAC ключа
+            LeyaConfigError: Отсутствие/слабость HMAC ключа (только если не отключён)
             LeyaMemoryError: Другие ошибки памяти
         """
         if not hasattr(self, "state_path") or self.state_path is None:
@@ -1130,11 +1134,21 @@ class MemorySystem:
                 f.flush()
                 os.fsync(f.fileno())
 
-            key = self._get_hmac_key()
-            signature = self._compute_hmac(tmp_path, key)
-            (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(
-                signature, encoding="utf-8"
-            )
+            if not self._disable_hmac_check:
+                key = self._get_hmac_key()
+                signature = self._compute_hmac(tmp_path, key)
+                (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(
+                    signature, encoding="utf-8"
+                )
+            else:
+                # Тестовый режим: пропускаем HMAC, удаляем старый .hmac если есть
+                hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
+                if hmac_path.exists():
+                    try:
+                        hmac_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass  # Игнорируем ошибки очистки
+                logger.debug("HMAC подпись пропущена (тестовый режим)")
 
             try:
                 os.replace(tmp_path, state_path)

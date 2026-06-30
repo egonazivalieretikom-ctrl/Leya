@@ -249,7 +249,9 @@ class LeyaOS:
         self._soul_context = "" 
         self.running = False
         self.system_metrics = SystemMetrics()
-        self._perceive_lock = asyncio.Lock()
+        self._user_perceive_lock = asyncio.Lock()
+        self._internal_lock = asyncio.Lock()
+        self._user_request_active = False  # Флаг активного user request
         self._background_tasks = []
 
         # Experimental 
@@ -300,19 +302,18 @@ class LeyaOS:
     async def perceive(self, stimulus: dict[str, Any]) -> None:
         """
         Точка входа для любого стимула.
-    
+
         Реализует Global Workspace Theory: все стимулы (включая пользовательские)
         конкурируют за внимание через workspace. Победитель попадает в фокус сознания.
 
-        Args:
-            stimulus: Словарь с типом, содержимым и метаданными стимула
+        ✅ ИСПРАВЛЕНИЕ CR-perceive-lock: User requests используют отдельный lock
+        и устанавливают флаг _user_request_active для координации с внутренними процессами.
         """
         self._last_interaction_time = datetime.now().timestamp()
 
         stimulus_type = stimulus.get("type", "unknown")
         stimulus_content = stimulus.get("content", "")
         source = stimulus.get("source", "external")
-        tool_context = stimulus.get("tool_context", "")
 
         logger.info(
             f"Восприятие стимула [{stimulus_type}] от {source}: "
@@ -322,88 +323,100 @@ class LeyaOS:
         # ===================================================================
         # ✅ НОВОЕ: Интеграция Global Workspace для пользовательских запросов
         # ===================================================================
-        if stimulus_type == "user_message" and not tool_context:
-            
-            # Создаём WorkspaceProposal для пользовательского запроса
-            user_proposal = WorkspaceProposal(
-                source="user",
-                content=stimulus_content,
-                action_type="user_message",
-                priority=Priority.HIGH,
-                urgency=0.95,  # Пользовательские запросы имеют высокий urgency
-                drive_relevance=0.8,  # Высокая релевантность драйвам (CONNECTION)
-            )
+        if stimulus_type == "user_message":
+            # ✅ ИСПРАВЛЕНИЕ CR-perceive-lock: Устанавливаем флаг активного user request
+            self._user_request_active = True
         
-            # Сохраняем proposal в workspace для конкуренции
-            self.workspace.submit(user_proposal)
-        
-            # Получаем состояние драйвов для оценки конкуренции
-            drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
-        
-            # Выбираем победителя среди всех proposals (включая пользовательский)
-            winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
-
-            # Обработка пользовательских сообщений через классификатор
-            tool_context = await self._handle_user_request(stimulus_content)
-        
-            if winner:
-                logger.info(
-                    f"🏆 Workspace winner: {winner.source} "
-                    f"(priority={winner.priority}, urgency={winner.urgency:.2f})"
+            try:
+                # Создаём WorkspaceProposal для пользовательского запроса
+                user_proposal = WorkspaceProposal(
+                    source="user",
+                    content=stimulus_content,
+                    action_type="user_message",
+                    priority=Priority.HIGH,
+                    urgency=0.95,
+                    drive_relevance=0.8,
                 )
+        
+                # Сохраняем proposal в workspace для конкуренции
+                self.workspace.submit(user_proposal)
+        
+                # Получаем состояние драйвов для оценки конкуренции
+                drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
+        
+                # Выбираем победителя среди всех proposals
+                winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
+
+                # ✅ Обработка пользовательских сообщений через классификатор
+                handle_result: dict[str, Any] = {
+                    "__response_sent": False,
+                    "__error": False,
+                }
+        
+                try:
+                    handle_result = await self._handle_user_request(stimulus_content)
+                except Exception as exc:
+                    logger.error(f"Критическая ошибка в _handle_user_request: {exc}", exc_info=True)
+                    handle_result["__error"] = True
+        
+                # Сохраняем результат в stimulus для передачи в cognitive_loop
+                stimulus["__handle_result"] = handle_result
+        
+                if winner:
+                    logger.info(
+                        f"🏆 Workspace winner: {winner.source} "
+                        f"(priority={winner.priority}, urgency={winner.urgency:.2f})"
+                    )
             
-                # Если победитель - пользовательский запрос, обрабатываем его
-                if winner.source == "user":
-                    logger.debug("Пользовательский запрос выиграл конкуренцию")
-                    # Ответ уже отправлен в _handle_user_request, просто сохраняем в память
+                    if winner.source == "user":
+                        logger.debug("Пользовательский запрос выиграл конкуренцию")
+                
+                        try:
+                            await self.memory.store_perception(
+                                content=f"[{stimulus_type}] {stimulus_content}",
+                                emotional_boost=0.6,
+                                metadata={"source": source, "type": stimulus_type},
+                            )
+                        except (LeyaMemoryError, Exception) as exc:
+                            logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
+            
+                        # ✅ ИСПРАВЛЕНИЕ CR-perceive-lock: Используем user lock
+                        async with self._user_perceive_lock:
+                            await self._cognitive_loop(stimulus, handle_result, is_user_request=True)
+                    else:
+                        logger.info(f"Внутренний процесс {winner.source} выиграл конкуренцию у пользователя")
+                        await self._process_workspace_winner(winner, stimulus)
+                else:
+                    logger.debug("Нет победителя workspace, обрабатываем пользовательский запрос")
+        
                     try:
                         await self.memory.store_perception(
                             content=f"[{stimulus_type}] {stimulus_content}",
                             emotional_boost=0.6,
                             metadata={"source": source, "type": stimulus_type},
                         )
-                    except LeyaMemoryError as exc:
+                    except (LeyaMemoryError, Exception) as exc:
                         logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
-                    except Exception as exc:
-                        logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
-                
-                    # Когнитивный цикл для пользовательского запроса
-                    await self._cognitive_loop(stimulus, tool_context)
-                else:
-                    # Победитель - внутренний процесс (homeostasis, meta_cognition)
-                    logger.info(f"Внутренний процесс {winner.source} выиграл конкуренцию у пользователя")
-                    await self._process_workspace_winner(winner, stimulus)
-            else:
-                # Нет победителя (мало proposals) - обрабатываем пользовательский запрос
-                logger.debug("Нет победителя workspace, обрабатываем пользовательский запрос")
-                try:
-                    await self.memory.store_perception(
-                        content=f"[{stimulus_type}] {stimulus_content}",
-                        emotional_boost=0.6,
-                        metadata={"source": source, "type": stimulus_type},
-                    )
-                except LeyaMemoryError as exc:
-                    logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
-                except Exception as exc:
-                    logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
-            
-                await self._cognitive_loop(stimulus, tool_context)
+        
+                    # ✅ ИСПРАВЛЕНИЕ CR-perceive-lock: Используем user lock
+                    async with self._user_perceive_lock:
+                        await self._cognitive_loop(stimulus, handle_result, is_user_request=True)
+            finally:
+                # ✅ ИСПРАВЛЕНИЕ CR-perceive-lock: Сбрасываем флаг даже при ошибках
+                self._user_request_active = False
         else:
-            # Непользовательские стимулы (workspace_focus, tool_result и т.д.)
-            # Сохранение восприятия в память
+            # Непользовательские стимулы
             try:
                 await self.memory.store_perception(
                     content=f"[{stimulus_type}] {stimulus_content}",
                     emotional_boost=0.6 if stimulus_type == "user_message" else 0.3,
                     metadata={"source": source, "type": stimulus_type},
                 )
-            except LeyaMemoryError as exc:
+            except (LeyaMemoryError, Exception) as exc:
                 logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
-            except Exception as exc:
-                logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
 
-            # Когнитивный цикл
-            await self._cognitive_loop(stimulus, tool_context)
+            # Когнитивный цикл без lock (непользовательские стимулы)
+            await self._cognitive_loop(stimulus, {}, is_user_request=False)
 
     async def run(self) -> None:
         """
@@ -972,33 +985,71 @@ class LeyaOS:
         # Ограничиваем диапазон [0.1, 0.95]
         return max(0.1, min(0.95, base_outcome))
 
-    async def _handle_user_request(self, user_input: str) -> dict:
-        """Обработка пользовательского запроса с трёхуровневой классификацией."""
+    async def _handle_user_request(self, user_input: str) -> dict[str, Any]:
+        """Обработка пользовательского запроса с трёхуровневой классификацией.
+    
+        ✅ ИСПРАВЛЕНИЕ: Возвращает структурированный результат с флагом __response_sent.
+        Это позволяет cognitive_loop точно знать, был ли ответ уже отправлен.
+    
+        Returns:
+            dict с ключами:
+            - __response_sent: bool — был ли ответ отправлен пользователю
+            - __error: bool — произошла ли ошибка
+            - intent: str — намерение пользователя
+            - confidence: float — уверенность классификации
+            - topic: str | None — извлечённая тема
+            - source: str — источник классификации
+            - response: str — сгенерированный ответ (для логирования)
+        """
+        # Базовая структура результата
+        result: dict[str, Any] = {
+            "__response_sent": False,  # ✅ Флаг отправки
+            "__error": False,
+            "intent": "UNKNOWN",
+            "confidence": 0.0,
+            "topic": None,
+            "source": "unknown",
+            "response": "",
+        }
+    
         if not user_input or not user_input.strip():
-            return {
-                "response": "Я не услышала запрос. Повтори, пожалуйста.",
-                "intent": "UNKNOWN",
-                "metadata": {"error": "empty_input"},
-            }
+            result["response"] = "Я не услышала запрос. Повтори, пожалуйста."
+            return result
 
         user_input = user_input.strip()
         logger.info(f"📥 Новый запрос: {user_input[:100]}...")
 
         # 1. Классификация
+        classification = None
         try:
             classification = await self.request_classifier.classify(user_input)
             logger.info(
                 f"🎯 Классификация: {classification.intent} "
                 f"(confidence={classification.confidence:.2f}, source={classification.source})"
             )
+            result["intent"] = classification.intent
+            result["confidence"] = classification.confidence
+            result["topic"] = classification.topic
+            result["source"] = classification.source
         except (LeyaLLMError, LeyaMemoryError, ValueError) as e:
             logger.error(f"Ошибка классификации: {type(e).__name__}: {e}", exc_info=True)
-            return await self._handle_via_thinker(user_input, intent="UNKNOWN")
+            # Fallback: обрабатываем через thinker
+            try:
+                response = await self._handle_via_thinker(user_input, intent="UNKNOWN")
+                result["response"] = response
+                await self.env.send_message(response)
+                result["__response_sent"] = True  # ✅ Ответ отправлен
+            except Exception as fallback_exc:
+                logger.error(f"Ошибка fallback через thinker: {fallback_exc}", exc_info=True)
+                result["__error"] = True
+            return result
         except (LeyaBroadcastError, LeyaEnvironmentError) as e:
             logger.error(f"Ошибка окружения при классификации: {type(e).__name__}: {e}", exc_info=True)
-            return await self._handle_via_thinker(user_input, intent="UNKNOWN")
+            result["__error"] = True
+            return result
 
         # 2. Обработка в зависимости от intent
+        response = ""
         try:
             if classification.intent == UserIntent.GREETING:
                 response = await self._handle_greeting(classification)
@@ -1016,6 +1067,8 @@ class LeyaOS:
                 response = await self._handle_help(classification)
             else:
                 response = await self._handle_via_thinker(user_input, classification.intent)
+
+            result["response"] = response
 
             # Сохранение диалогового хода в память
             try:
@@ -1037,30 +1090,35 @@ class LeyaOS:
 
         except (LeyaLLMError, LeyaMemoryError, LeyaToolError) as e:
             logger.error(f"Ошибка обработки intent {classification.intent}: {type(e).__name__}: {e}", exc_info=True)
-            response = await self._handle_via_thinker(user_input, classification.intent)
+            try:
+                response = await self._handle_via_thinker(user_input, classification.intent)
+                result["response"] = response
+            except Exception as fallback_exc:
+                logger.error(f"Ошибка fallback: {fallback_exc}", exc_info=True)
+                result["__error"] = True
+                return result
         except (LeyaWorkspaceError, LeyaBroadcastError) as e:
             logger.error(f"Ошибка workspace/broadcast при обработке intent: {type(e).__name__}: {e}", exc_info=True)
-            response = await self._handle_via_thinker(user_input, classification.intent)
+            result["__error"] = True
+            return result
 
-        # 3. Сохраняем в cache (async, не блокируем)
-        try:
-            asyncio.create_task(self.request_classifier.save_to_cache(classification))
-        except (LeyaMemoryError, RuntimeError) as e:
-            logger.warning(f"Не удалось сохранить в cache: {type(e).__name__}: {e}")
+        # 3. ✅ ОТПРАВКА ОТВЕТА (единая точка)
+        if response:
+            try:
+                await self.env.send_message(response)
+                result["__response_sent"] = True  # ✅ Помечаем, что ответ отправлен
+            except (LeyaBroadcastError, LeyaEnvironmentError) as e:
+                logger.error(f"Ошибка отправки ответа: {type(e).__name__}: {e}", exc_info=True)
+                result["__error"] = True
 
-        # ✅ Отправляем ответ напрямую (не дублируем в _cognitive_loop)
-        await self.env.send_message(response)
+        # 4. Сохраняем в cache (async, не блокируем)
+        if classification:
+            try:
+                asyncio.create_task(self.request_classifier.save_to_cache(classification))
+            except (LeyaMemoryError, RuntimeError) as e:
+                logger.warning(f"Не удалось сохранить в cache: {type(e).__name__}: {e}")
 
-        # Возвращаем метаданные как строку для tool_context
-        return json.dumps(
-            {
-                "intent": classification.intent,
-                "confidence": classification.confidence,
-                "topic": classification.topic,
-                "source": classification.source,
-            },
-            ensure_ascii=False,
-        )
+        return result
 
     async def _handle_greeting(self, classification: IntentClassification) -> str:
         """Обработка приветствия."""
@@ -1147,7 +1205,7 @@ class LeyaOS:
             )
 
             # ===================================================================
-            # ✅ НОВОЕ: Интеграция self_model в drive_context
+            # ✅ Интеграция self_model в drive_context
             # ===================================================================
             if self.self_model and len(self.self_model.strip()) > 20:
                 drive_context = (
@@ -1194,7 +1252,7 @@ class LeyaOS:
 
             return plan.get("response", "Извини, я не смогла обработать запрос.")
 
-        # ✅ ИСПРАВЛЕНО: специфичные исключения для известных ошибок → fallback-ответ
+        # ✅ специфичные исключения для известных ошибок → fallback-ответ
         except (LeyaLLMError, LeyaMemoryError, LeyaToolError) as exc:
             logger.error(
                 f"Ошибка обработки через thinker: {type(exc).__name__}: {exc}",
@@ -1202,7 +1260,7 @@ class LeyaOS:
             )
             return "Извини, произошла ошибка при обработке запроса. Попробуй ещё раз."
 
-        # ✅ ИСПРАВЛЕНО: все остальные исключения → пробрасываем дальше
+        # ✅ все остальные исключения → пробрасываем дальше
         except Exception as exc:
             logger.error(
                 f"Неожиданная ошибка: {type(exc).__name__}: {exc}",
@@ -1262,7 +1320,7 @@ class LeyaOS:
                 await self.env.send_message(response)
             
                 # ===================================================================
-                # ✅ НОВОЕ: Сохранение как диалоговый ход (MemoryType.EPISODIC)
+                # ✅ Сохранение как диалоговый ход (MemoryType.EPISODIC)
                 # ===================================================================
                 try:
                     await self.memory.store_perception(
@@ -1294,7 +1352,7 @@ class LeyaOS:
                 )
             
                 # ===================================================================
-                # ✅ НОВОЕ: RPE и обновление драйвов
+                # ✅ RPE и обновление драйвов
                 # ===================================================================
                 try:
                     # Успешное выполнение инструмента → положительный RPE
@@ -1322,7 +1380,7 @@ class LeyaOS:
                     logger.warning(f"Ошибка RPE в fast_decision: {rpe_exc}")
             
                 # ===================================================================
-                # ✅ НОВОЕ: Интеграция с workspace
+                # ✅ Интеграция с workspace
                 # ===================================================================
                 try:
                     self.workspace.submit(
@@ -1341,7 +1399,7 @@ class LeyaOS:
                 logger.info(f"✅ Fast decision выполнен: {decision.tool_name}")
         
             # ===================================================================
-            # ✅ НОВОЕ: Сценарий 2: fast_response — прямой ответ пользователю
+            # ✅ Сценарий 2: fast_response — прямой ответ пользователю
             # ===================================================================
             elif getattr(decision, "fast_response", None):
                 response = decision.fast_response
@@ -1407,7 +1465,7 @@ class LeyaOS:
                 return
         
             # ===================================================================
-            # ✅ НОВОЕ: MetaCognition — анализ быстрого решения
+            # ✅ MetaCognition — анализ быстрого решения
             # ===================================================================
             try:
                 drive_state_after = {
@@ -1463,7 +1521,12 @@ class LeyaOS:
             # Fallback — не роняем систему, просто логируем
 
 
-    async def _cognitive_loop(self, stimulus: dict[str, Any], tool_context: str) -> None:
+    async def _cognitive_loop(
+        self, 
+        stimulus: dict[str, Any], 
+        tool_context: str,
+        is_user_request: bool = False,
+    ) -> None:
         """
         Основной когнитивный цикл: планирование → действие → постобработка.
 
@@ -1476,9 +1539,23 @@ class LeyaOS:
             stimulus: Стимул для обработки
             tool_context: Контекст от инструмента (если есть)
         """
-        async with self._perceive_lock:
+        if is_user_request:
+            async with self._user_perceive_lock:
+                await self._execute_cognitive_loop(stimulus, tool_context)
+        else:
+            # Внутренние процессы — без lock (могут выполняться параллельно)
+            await self._execute_cognitive_loop(stimulus, tool_context)
+
+    async def _execute_cognitive_loop(
+        self, 
+        stimulus: dict[str, Any], 
+        tool_context: str,
+    ) -> None:
+
+        async with self._internal_lock:
+            await self.env.send_message(response)
             # ===================================================================
-            # ✅ НОВОЕ: Сохраняем состояние драйвов ДО обработки для MetaCognition
+            # ✅ Сохраняем состояние драйвов ДО обработки для MetaCognition
             # ===================================================================
             drive_state_before = {
                 d.type.value: {
@@ -1490,10 +1567,30 @@ class LeyaOS:
             }
         
             try:
-                # ✅ Пропускаем thinker для user_message — ответ уже отправлен в _handle_user_request
-                if stimulus.get("type") == "user_message" and tool_context:
-                    logger.debug("User message уже обработан, пропускаем thinker")
-                    return
+                # ✅ Проверяем, был ли ответ уже отправлен
+                # tool_context может быть dict (handle_result) или str (старый формат)
+                response_already_sent = False
+            
+                if isinstance(tool_context, dict):
+                    response_already_sent = tool_context.get("__response_sent", False)
+                    handle_error = tool_context.get("__error", False)
+        
+                    if response_already_sent:
+                        logger.debug("✅ Ответ уже отправлен через _handle_user_request, пропускаем cognitive_loop")
+                        return
+        
+                    if handle_error:
+                        logger.warning("⚠️ _handle_user_request упал с ошибкой, пытаемся сгенерировать ответ через thinker")
+    
+                elif isinstance(tool_context, str) and tool_context:
+                    try:
+                        tc_data = json.loads(tool_context)
+                        if tc_data.get("__response_sent"):
+                            logger.debug("✅ Ответ уже отправлен (старый формат), пропускаем cognitive_loop")
+                            return
+                    except json.JSONDecodeError:
+                        pass
+    
             
                 # ===================================================================
                 # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
@@ -1819,7 +1916,14 @@ class LeyaOS:
         logger.info(
             f"Обработка победителя workspace: {winner.source} - {winner.content[:50]}..."
         )
-    
+        if winner.source == "user":
+            logger.error(
+                f"КРИТИЧЕСКАЯ ОШИБКА: _process_workspace_winner вызван для user proposal. "
+                f"User proposals должны обрабатываться через perceive(), а не через workspace_loop. "
+                f"Content: {winner.content[:100]}"
+            )
+            return
+
         try:
             # Формируем стимул из победителя
             winner_stimulus = {
@@ -1973,7 +2077,7 @@ class LeyaOS:
                         logger.warning(f"Не удалось обновить self_model из meta_cognition: {exc}")
                 else:
                     # Нет активного диалога — обрабатываем через thinker
-                    await self._cognitive_loop(winner_stimulus, "")
+                    await self._cognitive_loop(winner_stimulus, "", is_user_request=False)
         
             # Если это спонтанная мысль
             elif winner.source == "spontaneous":
@@ -1996,7 +2100,7 @@ class LeyaOS:
             # Неизвестный источник
             else:
                 logger.warning(f"Неизвестный источник workspace: {winner.source}")
-                await self._cognitive_loop(winner_stimulus, "")
+                await self._cognitive_loop(winner_stimulus, "", is_user_request=False)
     
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка памяти при обработке победителя workspace: {exc}", exc_info=True)
@@ -2234,9 +2338,18 @@ class LeyaOS:
     async def _workspace_loop(self) -> None:
         """
         Фоновый цикл Global Workspace.
+
+        Периодически выбирает победителя среди всех proposals.
     
-        Периодически выбирает победителя среди всех proposals
-        (включая пользовательские запросы, если они есть).
+        ✅ ИСПРАВЛЕНИЕ CR-workspace-loop: Явная фильтрация источников.
+        - user proposals обрабатываются ТОЛЬКО через perceive() (прямой путь)
+        - внутренние proposals (homeostasis, meta_cognition, spontaneous) — через _process_workspace_winner
+        - неизвестные источники — логируются и пропускаются
+    
+        Это предотвращает:
+        - Дублирование обработки user proposals
+        - Ложные ответы пользователю от workspace_focus
+        - Рекурсивные вызовы perceive()
         """
         logger.info("Workspace loop запущен.")
         while self.running:
@@ -2244,35 +2357,60 @@ class LeyaOS:
                 await asyncio.sleep(5)
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
 
-                # ✅ ИСПРАВЛЕНО: Не подавляем внутренние proposals во время диалога
-                # Вместо этого позволяем конкуренцию через select_winner
+                # ✅ ИСПРАВЛЕНИЕ: Не подавляем внутренние proposals во время диалога
                 winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
 
-                if winner:
-                    logger.info(
-                        f"Workspace loop: победитель {winner.source} "
-                        f"(priority={winner.priority}, urgency={winner.urgency:.2f})"
+                if not winner:
+                    continue
+
+                logger.info(
+                    f"Workspace loop: победитель {winner.source} "
+                    f"(priority={winner.priority}, urgency={winner.urgency:.2f})"
+                )
+
+                # ✅ ИСПРАВЛЕНИЕ CR-workspace-loop: Явная маршрутизация по источнику
+                if winner.source == "user":
+                    # Пользовательские запросы обрабатываются ТОЛЬКО через perceive().
+                    # Если proposal "завис" в workspace — значит perceive() уже завершился
+                    # (успешно или с ошибкой). Повторная обработка приведёт к дублированию.
+                    # Просто удаляем proposal из workspace (это уже сделано в select_winner)
+                    # и логируем.
+                    logger.debug(
+                        f"User proposal обнаружен в workspace loop "
+                        f"(content={winner.content[:50]}...). "
+                        f"Пропускаем — должен был быть обработан через perceive()."
                     )
-                
-                    # Если победитель - внутренний процесс, обрабатываем его
-                    if winner.source in ("homeostasis", "meta_cognition", "spontaneous"):
-                        # Создаём фиктивный стимул для совместимости
-                        dummy_stimulus = {
-                            "type": "user_message",
-                            "content": "",
-                            "source": "external",
-                        }
-                        await self._process_workspace_winner(winner, dummy_stimulus)
-                    else:
-                        # Пользовательский запрос или другой источник
-                        # Обрабатываем через perceive как обычный стимул
-                        await self.perceive(
-                            {
-                                "type": "workspace_focus",
-                                "content": winner.content,
-                                "source": winner.source,
-                            }
-                        )
+                    continue
+
+                elif winner.source in ("homeostasis", "meta_cognition", "spontaneous"):
+                    # ✅ Внутренние процессы — корректная обработка
+                    # Создаём стимул с ПРАВИЛЬНЫМ типом (НЕ "user_message"!)
+                    internal_stimulus = {
+                        "type": "workspace_focus",
+                        "content": winner.content,
+                        "source": winner.source,
+                        "action_type": winner.action_type,
+                        "priority": winner.priority,
+                        "urgency": winner.urgency,
+                    }
+                    await self._process_workspace_winner(winner, internal_stimulus)
+
+                elif winner.source == "fast_decision":
+                    # Fast decision уже выполнен в _execute_fast_decision, просто логируем
+                    logger.debug(
+                        f"Fast decision proposal в workspace "
+                        f"(content={winner.content[:50]}...). Пропускаем."
+                    )
+                    continue
+
+                else:
+                    # Неизвестный источник — логируем и пропускаем
+                    # НЕ вызываем perceive() — это вызовет некорректную обработку
+                    logger.warning(
+                        f"Неизвестный источник workspace: {winner.source}. "
+                        f"Пропускаем (content={winner.content[:50]}...)."
+                    )
+                    continue
 
             except LeyaWorkspaceError as exc:
                 logger.error(f"Ошибка workspace: {exc}", exc_info=True)
