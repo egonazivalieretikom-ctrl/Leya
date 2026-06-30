@@ -1128,6 +1128,15 @@ class MemorySystem:
                 context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
             ) from exc
 
+    async def save_state(self) -> None:
+        """
+        Публичный API для сохранения состояния памяти.
+    
+        Делегирует приватному методу _save_state().
+        Вызывается из LeyaOS при shutdown.
+        """
+        await self._save_state()
+
     async def _load_state(self) -> None:
         """
         Загрузка состояния памяти с проверкой HMAC и версии.

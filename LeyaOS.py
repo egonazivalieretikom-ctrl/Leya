@@ -98,7 +98,6 @@ from leya_core.state_persistence import StatePersistence
 from leya_core.system_metrics import SystemMetrics
 from leya_core.thinker import CoreThinker
 from leya_core.tool_generator import ToolGenerator
-from web_interface.web_environment import WebEnvironment
 from web_interface.server import run_server
 
 try:
@@ -247,6 +246,7 @@ class LeyaOS:
 
         # Состояние
         self.self_model = ""
+        self._soul_context = "" 
         self.running = False
         self.system_metrics = SystemMetrics()
         self._perceive_lock = asyncio.Lock()
@@ -342,28 +342,41 @@ class LeyaOS:
         """
         logger.info("Загрузка Модели Себя...")
 
-        soul_context = ""
-
-        # === Чистая загрузка через SoulCryptoManager ===
+        # ===================================================================
+        # ✅ Загрузка soul (ЕДИНСТВЕННОЕ место загрузки)
+        # self._soul_context кэшируется и используется во всех последующих вызовах
+        # ===================================================================
+        self._soul_context = ""  # Инициализация пустой строкой
         if hasattr(self, "soul_crypto_manager") and self.soul_crypto_manager is not None:
             try:
                 soul_data = self.soul_crypto_manager.load_all()
-                soul_context = (
+                self._soul_context = (
                     f"=== PERSONALITY ===\n{soul_data.get('personality', '')}\n\n"
                     f"=== RULES ===\n{soul_data.get('rules', '')}\n\n"
                     f"=== VALUES ===\n{soul_data.get('values', '')}"
                 )
-                logger.info(f"Soul загружен через SoulCryptoManager ({len(soul_context)} символов)")
-            except Exception as e:
-                logger.error(f"Ошибка загрузки soul через SoulCryptoManager: {e}", exc_info=True)
-                self._soul_context = ""
+                logger.info(
+                    f"Soul загружен через SoulCryptoManager ({len(self._soul_context)} символов)"
+                )
+            except (LeyaSoulError, SoulTamperError) as soul_exc:
+                logger.warning(f"Не удалось загрузить soul: {soul_exc}")
+            except Exception as soul_exc:
+                logger.error(
+                    f"Неожиданная ошибка загрузки soul: {soul_exc}", exc_info=True
+                )
+
+        # ===================================================================
+        # ✅ Загрузка self_model (независимо от soul)
+        # ===================================================================
         try:
             self.self_model = await self.memory.get_self_model_context()
-        except LeyaMemoryError as exc:
-            logger.warning(f"Не удалось загрузить self_model: {exc}")
+        except LeyaMemoryError as memory_exc:
+            logger.warning(f"Не удалось загрузить self_model: {memory_exc}")
             self.self_model = ""
-        except Exception as exc:
-            logger.error(f"Неожиданная ошибка загрузки self_model: {exc}", exc_info=True)
+        except Exception as memory_exc:
+            logger.error(
+                f"Неожиданная ошибка загрузки self_model: {memory_exc}", exc_info=True
+            )
             self.self_model = ""
 
         # Запуск фоновых задач с защитой от падения
@@ -393,6 +406,8 @@ class LeyaOS:
                     self.drives.load_state(saved_state["drives"])
                 if "homeostasis" in saved_state:
                     self.homeostasis.load_state(saved_state["homeostasis"])
+                # workspace, constitutional, reflection — не критично для работы
+                # (восстанавливаются при первом использовании)
                 logger.info("✅ Состояние загружено из предыдущей сессии")
             else:
                 logger.info("🆕 Начинаем с чистого листа")
@@ -475,16 +490,17 @@ class LeyaOS:
         """
         errors: list[tuple[str, Exception]] = []
 
-        # 1. Память
+        # 1. Память (через публичный API)
         try:
-            await self.memory._save_state()
+            await self.memory.save_state()
+            logger.info("✅ Состояние памяти сохранено")
         except Exception as e:
-            logger.error(f"Ошибка атомарной записи памяти при shutdown: {e}")
+            logger.error(f"Ошибка сохранения памяти при shutdown: {e}", exc_info=True)
             errors.append(("memory", e))
 
-        # 2. Драйвы + Гомеостаз — через StatePersistence
-        persistence = getattr(self, "persistence", getattr(self, "state_persistence", None))
-        if persistence is not None:
+        # 2. Драйвы + Гомеостаз + Workspace + Constitutional + Reflection
+        # через StatePersistence
+        if self.persistence is not None:
             try:
                 state_data = {
                     "drives": (
@@ -497,12 +513,32 @@ class LeyaOS:
                         if hasattr(self.homeostasis, "save_state")
                         else {}
                     ),
+                    "workspace": (
+                        self.workspace.get_status()
+                        if hasattr(self.workspace, "get_status")
+                        else {}
+                    ),
+                    "constitutional": (
+                        {
+                            "stats": self.constitutional.get_stats(),
+                            "violations": self.constitutional.get_violations_log(limit=50),
+                        }
+                        if hasattr(self.constitutional, "get_stats")
+                        else {}
+                    ),
+                    "reflection": (
+                        {
+                            "session_count": getattr(self.reflection, "_session_count", 0),
+                            "is_sleeping": getattr(self.reflection, "_is_sleeping", False),
+                        }
+                        if hasattr(self.reflection, "_session_count")
+                        else {}
+                    ),
                 }
 
-                # asyncio.to_thread делает sync вызов awaitable
-                await asyncio.to_thread(persistence.save_state, state_data)
-
-                logger.info("✅ Состояние драйвов и гомеостаза сохранено")
+                # StatePersistence.save_state() — синхронный метод
+                self.persistence.save_state(state_data)
+                logger.info("✅ Состояние всех компонентов сохранено")
             except Exception as e:
                 logger.error(
                     f"Ошибка сохранения состояния persistence при shutdown: {e}",
@@ -689,13 +725,19 @@ class LeyaOS:
         except (LeyaMemoryError, RuntimeError) as e:
             logger.warning(f"Не удалось сохранить в cache: {type(e).__name__}: {e}")
 
-        return {
-            "response": response,
-            "intent": classification.intent,
-            "confidence": classification.confidence,
-            "topic": classification.topic,
-            "source": classification.source,
-        }
+        # ✅ Отправляем ответ напрямую (не дублируем в _cognitive_loop)
+        await self.env.send_message(response)
+
+        # Возвращаем метаданные как строку для tool_context
+        return json.dumps(
+            {
+                "intent": classification.intent,
+                "confidence": classification.confidence,
+                "topic": classification.topic,
+                "source": classification.source,
+            },
+            ensure_ascii=False,
+        )
 
     async def _handle_greeting(self, classification: IntentClassification) -> str:
         """Обработка приветствия."""
@@ -765,23 +807,15 @@ class LeyaOS:
                 "classified_intent": intent,
             }
 
-            # Получаем контекст
-            soul_context = getattr(self, "_soul_context", "")
-            if not soul_context and hasattr(self, "soul_crypto_manager") and self.soul_crypto_manager is not None:
-                try:
-                    soul_data = self.soul_crypto_manager.load_all()
-                    soul_context = (
-                        f"=== PERSONALITY ===\n{soul_data.get('personality', '')}\n\n"
-                        f"=== RULES ===\n{soul_data.get('rules', '')}\n\n"
-                        f"=== VALUES ===\n{soul_data.get('values', '')}"
-                    )
-                    self._soul_context = soul_context  # Кэшируем для будущих вызовов
-                except (LeyaSoulError, SoulTamperError) as exc:
-                    logger.warning(f"Не удалось загрузить soul: {exc}")
-                    soul_context = ""
-                except Exception as exc:
-                    logger.error(f"Неожиданная ошибка загрузки soul: {exc}", exc_info=True)
-                    soul_context = ""
+            # ===================================================================
+            # ✅ Используем кэшированный soul_context из run()
+            # Fallback только если run() не успел загрузить soul (edge case)
+            # ===================================================================
+            soul_context = self._soul_context  # Используем кэш из run()
+            if not soul_context:
+                logger.debug("soul_context пуст, использую fallback (edge case)")
+                # Минимальный fallback — не перезагружаем soul, просто логируем
+                soul_context = ""
 
             drive_context = (
                 self.drives.get_internal_state_prompt()
@@ -900,11 +934,13 @@ class LeyaOS:
         """
         async with self._perceive_lock:
             try:
+                # ✅ Пропускаем thinker для user_message — ответ уже отправлен в _handle_user_request
+                if stimulus.get("type") == "user_message" and tool_context:
+                    logger.debug("User message уже обработан, пропускаем thinker")
+                    return
                 # ===================================================================
                 # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
                 # ===================================================================
-                # ПЕРЕНОСИМ В НАЧАЛО: если DecisionEngine уверен (confidence >= 0.8),
-                # выполняем fast decision БЕЗ вызова LLM и возвращаемся.
                 if self.decision_engine:
                     try:
                         stimulus_content = stimulus.get("content", "")
