@@ -154,13 +154,20 @@ class BaseEnvironment(ABC):
 class ToolRegistry:
     """
     Реестр инструментов Леи.
-
     Регистрирует встроенные и динамически сгенерированные инструменты.
     Обеспечивает безопасное выполнение с обработкой ошибок.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, soul_manager=None) -> None:
+        """
+        Инициализация реестра инструментов.
+        
+        Args:
+            soul_manager: SoulFileManager или SoulCryptoManager для работы с файлами души.
+                         Может быть None (инструменты soul будут возвращать ошибку).
+        """
         self.tools: dict[str, Tool] = {}
+        self.soul_manager = soul_manager  # ✅ ИСПРАВЛЕНИЕ CR4: сохраняем soul_manager
         self._register_builtin_tools()
 
     def register(self, tool: Tool) -> None:
@@ -300,6 +307,7 @@ class ToolRegistry:
         )
 
         # Soul File Operations
+        # ✅ ИСПРАВЛЕНИЕ CR4: используем self.soul_manager из ToolRegistry
         self.register(
             Tool(
                 name="read_soul_file",
@@ -313,11 +321,13 @@ class ToolRegistry:
             Tool(
                 name="write_soul_file",
                 description="Запись в файл души",
-                handler=lambda filename, content: self._write_soul_file(filename, content, self.soul_manager),
+                handler=lambda filename, content: self._write_soul_file(
+                    filename, content, self.soul_manager
+                ),
                 parameters={"filename": "str", "content": "str"},
             )
         )
-    
+
         self.register(
             Tool(
                 name="list_soul_files",
@@ -327,9 +337,9 @@ class ToolRegistry:
             )
         )
 
-    # =========================================================================
+    # =============================================================
     # Встроенные инструменты: реализация
-    # =========================================================================
+    # =============================================================
 
     async def _wikipedia_search(self, query: str, lang: str = "ru") -> str:
         """Поиск в Wikipedia."""
@@ -359,9 +369,7 @@ class ToolRegistry:
             # Запускаем в потоке, так как библиотека синхронная
             def search():
                 with DDGS() as ddgs:
-                    # Используем генератор и берем только нужные результаты
                     results = []
-                    # Важно: не указываем backend, чтобы библиотека сама выбрала лучший (обычно api)
                     for r in ddgs.text(query, max_results=max_results):
                         results.append(r)
                     return results
@@ -374,19 +382,18 @@ class ToolRegistry:
             output = []
             for r in results:
                 title = r.get("title", "Без названия")
-                body = r.get("body", r.get("snippet", ""))  # Добавлена проверка на snippet
+                body = r.get("body", r.get("snippet", ""))
                 output.append(f"- {title}: {body}")
             return "\n".join(output)
 
         except Exception as exc:
-            # Если DDGS заблокирован, предлагаем использовать Wikipedia как альтернативу
             logger.warning(f"DuckDuckGo Ratelimit: {exc}")
             return f"⚠️ Поиск временно недоступен (Ratelimit). Попробуйте использовать wikipedia_search для общих тем. Ошибка: {exc}"
 
     async def _github_readme(self, repo: str) -> str:
         try:
             import aiohttp
-        
+
             url = f"https://api.github.com/repos/{repo}/readme"
             headers = {"Accept": "application/vnd.github.v3.raw"}
             async with (
@@ -412,7 +419,6 @@ class ToolRegistry:
 
             url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit={limit}"
 
-            # ВАЖНО: Reddit требует User-Agent с описанием приложения
             headers = {
                 "User-Agent": "LeyaOS/1.0 (AI Consciousness Research; contact: leya@example.com)",
                 "Accept": "application/json",
@@ -477,7 +483,7 @@ class ToolRegistry:
             try:
                 result = await asyncio.to_thread(
                     subprocess.run,
-                    [sys.executable, temp_file],  # ← Используем sys.executable
+                    [sys.executable, temp_file],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -696,15 +702,15 @@ class SoulFileManager:
 class Environment(BaseEnvironment, IEnvironment):
     """
     Базовый абстрактный класс окружения.
-
     Реализует IEnvironment Protocol.
     Предоставляет общую функциональность для Web и CLI окружений.
     """
 
     def __init__(self, leya_os: Any) -> None:
         self.leya = leya_os
-        self.tool_registry = ToolRegistry()
+        # ✅ ИСПРАВЛЕНИЕ CR4: передаём soul_manager в ToolRegistry
         self.soul_manager = leya_os.soul_crypto_manager
+        self.tool_registry = ToolRegistry(soul_manager=self.soul_manager)
 
     async def execute_tool_call(self, tool_call_json: Any) -> str:
         """
@@ -730,7 +736,7 @@ class Environment(BaseEnvironment, IEnvironment):
                     context={"data": data},
                 )
 
-            # Исправлено: используем tool_registry
+            # Используем tool_registry
             result = await self.tool_registry.execute(tool_name, parameters)
             return result
 
@@ -762,28 +768,15 @@ class Environment(BaseEnvironment, IEnvironment):
         logger.debug(f"[{thought_type}] {content[:100]}")
 
     async def update_drives(self, drive_state: dict[str, float]) -> None:
-        """Обновление состояния драйвов.
-
-        В базовой реализации — логирование.
-        WebEnvironment переопределяет метод для отправки через WebSocket.
-        CLIEnvironment может переопределять для вывода в консоль.
-        """
+        """Обновление состояния драйвов."""
         logger.debug(f"[Environment] Drive state updated: {drive_state}")
 
     async def update_self_model(self, self_model: str) -> None:
-        """Обновление модели себя.
-
-        В базовой реализации — логирование.
-        WebEnvironment переопределяет метод для отправки через WebSocket.
-        """
+        """Обновление модели себя."""
         logger.debug("[Environment] Self-model updated")
 
     async def broadcast_state(self, state: str) -> None:
-        """Трансляция общего состояния системы.
-
-        В базовой реализации — логирование.
-        WebEnvironment переопределяет метод для отправки через WebSocket.
-        """
+        """Трансляция общего состояния системы."""
         logger.debug(f"[Environment] System state: {state}")
 
 

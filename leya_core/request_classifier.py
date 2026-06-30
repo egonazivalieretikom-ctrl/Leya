@@ -318,7 +318,8 @@ class RequestClassifier:
         return None
 
     async def _cache_lookup(self, user_input: str) -> Optional[IntentClassification]:
-        """Уровень 2: Semantic cache через memory."""
+        """Уровень 2: Semantic cache через memory.
+        """
         if not self.memory:
             return None
 
@@ -326,6 +327,7 @@ class RequestClassifier:
         similar: list = []
 
         try:
+            # retrieve_context возвращает список Engram с атрибутом distance/similarity
             similar = await self.memory.retrieve_context(
                 query=user_input,
                 max_results=5,
@@ -340,11 +342,55 @@ class RequestClassifier:
 
         # Проверяем similarity
         for item in similar:
-            if hasattr(item, "metadata"):
-                similarity = item.metadata.get("similarity", 0.0)
-            else:
-                similarity = item.get("similarity", 0.0) if isinstance(item, dict) else 0.0
+            # ✅ ИСПРАВЛЕНИЕ CR3: Вычисляем similarity динамически
+            # ChromaDB возвращает distance, конвертируем в similarity
+            # distance = 1 - cosine_similarity, поэтому similarity = 1 - distance
         
+            # Пытаемся получить distance из Engram или его metadata
+            distance = None
+        
+            if hasattr(item, "distance"):
+                distance = item.distance
+            elif hasattr(item, "metadata") and isinstance(item.metadata, dict):
+                distance = item.metadata.get("distance")
+        
+            # Если distance есть, конвертируем в similarity
+            if distance is not None:
+                similarity = 1.0 - distance
+            else:
+                # Fallback: если distance недоступен, используем embedding similarity
+                # через прямой запрос к ChromaDB
+                try:
+                    # Получаем embedding для текущего запроса
+                    query_embedding = await self.memory._generate_embedding(user_input)
+                
+                    # Получаем embedding для сохранённого engram
+                    if hasattr(item, "id"):
+                        # Запрашиваем из ChromaDB по id
+                        collection = self.memory.chroma_client.get_collection("episodic_memory")
+                        result = collection.get(ids=[item.id], include=["embeddings"])
+                    
+                        if result and result.get("embeddings"):
+                            stored_embedding = result["embeddings"][0]
+                        
+                            # Вычисляем cosine similarity
+                            import numpy as np
+                            query_vec = np.array(query_embedding)
+                            stored_vec = np.array(stored_embedding)
+                        
+                            cosine_sim = np.dot(query_vec, stored_vec) / (
+                                np.linalg.norm(query_vec) * np.linalg.norm(stored_vec)
+                            )
+                            similarity = float(cosine_sim)
+                        else:
+                            similarity = 0.0
+                    else:
+                        similarity = 0.0
+                except Exception as e:
+                    logger.debug(f"Не удалось вычислить similarity: {e}")
+                    similarity = 0.0
+
+            # ✅ Теперь similarity корректно вычислена
             if similarity >= self.cache_similarity_threshold:
                 metadata = item.metadata if hasattr(item, "metadata") else item.get("metadata", {})
                 cached_intent = metadata.get("intent")

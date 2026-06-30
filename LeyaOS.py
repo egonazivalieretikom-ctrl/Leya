@@ -323,9 +323,7 @@ class LeyaOS:
         # ✅ НОВОЕ: Интеграция Global Workspace для пользовательских запросов
         # ===================================================================
         if stimulus_type == "user_message" and not tool_context:
-            # Обработка пользовательских сообщений через классификатор
-            tool_context = await self._handle_user_request(stimulus_content)
-        
+            
             # Создаём WorkspaceProposal для пользовательского запроса
             user_proposal = WorkspaceProposal(
                 source="user",
@@ -344,6 +342,9 @@ class LeyaOS:
         
             # Выбираем победителя среди всех proposals (включая пользовательский)
             winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
+
+            # Обработка пользовательских сообщений через классификатор
+            tool_context = await self._handle_user_request(stimulus_content)
         
             if winner:
                 logger.info(
@@ -1707,8 +1708,6 @@ class LeyaOS:
                     logger.warning(f"Ошибка MetaCognition: {exc}")
                 except Exception as exc:
                     logger.error(f"Неожиданная ошибка MetaCognition: {exc}", exc_info=True)
-                    # Graceful degradation — продолжаем без мета-когниции
-
 
                 # Отправка ответа (ЕДИНСТВЕННАЯ в этом пути)
                 await self.env.send_message(response)

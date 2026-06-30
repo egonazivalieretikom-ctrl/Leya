@@ -16,6 +16,8 @@ FastAPI сервер для веб-интерфейса Леи.
 from __future__ import annotations
 
 import logging
+import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -76,17 +78,221 @@ def create_app(web_environment) -> FastAPI:
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         """
-        WebSocket endpoint для real-time broadcast.
+        WebSocket endpoint для real-time broadcast и обработки команд от клиента.
         Использует ТОЛЬКО WebEnvironment для управления соединениями.
+    
+        Поддерживаемые команды (JSON):
+        - {"command": "ping"} → {"status": "pong", "timestamp": ...}
+        - {"command": "get_state"} → текущее состояние Леи
+        - {"command": "force_consolidate"} → запуск консолидации памяти
+        - {"command": "force_forget", "threshold": 0.1} → забывание слабых воспоминаний
+        - {"command": "get_drives"} → состояние драйвов
+        - {"command": "get_memory_graph"} → граф памяти
+        - {"command": "message", "content": "..."} → отправка сообщения
         """
         await web_environment.connect(websocket)
         try:
             while True:
-                # Поддержание соединения. Клиент может отправлять команды.
+                # Получаем данные от клиента
                 data = await websocket.receive_text()
-                # TODO: обработка команд от клиента (например, "force_consolidate")
+            
+                # ✅ ИСПРАВЛЕНИЕ CR5: обработка входящих команд
+                try:
+                    command_data = json.loads(data)
+                    command = command_data.get("command", "").lower()
+                
+                    logger.debug(f"WebSocket команда от клиента: {command}")
+                
+                    # Обработка команд
+                    if command == "ping":
+                        # Проверка соединения
+                        response = {
+                            "type": "pong",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                        await websocket.send_json(response)
+                
+                    elif command == "get_state":
+                        # Получение состояния Леи
+                        if web_environment.leya:
+                            response = {
+                                "type": "state",
+                                "state": web_environment.leya.state,
+                                "name": web_environment.leya.name,
+                            }
+                        else:
+                            response = {"type": "state", "state": "unknown", "name": "Лея"}
+                        await websocket.send_json(response)
+                
+                    elif command == "get_drives":
+                        # Получение состояния драйвов
+                        if web_environment.leya:
+                            try:
+                                drives = web_environment.leya.drives
+                                if hasattr(drives, "get_drives_state"):
+                                    drive_state = drives.get_drives_state()
+                                else:
+                                    drive_state = {}
+                                response = {"type": "drives", "data": drive_state}
+                            except Exception as exc:
+                                response = {"type": "error", "error": str(exc)}
+                        else:
+                            response = {"type": "drives", "data": {}}
+                        await websocket.send_json(response)
+                
+                    elif command == "force_consolidate":
+                        # Запуск консолидации памяти
+                        if web_environment.leya:
+                            try:
+                                stats = await web_environment.leya.memory.consolidate_memories()
+                                response = {
+                                    "type": "consolidate_result",
+                                    "status": "ok",
+                                    "stats": stats,
+                                }
+                            except Exception as exc:
+                                response = {
+                                    "type": "consolidate_result",
+                                    "status": "error",
+                                    "error": str(exc),
+                                }
+                        else:
+                            response = {
+                                "type": "consolidate_result",
+                                "status": "error",
+                                "error": "Лея не инициализирована",
+                            }
+                        await websocket.send_json(response)
+                
+                    elif command == "force_forget":
+                        # Забывание слабых воспоминаний
+                        if web_environment.leya:
+                            try:
+                                threshold = float(command_data.get("threshold", 0.1))
+                                forgotten = await web_environment.leya.memory.forget_weak_memories(
+                                    threshold
+                                )
+                                response = {
+                                    "type": "forget_result",
+                                    "status": "ok",
+                                    "forgotten": forgotten,
+                                }
+                            except Exception as exc:
+                                response = {
+                                    "type": "forget_result",
+                                    "status": "error",
+                                    "error": str(exc),
+                                }
+                        else:
+                            response = {
+                                "type": "forget_result",
+                                "status": "error",
+                                "error": "Лея не инициализирована",
+                            }
+                        await websocket.send_json(response)
+                
+                    elif command == "get_memory_graph":
+                        # Получение графа памяти
+                        if web_environment.leya:
+                            try:
+                                memory = web_environment.leya.memory
+                                if hasattr(memory, "get_memory_graph_data"):
+                                    min_retention = float(command_data.get("min_retention", 0.1))
+                                    max_nodes = int(command_data.get("max_nodes", 100))
+                                    include_synapses = command_data.get("include_synapses", True)
+                                
+                                    graph_data = await memory.get_memory_graph_data(
+                                        min_retention=min_retention,
+                                        max_nodes=max_nodes,
+                                        include_synapses=include_synapses,
+                                    )
+                                    response = {"type": "memory_graph", "data": graph_data}
+                                else:
+                                    response = {
+                                        "type": "memory_graph",
+                                        "data": {
+                                            "nodes": [],
+                                            "edges": [],
+                                            "total_engrams": 0,
+                                            "total_synapses": 0,
+                                        },
+                                    }
+                            except Exception as exc:
+                                response = {
+                                    "type": "memory_graph",
+                                    "status": "error",
+                                    "error": str(exc),
+                                }
+                        else:
+                            response = {
+                                "type": "memory_graph",
+                                "data": {
+                                    "nodes": [],
+                                    "edges": [],
+                                    "total_engrams": 0,
+                                    "total_synapses": 0,
+                                },
+                            }
+                        await websocket.send_json(response)
+                
+                    elif command == "message":
+                        # Отправка сообщения от пользователя
+                        content = command_data.get("content", "")
+                        if web_environment.leya and content:
+                            try:
+                                await web_environment.handle_user_message(content)
+                                response = {
+                                    "type": "message_ack",
+                                    "status": "ok",
+                                    "message": "Сообщение принято",
+                                }
+                            except Exception as exc:
+                                response = {
+                                    "type": "message_ack",
+                                    "status": "error",
+                                    "error": str(exc),
+                                }
+                        else:
+                            response = {
+                                "type": "message_ack",
+                                "status": "error",
+                                "error": "Лея не инициализирована или content пуст",
+                            }
+                        await websocket.send_json(response)
+                
+                    else:
+                        # Неизвестная команда
+                        response = {
+                            "type": "error",
+                            "error": f"Неизвестная команда: {command}",
+                            "available_commands": [
+                                "ping",
+                                "get_state",
+                                "get_drives",
+                                "force_consolidate",
+                                "force_forget",
+                                "get_memory_graph",
+                                "message",
+                            ],
+                        }
+                        await websocket.send_json(response)
+            
+                except json.JSONDecodeError:
+                    # Если не JSON, просто логируем (может быть текст для обратной совместимости)
+                    logger.debug(f"WebSocket получено не-JSON сообщение: {data[:100]}")
+                except Exception as exc:
+                    logger.error(f"Ошибка обработки WebSocket команды: {exc}", exc_info=True)
+                    try:
+                        await websocket.send_json(
+                            {"type": "error", "error": f"Внутренняя ошибка: {str(exc)}"}
+                        )
+                    except Exception:
+                        pass  # Если не можем отправить ошибку, просто продолжаем
+    
         except WebSocketDisconnect:
-            pass
+            logger.info("WebSocket клиент отключился")
+        except Exception as exc:
+            logger.error(f"Неожиданная ошибка WebSocket: {exc}", exc_info=True)
         finally:
             # Гарантированный disconnect даже при неожиданных ошибках
             web_environment.disconnect(websocket)

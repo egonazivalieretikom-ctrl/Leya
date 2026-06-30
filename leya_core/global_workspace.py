@@ -149,6 +149,9 @@ class GlobalWorkspace:
     ) -> WorkspaceProposal | None:
         """
         Выбор победителя из proposals.
+    
+        ИСПРАВЛЕНО CR1: Сохраняем ссылку на оригинальный proposal в metadata
+        для корректного удаления по identity.
         """
         # Увеличение счётчика выборов
         self.total_selections += 1
@@ -182,8 +185,10 @@ class GlobalWorkspace:
                     priority=priority_map.get(proposal.priority, proposal.priority),
                     urgency=proposal.urgency * 0.7,
                     drive_relevance=proposal.drive_relevance,
-                    metadata=proposal.metadata,
+                    metadata=proposal.metadata.copy(),  # Копируем metadata
                 )
+                # ✅ ИСПРАВЛЕНИЕ CR1: Сохраняем ссылку на оригинальный proposal
+                adjusted.metadata["_original_proposal"] = proposal
 
             adjusted_proposals.append(adjusted)
 
@@ -241,9 +246,11 @@ class GlobalWorkspace:
 
         # Перемещаем в историю только победителя
         self.history.append(winner)
-    
-        # Удаляем победителя из proposals
-        self.proposals = [p for p in self.proposals if p is not winner]
+
+        # ✅ ИСПРАВЛЕНИЕ CR1: Удаляем ОРИГИНАЛЬНЫЙ proposal из proposals
+        # Если winner - это adjusted объект, получаем оригинал из metadata
+        original_winner = winner.metadata.get("_original_proposal", winner)
+        self.proposals = [p for p in self.proposals if p is not original_winner]
 
         # Ограничение истории
         if len(self.history) > 100:

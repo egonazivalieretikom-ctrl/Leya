@@ -70,7 +70,7 @@ class StatePersistence:
         try:
             state["_saved_at"] = datetime.now(timezone.utc).isoformat()
             state["__version__"] = 1  # ← Добавляем версию
-            
+
             # Резервная копия
             if os.path.exists(self.state_file):
                 backup_path = self.state_file + ".backup"
@@ -78,31 +78,37 @@ class StatePersistence:
                     os.replace(self.state_file, backup_path)
                 except OSError as exc:
                     logger.warning(f"Не удалось создать резервную копию: {exc}")
-            
+
             # Запись во временный файл
             tmp_path = self.state_file + ".tmp"
             try:
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(state, f, ensure_ascii=False, indent=2)
-                
+
                 # HMAC подпись
                 key = self._get_hmac_key()
                 signature = self._compute_hmac(Path(tmp_path), key)
                 (Path(self.state_file).with_suffix(".hmac")).write_text(signature, encoding="utf-8")
-                
+
                 os.replace(tmp_path, self.state_file)
             except OSError as exc:
                 if os.path.exists(tmp_path):
                     with contextlib.suppress(OSError):
                         os.remove(tmp_path)
-                raise LeyaPersistenceError(...) from exc
-            
+                raise LeyaPersistenceError(
+                    f"Не удалось сохранить состояние: {exc}",
+                    context={"path": self.state_file, "error": str(exc)},
+                ) from exc
+
             return True
-        
+
         except LeyaPersistenceError:
             raise
         except Exception as exc:
-            raise LeyaPersistenceError(...) from exc
+            raise LeyaPersistenceError(
+                f"Неожиданная ошибка при сохранении состояния: {exc}",
+                context={"path": self.state_file, "error": str(exc)},
+            ) from exc
     
     def load_state(self) -> dict[str, Any]:
         if not os.path.exists(self.state_file):
@@ -113,7 +119,7 @@ class StatePersistence:
             else:
                 logger.info("Файл состояния не найден, начинаем с чистого листа")
                 return {}
-        
+
         try:
             # Проверка HMAC
             hmac_path = Path(self.state_file).with_suffix(".hmac")
@@ -125,16 +131,26 @@ class StatePersistence:
                     raise LeyaStateCorruptedError("HMAC не совпадает")
             else:
                 logger.warning("HMAC-файл отсутствует, пропускаем проверку")
-            
+
             with open(self.state_file, encoding="utf-8") as f:
                 state = json.load(f)
-            
+
             # Проверка версии
             version = state.get("__version__", 0)
             if version != 1:
                 raise LeyaStateVersionMismatchError(f"Несовместимая версия: {version}")
-            
+
             return state
-        
+
         except json.JSONDecodeError as exc:
-            raise LeyaStateCorruptedError(...) from exc
+            raise LeyaStateCorruptedError(
+                f"Не удалось распарсить JSON состояния: {exc}",
+                context={"path": self.state_file, "error": str(exc)},
+            ) from exc
+        except LeyaPersistenceError:
+            raise
+        except Exception as exc:
+            raise LeyaPersistenceError(
+                f"Неожиданная ошибка при загрузке состояния: {exc}",
+                context={"path": self.state_file, "error": str(exc)},
+            ) from exc
