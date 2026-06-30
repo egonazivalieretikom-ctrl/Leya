@@ -300,6 +300,9 @@ class LeyaOS:
     async def perceive(self, stimulus: dict[str, Any]) -> None:
         """
         Точка входа для любого стимула.
+    
+        Реализует Global Workspace Theory: все стимулы (включая пользовательские)
+        конкурируют за внимание через workspace. Победитель попадает в фокус сознания.
 
         Args:
             stimulus: Словарь с типом, содержимым и метаданными стимула
@@ -312,27 +315,94 @@ class LeyaOS:
         tool_context = stimulus.get("tool_context", "")
 
         logger.info(
-            f"Восприятие стимула [{stimulus_type}] от {source}: " f"{stimulus_content[:100]}..."
+            f"Восприятие стимула [{stimulus_type}] от {source}: "
+            f"{stimulus_content[:100]}..."
         )
 
-        # Обработка пользовательских сообщений
+        # ===================================================================
+        # ✅ НОВОЕ: Интеграция Global Workspace для пользовательских запросов
+        # ===================================================================
         if stimulus_type == "user_message" and not tool_context:
+            # Обработка пользовательских сообщений через классификатор
             tool_context = await self._handle_user_request(stimulus_content)
-
-        # Сохранение восприятия в память
-        try:
-            await self.memory.store_perception(
-                content=f"[{stimulus_type}] {stimulus_content}",
-                emotional_boost=0.6 if stimulus_type == "user_message" else 0.3,
-                metadata={"source": source, "type": stimulus_type},
+        
+            # Создаём WorkspaceProposal для пользовательского запроса
+            user_proposal = WorkspaceProposal(
+                source="user",
+                content=stimulus_content,
+                action_type="user_message",
+                priority=Priority.HIGH,
+                urgency=0.95,  # Пользовательские запросы имеют высокий urgency
+                drive_relevance=0.8,  # Высокая релевантность драйвам (CONNECTION)
             )
-        except LeyaMemoryError as exc:
-            logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
-        except Exception as exc:
-            logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
+        
+            # Сохраняем proposal в workspace для конкуренции
+            self.workspace.submit(user_proposal)
+        
+            # Получаем состояние драйвов для оценки конкуренции
+            drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
+        
+            # Выбираем победителя среди всех proposals (включая пользовательский)
+            winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
+        
+            if winner:
+                logger.info(
+                    f"🏆 Workspace winner: {winner.source} "
+                    f"(priority={winner.priority}, urgency={winner.urgency:.2f})"
+                )
+            
+                # Если победитель - пользовательский запрос, обрабатываем его
+                if winner.source == "user":
+                    logger.debug("Пользовательский запрос выиграл конкуренцию")
+                    # Ответ уже отправлен в _handle_user_request, просто сохраняем в память
+                    try:
+                        await self.memory.store_perception(
+                            content=f"[{stimulus_type}] {stimulus_content}",
+                            emotional_boost=0.6,
+                            metadata={"source": source, "type": stimulus_type},
+                        )
+                    except LeyaMemoryError as exc:
+                        logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
+                    except Exception as exc:
+                        logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
+                
+                    # Когнитивный цикл для пользовательского запроса
+                    await self._cognitive_loop(stimulus, tool_context)
+                else:
+                    # Победитель - внутренний процесс (homeostasis, meta_cognition)
+                    logger.info(f"Внутренний процесс {winner.source} выиграл конкуренцию у пользователя")
+                    await self._process_workspace_winner(winner, stimulus)
+            else:
+                # Нет победителя (мало proposals) - обрабатываем пользовательский запрос
+                logger.debug("Нет победителя workspace, обрабатываем пользовательский запрос")
+                try:
+                    await self.memory.store_perception(
+                        content=f"[{stimulus_type}] {stimulus_content}",
+                        emotional_boost=0.6,
+                        metadata={"source": source, "type": stimulus_type},
+                    )
+                except LeyaMemoryError as exc:
+                    logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
+                except Exception as exc:
+                    logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
+            
+                await self._cognitive_loop(stimulus, tool_context)
+        else:
+            # Непользовательские стимулы (workspace_focus, tool_result и т.д.)
+            # Сохранение восприятия в память
+            try:
+                await self.memory.store_perception(
+                    content=f"[{stimulus_type}] {stimulus_content}",
+                    emotional_boost=0.6 if stimulus_type == "user_message" else 0.3,
+                    metadata={"source": source, "type": stimulus_type},
+                )
+            except LeyaMemoryError as exc:
+                logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
+            except Exception as exc:
+                logger.error(f"Неожиданная ошибка сохранения восприятия: {exc}", exc_info=True)
 
-        # Когнитивный цикл
-        await self._cognitive_loop(stimulus, tool_context)
+            # Когнитивный цикл
+            await self._cognitive_loop(stimulus, tool_context)
 
     async def run(self) -> None:
         """
