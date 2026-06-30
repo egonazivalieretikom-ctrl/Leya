@@ -98,6 +98,18 @@ class DriveSystem:
         (DriveType.INTEGRITY, DriveType.CURIOSITY): 0.1,
         (DriveType.AUTONOMY, DriveType.INTEGRITY): -0.15,
         (DriveType.CONNECTION, DriveType.CURIOSITY): 0.1,
+        # Мастерство усиливает автономию (уверенность в своих силах)
+        (DriveType.COMPETENCE, DriveType.AUTONOMY): 0.12,
+        # Автономия стимулирует развитие компетенции
+        (DriveType.AUTONOMY, DriveType.COMPETENCE): 0.1,
+        # Компетенция поддерживает креативность (мастерство → творчество)
+        (DriveType.COMPETENCE, DriveType.CREATIVITY): 0.08,
+        # Целостность системы повышает чувство безопасности
+        (DriveType.INTEGRITY, DriveType.SECURITY): 0.15,
+        # Безопасность снижает потребность в отдыхе (стабильность = спокойствие)
+        (DriveType.SECURITY, DriveType.REST): -0.08,
+        # Отдых повышает чувство безопасности (восстановление ресурсов)
+        (DriveType.REST, DriveType.SECURITY): 0.1,
     }
 
     def __init__(self, config: DrivesConfig | None = None) -> None:
@@ -155,6 +167,18 @@ class DriveSystem:
                 base_growth_rate=self.config.understanding_rate,
                 satisfaction_decay=0.018,
             ),
+            DriveType.COMPETENCE: Drive(
+                type=DriveType.COMPETENCE,
+                current=0.25,
+                base_growth_rate=0.005,  # Медленный рост — фоновая потребность
+                satisfaction_decay=0.015,
+            ),
+            DriveType.SECURITY: Drive(
+                type=DriveType.SECURITY,
+                current=0.2,
+                base_growth_rate=0.005,  # Медленный рост — фоновая потребность
+                satisfaction_decay=0.01,  # Медленное удовлетворение — стабильность долгосрочна
+            ),
         }
 
         self.max_history_length = self.config.max_action_history
@@ -180,12 +204,12 @@ class DriveSystem:
             f"drives={len(self.drives)}"
         )
 
-    async def evaluate_stimulus(self, stimulus: str, context: str = "") -> dict[str, float]:
-        """
-        Оценивает влияние стимула на драйвы.
+    async def evaluate_stimulus(self, stimulus: str, context: str = " ") -> dict[str, float]:
+        """Оценивает влияние стимула на драйвы.
 
         Returns:
-            Dict с дельтами изменений для каждого драйва
+            dict[str, float] — дельты изменений, где ключи — строковые значения DriveType
+            (например, {"curiosity": 0.15}). Совместимо с IDriveSystem Protocol.
         """
         deltas: dict[DriveType, float] = {}
         stimulus_lower = stimulus.lower()
@@ -193,37 +217,57 @@ class DriveSystem:
         # Вопросы (исключаем "что-то", "чтобы")
         if re.search(r'\b(почему|зачем|как\s+работает|что\s+такое)\b', stimulus_lower):
             deltas[DriveType.CURIOSITY] = 0.15
-    
+
         # Эмоциональные сообщения
         if re.search(r'\b(чувствую|думаю|мне\s+одиноко|скучно)\b', stimulus_lower):
             deltas[DriveType.CONNECTION] = 0.1
-    
+
         # Команды
         if re.search(r'\b(должна|обязана|немедленно|быстро)\b', stimulus_lower):
             deltas[DriveType.AUTONOMY] = 0.15
-    
+
         # Позитивная обратная связь
         if re.search(r'\b(спасибо|отлично|молодец|супер)\b', stimulus_lower):
             deltas[DriveType.CONNECTION] = -0.15
             deltas[DriveType.AUTONOMY] = -0.1
-    
+
         # Негативная обратная связь
         if re.search(r'\b(плохо|ошибка|неправильно|глупая)\b', stimulus_lower):
             deltas[DriveType.CONNECTION] = 0.1
             deltas[DriveType.INTEGRITY] = 0.1
 
-        # Сохраняем в историю (ИСПРАВЛЕНО: используем .value для единообразия)
+        # Сохраняем в историю (используем .value для единообразия)
         current_state = {d.type.value: d.current for d in self.drives.values()}
         self.tension_history.append(current_state)
 
         if len(self.tension_history) > self.max_history_length:
             self.tension_history = self.tension_history[-self.max_history_length:]
 
+        # Возвращаем строковые ключи (совместимо с Protocol)
         return {k.value: v for k, v in deltas.items()}
 
-    def apply_deltas(self, deltas: dict[DriveType, float]) -> None:
-        """Применяет дельты изменений к драйвам."""
-        for drive_type, delta in deltas.items():
+    def apply_deltas(self, deltas: dict[str, float]) -> None:
+        """Применяет дельты изменений к драйвам.
+
+        Args:
+            deltas: Словарь {drive_type_value: delta}, например {"curiosity": 0.15}.
+                    Ключи — строковые значения DriveType (совместимо с IDriveSystem Protocol).
+
+        Note:
+            Lookup в self.drives (dict[DriveType, Drive]) работает благодаря
+            str-наследованию DriveType: hash("curiosity") == hash(DriveType.CURIOSITY).
+        """
+        for drive_type_str, delta in deltas.items():
+            # Нормализация: принимаем как строки, так и DriveType enum
+            if isinstance(drive_type_str, DriveType):
+                drive_type = drive_type_str
+            else:
+                try:
+                    drive_type = DriveType(drive_type_str)
+                except ValueError:
+                    logger.warning(f"DriveSystem: Неизвестный драйв '{drive_type_str}', пропуск")
+                    continue
+
             if drive_type in self.drives:
                 drive = self.drives[drive_type]
                 drive.current = max(0.1, min(0.9, drive.current + delta))
@@ -231,7 +275,7 @@ class DriveSystem:
                     f"DriveSystem: {drive_type.value} изменён на {delta:+.2f} → {drive.current:.2f}"
                 )
             else:
-                logger.warning(f"DriveSystem: Драйв {drive_type} не найден")
+                logger.warning(f"DriveSystem: Драйв {drive_type.value} не найден")
 
     def stop(self) -> None:
         """Останавливает фоновый метаболизм."""
@@ -376,12 +420,13 @@ class DriveSystem:
         actual_amount = base_amount * rpe_modifier
 
         drive = self.drives[drive_type]
-        drive.current = max(0.0, drive.current - actual_amount)
-        drive.current = max(0.1, min(0.9, drive.current))
+        # ✅ ИСПРАВЛЕНО: объединяем обе операции в одну строку
+        # Драйв может опуститься до 0.0 (полное удовлетворение), но не ниже
+        drive.current = max(0.0, min(0.9, drive.current - actual_amount))
 
         logger.info(
             f"DriveSystem: {drive_type.value} удовлетворён на {actual_amount:.2f} "
-            f"(RPE modifier: {rpe_modifier:.2f})"
+            f"(RPE modifier: {rpe_modifier:.2f}, new_current={drive.current:.2f})"
         )
 
     def get_action_value(self, action_key: str) -> float:

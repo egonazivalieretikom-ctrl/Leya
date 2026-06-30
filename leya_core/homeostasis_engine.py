@@ -75,6 +75,8 @@ class HomeostasisEngine:
             DriveType.REST: self.config.rest_threshold,
             DriveType.CREATIVITY: self.config.creativity_threshold,
             DriveType.UNDERSTANDING: self.config.understanding_threshold,
+            DriveType.COMPETENCE: 0.6,   # Потребность в развитии навыков
+            DriveType.SECURITY: 0.5,     # Потребность в стабильности (ниже — фоновый драйв)
         }
 
         # RPE tracking
@@ -326,6 +328,25 @@ class HomeostasisEngine:
                 "urgency": urgency,
                 "drive_relevance": 0.7,
                 "parameters": self._generate_search_parameters(recent_episodes),
+            }
+
+        elif drive_type == DriveType.COMPETENCE:
+            return {
+                "name": "Развить навык или изучить новую технологию",
+                "tool_name": "wikipedia_search",
+                "reasoning": "Потребность в компетентности требует развития навыков и мастерства",
+                "urgency": urgency,
+                "drive_relevance": 0.7,
+                "parameters": self._generate_search_parameters(recent_episodes),
+            }
+
+        elif drive_type == DriveType.SECURITY:
+            return {
+                "name": "Проверить стабильность системы",
+                "tool_name": "none",
+                "reasoning": "Потребность в безопасности требует проверки целостности и предсказуемости",
+                "urgency": urgency,
+                "drive_relevance": 0.6,
             }
 
         return None
