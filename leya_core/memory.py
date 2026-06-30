@@ -112,6 +112,7 @@ class Engram:
     last_retrieved: float = field(default_factory=time.time)
     consolidation_level: int = 0  # 0=working, 1=long-term
     metadata: dict[str, Any] = field(default_factory=dict)
+    distance: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -431,6 +432,7 @@ class MemorySystem:
                     if engram.retention_strength >= min_retention:
                         # Эмоциональное усиление
                         score = episodic_results.get("distances", [[1.0]])[0][i]
+                        engram.distance = score
                         adjusted_score = score * (1.0 - engram.emotional_boost * 0.5)
                         candidates.append((engram, adjusted_score))
 
@@ -441,6 +443,7 @@ class MemorySystem:
                     engram = self.engrams[engram_id]
                     if engram.retention_strength >= min_retention:
                         score = semantic_results.get("distances", [[1.0]])[0][i]
+                        engram.distance = score
                         candidates.append((engram, score))
 
         # Сортировка по score (меньше = лучше)
@@ -511,7 +514,8 @@ class MemorySystem:
         if limit <= 0:
             return []
 
-        # Простая in-memory операция — не нужен to_thread
+        await asyncio.sleep(0)
+
         candidates = [
             e
             for e in self.engrams.values()
@@ -941,103 +945,6 @@ class MemorySystem:
             logger.info(f"Забыто энграмм: {len(to_delete)}")
 
         return len(to_delete)
-
-    async def _collect_batch(
-        self,
-        collection,
-        expected_ids: set[str],
-        memory_type: MemoryType,
-    ) -> SyncReport:
-        """
-        Собирает новые/обновлённые энграммы и подготавливает их для batch upsert в ChromaDB.
-
-        Биологическая модель:
-        - Синхронизация in-memory состояния с векторным хранилищем
-        - Передача метаданных для последующего семантического поиска
-
-        Args:
-            collection: ChromaDB collection (episodic или semantic)
-            expected_ids: Set ID энграмм, которые должны быть в коллекции
-            memory_type: MemoryType.EPISODIC или MemoryType.SEMANTIC
-
-        Returns:
-            SyncReport с информацией об обработанных элементах.
-        """
-        report = SyncReport()
-        start_time = time.time()
-
-        try:
-            # Получаем все энграммы нужного типа из in-memory состояния
-            engrams_of_type = [
-                engram for engram in self.engrams.values() if engram.memory_type == memory_type
-            ]
-
-            # Списки для batch операции
-            batch_ids: list[str] = []
-            batch_docs: list[str] = []
-            batch_embeddings: list[list[float]] = []
-            batch_metadatas: list[dict[str, Any]] = []
-
-            for engram in engrams_of_type:
-                # Пропускаем энграммы с нулевым retention (уже забыты)
-                if engram.retention_strength < 0.05:
-                    continue
-
-                # Генерируем эмбеддинг (в отдельном потоке, чтобы не блокировать event loop)
-                try:
-                    embedding = await asyncio.to_thread(self._generate_embedding, engram.content)
-                except Exception as exc:
-                    logger.warning(f"Не удалось сгенерировать эмбеддинг для {engram.id}: {exc}")
-                    report.errors += 1
-                    continue
-
-                # Если эмбеддинг пустой — пропускаем
-                if not embedding:
-                    report.errors += 1
-                    continue
-
-                # Формируем метаданные с ПРАВИЛЬНЫМИ полями из Engram
-                batch_ids.append(engram.id)
-                batch_docs.append(engram.content)
-                batch_embeddings.append(embedding)
-                batch_metadatas.append(
-                    {
-                        "memory_type": engram.memory_type.value,
-                        "timestamp": getattr(
-                            engram, "timestamp", 0
-                        ),  # ← ИСПРАВЛЕНО: было created_at
-                        "retention_strength": engram.retention_strength,  # ← ИСПРАВЛЕНО: было recentness_strength
-                        "emotional_boost": engram.emotional_boost,
-                        "retrieval_count": engram.retrieval_count,
-                        "consolidation_level": engram.consolidation_level,
-                    }
-                )
-
-            # Batch upsert в ChromaDB
-            if batch_ids:
-                await asyncio.to_thread(
-                    collection.upsert,
-                    ids=batch_ids,
-                    documents=batch_docs,
-                    embeddings=batch_embeddings,
-                    metadatas=batch_metadatas,
-                )
-                report.added_to_chroma = len(batch_ids)
-                logger.info(
-                    f"Batch sync для {memory_type.value}: upserted {len(batch_ids)} энграмм"
-                )
-
-        except Exception as exc:
-            logger.error(f"Ошибка в _collect_batch для {memory_type.value}: {exc}")
-            report.errors += 1
-            raise LeyaMemoryError(
-                "Сбой batch синхронизации с ChromaDB",
-                context={"memory_type": memory_type.value, "error": str(exc)},
-            ) from exc
-        finally:
-            report.duration_ms = (time.time() - start_time) * 1000
-
-        return report
 
     async def get_memory_graph_data(
         self,

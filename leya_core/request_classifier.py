@@ -319,15 +319,18 @@ class RequestClassifier:
 
     async def _cache_lookup(self, user_input: str) -> Optional[IntentClassification]:
         """Уровень 2: Semantic cache через memory.
+    
+        ИСПРАВЛЕНО CR3 (v2): similarity вычисляется динамически через distance из ChromaDB.
+        Убран тяжёлый fallback с прямым запросом embeddings — кэш должен быть быстрым.
+    
+        Если distance недоступен (баг в memory.py), item пропускается с warning.
         """
         if not self.memory:
             return None
 
-        # ✅ Инициализируем ПЕРЕД try, чтобы избежать UnboundLocalError
         similar: list = []
 
         try:
-            # retrieve_context возвращает список Engram с атрибутом distance/similarity
             similar = await self.memory.retrieve_context(
                 query=user_input,
                 max_results=5,
@@ -340,59 +343,34 @@ class RequestClassifier:
         if not similar:
             return None
 
-        # Проверяем similarity
+        # Проверяем similarity для каждого item
         for item in similar:
-            # ✅ ИСПРАВЛЕНИЕ CR3: Вычисляем similarity динамически
-            # ChromaDB возвращает distance, конвертируем в similarity
-            # distance = 1 - cosine_similarity, поэтому similarity = 1 - distance
+            # ✅ Вычисляем similarity через distance из ChromaDB
+            # ChromaDB query возвращает distance (1 - cosine_similarity)
+            distance = self._extract_distance(item)
         
-            # Пытаемся получить distance из Engram или его metadata
-            distance = None
-        
-            if hasattr(item, "distance"):
-                distance = item.distance
-            elif hasattr(item, "metadata") and isinstance(item.metadata, dict):
-                distance = item.metadata.get("distance")
-        
-            # Если distance есть, конвертируем в similarity
-            if distance is not None:
-                similarity = 1.0 - distance
-            else:
-                # Fallback: если distance недоступен, используем embedding similarity
-                # через прямой запрос к ChromaDB
-                try:
-                    # Получаем embedding для текущего запроса
-                    query_embedding = await self.memory._generate_embedding(user_input)
-                
-                    # Получаем embedding для сохранённого engram
-                    if hasattr(item, "id"):
-                        # Запрашиваем из ChromaDB по id
-                        collection = self.memory.chroma_client.get_collection("episodic_memory")
-                        result = collection.get(ids=[item.id], include=["embeddings"])
-                    
-                        if result and result.get("embeddings"):
-                            stored_embedding = result["embeddings"][0]
-                        
-                            # Вычисляем cosine similarity
-                            import numpy as np
-                            query_vec = np.array(query_embedding)
-                            stored_vec = np.array(stored_embedding)
-                        
-                            cosine_sim = np.dot(query_vec, stored_vec) / (
-                                np.linalg.norm(query_vec) * np.linalg.norm(stored_vec)
-                            )
-                            similarity = float(cosine_sim)
-                        else:
-                            similarity = 0.0
-                    else:
-                        similarity = 0.0
-                except Exception as e:
-                    logger.debug(f"Не удалось вычислить similarity: {e}")
-                    similarity = 0.0
+            if distance is None:
+                # ✅ ИСПРАВЛЕНИЕ CR3 (v2): Убран тяжёлый fallback
+                # Если distance нет — это баг в memory.py, а не задача кэша
+                logger.debug(
+                    f"Cache miss: distance недоступен для item "
+                    f"{getattr(item, 'id', 'unknown')}. "
+                    f"Требуется исправить memory.retrieve_context() — "
+                    f"он должен возвращать Engram с атрибутом distance."
+                )
+                continue
 
-            # ✅ Теперь similarity корректно вычислена
+            # distance ∈ [0, 2] для cosine distance, конвертируем в similarity ∈ [-1, 1]
+            # Для нормализованных embeddings (all-MiniLM-L6-v2) distance ∈ [0, 1]
+            # similarity = 1 - distance
+            similarity = 1.0 - distance
+
             if similarity >= self.cache_similarity_threshold:
-                metadata = item.metadata if hasattr(item, "metadata") else item.get("metadata", {})
+                metadata = (
+                    item.metadata 
+                    if hasattr(item, "metadata") and isinstance(item.metadata, dict)
+                    else {}
+                )
                 cached_intent = metadata.get("intent")
                 cached_confidence = metadata.get("confidence", 0.0)
                 cached_topic = metadata.get("topic")
@@ -410,6 +388,37 @@ class RequestClassifier:
                         logger.debug(f"Невалидный кэш: {e}")
                         continue
 
+        return None
+
+    def _extract_distance(self, item) -> float | None:
+        """Извлечение distance из Engram или dict.
+    
+        Поддерживает несколько форматов возврата из memory.retrieve_context():
+        - Engram с атрибутом .distance
+        - Engram с metadata["distance"]
+        - dict с ключом "distance"
+    
+        Returns:
+            float distance или None, если недоступен
+        """
+        # Вариант 1: Engram с атрибутом distance (предпочтительный)
+        if hasattr(item, "distance"):
+            distance = item.distance
+            if isinstance(distance, (int, float)):
+                return float(distance)
+    
+        # Вариант 2: metadata внутри Engram
+        if hasattr(item, "metadata") and isinstance(item.metadata, dict):
+            distance = item.metadata.get("distance")
+            if isinstance(distance, (int, float)):
+                return float(distance)
+    
+        # Вариант 3: item — это dict (fallback для совместимости)
+        if isinstance(item, dict):
+            distance = item.get("distance")
+            if isinstance(distance, (int, float)):
+                return float(distance)
+    
         return None
 
     async def _llm_classify(self, user_input: str) -> IntentClassification:
