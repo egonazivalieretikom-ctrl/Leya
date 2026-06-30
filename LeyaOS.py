@@ -18,7 +18,6 @@ from datetime import datetime
 from typing import Any, Optional  
 
 logger = logging.getLogger("LeyaOS")
-logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
 
 # Импорт конфигурации
 from leya_core.config import LeyaConfig
@@ -107,11 +106,6 @@ except ImportError:
     WEB_AVAILABLE = False
     WebEnvironment = None
 
-# Настройка логирования ПОСЛЕ всех импортов
-logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
-logger = logging.getLogger("LeyaOS")
-
-
 class LeyaOS:
     """
     Оркестратор когнитивной архитектуры Леи.
@@ -129,7 +123,34 @@ class LeyaOS:
         self.state = "initializing"
         self._last_interaction_time = datetime.now().timestamp()
         self._shutdown_event = asyncio.Event()
-        self.config = config or LeyaConfig.from_env()
+        if config is None:
+            self.config = LeyaConfig.from_env()
+        else:
+            if not isinstance(config, LeyaConfig):
+                raise TypeError(f"config должен быть экземпляром LeyaConfig, получен {type(config).__name__}")
+            
+            # Проверка критических секций на None
+            required_sections = [
+                "ollama", "memory", "drives", "homeostasis", "thinker", 
+                "reflection", "workspace", "constitutional", "web", 
+                "logging", "soul", "experimental"
+            ]
+            for section in required_sections:
+                if getattr(config, section, None) is None:
+                    raise LeyaConfigError(f"config.{section} отсутствует или равен None")
+            
+            self.config = config
+
+        # Предварительная проверка типов (до создания ресурсов)
+        if not issubclass(DriveSystem, IDriveSystem):
+            raise TypeError("DriveSystem должен реализовывать IDriveSystem")
+        if not issubclass(GlobalWorkspace, IGlobalWorkspace):
+            raise TypeError("GlobalWorkspace должен реализовывать IGlobalWorkspace")
+        if not issubclass(ConstitutionalLayer, IConstitutionalLayer):
+            raise TypeError("ConstitutionalLayer должен реализовывать IConstitutionalLayer")
+        if not issubclass(MemorySystem, IMemorySystem):
+            raise TypeError("MemorySystem должен реализовывать IMemorySystem")
+
     
         # Конституционный слой
         self.constitutional = ConstitutionalLayer(
@@ -154,45 +175,69 @@ class LeyaOS:
 
         # SoulCryptoManager с явной передачей ключа
         hmac_key = os.environ.get("SOUL_HMAC_KEY")
+
+        if not hmac_key:
+            raise LeyaConfigError(
+                "Переменная окружения SOUL_HMAC_KEY обязательна для безопасности soul-файлов. "
+                "Установите сильный ключ в .env файле."
+            )
+
         try:
             soul_config = self.config.soul
-            if hmac_key:
-                soul_config.hmac_key = hmac_key
+            soul_config.hmac_key = hmac_key
             self.soul_crypto_manager = SoulCryptoManager(config=soul_config)
             logger.info("SoulCryptoManager инициализирован")
+        except LeyaConfigError:
+            raise  # Пробрасываем ошибки конфигурации дальше
         except Exception as e:
             logger.error(f"Не удалось инициализировать SoulCryptoManager: {e}", exc_info=True)
             self.soul_crypto_manager = None
 
         # LLM-клиент (создаётся ДО memory, т.к. передаётся в MemorySystem)
-        self.llm_client = OllamaClient(
-            base_url=self.config.ollama.base_url,
-            model=self.config.ollama.model,
-            timeout=self.config.ollama.timeout,
-            temperature=self.config.ollama.temperature,
-            top_p=self.config.ollama.top_p,
-            top_k=self.config.ollama.top_k,
-            max_tokens=self.config.ollama.max_tokens,
-            repeat_penalty=self.config.ollama.repeat_penalty,
-        )
-        self.llm_client.set_fallback(self._llm_fallback)
+        try:
+            self.llm_client = OllamaClient(
+                base_url=self.config.ollama.base_url,
+                model=self.config.ollama.model,
+                timeout=self.config.ollama.timeout,
+                temperature=self.config.ollama.temperature,
+                top_p=self.config.ollama.top_p,
+                top_k=self.config.ollama.top_k,
+                max_tokens=self.config.ollama.max_tokens,
+                repeat_penalty=self.config.ollama.repeat_penalty,
+            )
+            self.llm_client.set_fallback(self._llm_fallback)
+        except Exception as e:
+            logger.error(f"Не удалось создать OllamaClient: {e}", exc_info=True)
+            # Cleanup уже созданных ресурсов
+            self._cleanup_resources()
+            raise
 
         # MemorySystem (создаётся ПОСЛЕ llm_client)
-        self.memory = MemorySystem(
-            config=self.config.memory,
-            llm_client=self.llm_client,
-        )
+        try:
+            self.memory = MemorySystem(
+                config=self.config.memory,
+                llm_client=self.llm_client,
+            )
+        except Exception as e:
+            logger.error(f"Не удалось создать MemorySystem: {e}", exc_info=True)
+            # Cleanup уже созданных ресурсов (включая llm_client)
+            self._cleanup_resources()
+            raise
 
         # ===================================================================
         # ✅ Проверка Protocol-интерфейсов — ТОЛЬКО ПОСЛЕ создания всех компонентов!
         # ===================================================================
         if not isinstance(self.memory, IMemorySystem):
+            self._cleanup_resources()
             raise TypeError("memory должен реализовывать IMemorySystem")
         if not isinstance(self.drives, IDriveSystem):
+            self._cleanup_resources()
             raise TypeError("drives должен реализовывать IDriveSystem")
         if not isinstance(self.workspace, IGlobalWorkspace):
+            self._cleanup_resources()
             raise TypeError("workspace должен реализовывать IGlobalWorkspace")
         if not isinstance(self.constitutional, IConstitutionalLayer):
+            self._cleanup_resources()
             raise TypeError("constitutional должен реализовывать IConstitutionalLayer")
 
         # Thinker
@@ -293,7 +338,45 @@ class LeyaOS:
             )
 
         logger.info(f"{self.name} инициализирована. Готовность к пробуждению.")
+    
 
+    def _cleanup_resources(self) -> None:
+        """
+        Очистка ресурсов при ошибке инициализации.
+        
+        Вызывается при fail Protocol-проверок или создании компонентов.
+        Предотвращает resource leak (LLM-сессии, ChromaDB connections).
+        """
+        logger.warning("Выполняется cleanup ресурсов после ошибки инициализации")
+        
+        # Закрываем LLM-клиент (aiohttp сессия)
+        if hasattr(self, 'llm_client') and self.llm_client is not None:
+            try:
+                # Синхронный close для cleanup
+                if hasattr(self.llm_client, '_session') and self.llm_client._session:
+                    import asyncio
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # Если loop уже запущен, создаём задачу
+                            asyncio.create_task(self.llm_client.close())
+                        else:
+                            loop.run_until_complete(self.llm_client.close())
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Ошибка закрытия LLM-клиента при cleanup: {e}")
+        
+        # Закрываем ChromaDB (если был инициализирован)
+        if hasattr(self, 'memory') and self.memory is not None:
+            try:
+                if hasattr(self.memory, '_client') and self.memory._client:
+                    # ChromaDB client не имеет явного close, но можно освободить ссылки
+                    self.memory._client = None
+            except Exception as e:
+                logger.warning(f"Ошибка cleanup ChromaDB: {e}")
+        
+        logger.info("Cleanup ресурсов завершён")
 
     # =========================================================================
     # Публичные методы
@@ -332,17 +415,7 @@ class LeyaOS:
         # ✅ ИСТИННЫЙ GWT-ПОТОК: Все стимулы конкурируют в workspace
         # ===================================================================
     
-        # 1. Сохранение восприятия в память (для всех типов стимулов)
-        try:
-            await self.memory.store_perception(
-                content=f"[{stimulus_type}] {stimulus_content}",
-                emotional_boost=0.6 if stimulus_type == "user_message" else 0.3,
-                metadata={"source": source, "type": stimulus_type},
-            )
-        except (LeyaMemoryError, Exception) as exc:
-            logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
-
-        # 2. Если это пользовательский запрос — подаём в workspace
+        # 1. Если это пользовательский запрос — подаём в workspace
         if stimulus_type == "user_message":
             user_proposal = WorkspaceProposal(
                 source="user",
@@ -354,10 +427,10 @@ class LeyaOS:
             )
             self.workspace.submit(user_proposal)
 
-        # 3. Получаем состояние драйвов для оценки конкуренции
+        # 2. Получаем состояние драйвов для оценки конкуренции
         drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
 
-        # 4. ✅ КЛЮЧЕВОЙ МОМЕНТ GWT: выбор победителя через конкуренцию
+        # 3. КЛЮЧЕВОЙ МОМЕНТ GWT: выбор победителя через конкуренцию
         # inhibit_internal=False — позволяем внутренним процессам конкурировать с user
         winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
 
@@ -370,14 +443,25 @@ class LeyaOS:
             f"(priority={winner.priority.name}, urgency={winner.urgency:.2f})"
         )
 
+        # 4. Сохранение восприятия в память ТОЛЬКО для победителя
+        # Это предотвращает wasted ресурсы на проигравших proposals
+        try:
+            await self.memory.store_perception(
+                content=f"[{stimulus_type}] {stimulus_content}",
+                emotional_boost=0.6 if stimulus_type == "user_message" else 0.3,
+                metadata={"source": source, "type": stimulus_type, "winner": True},
+            )
+        except (LeyaMemoryError, Exception) as exc:
+            logger.error(f"Не удалось сохранить восприятие: {exc}", exc_info=True)
+
         # 5. Обработка ТОЛЬКО победителя
         if winner.source == "user":
-            # ✅ Пользователь выиграл конкуренцию — обрабатываем запрос
+            # Пользователь выиграл конкуренцию — обрабатываем запрос
             logger.debug("Пользовательский запрос выиграл конкуренцию")
 
             handle_result = await self._handle_user_request(stimulus_content)
 
-            # ✅ Ответ отправляется ТОЛЬКО здесь, после выбора победителя
+            # Ответ отправляется ТОЛЬКО здесь, после выбора победителя
             response = handle_result.get("response", "")
             if response and not handle_result.get("__error"):
                 try:
@@ -391,20 +475,19 @@ class LeyaOS:
                 stimulus["classification_confidence"] = handle_result.get("confidence", 0.0)
                 stimulus["classification_topic"] = handle_result.get("topic")
                 stimulus["classification_source"] = handle_result.get("source", "unknown")
-                stimulus["__response_sent"] = True 
+                stimulus["__response_sent"] = True
 
             # Когнитивный цикл для постобработки (RPE, self_model, broadcast)
             await self._cognitive_loop(stimulus, handle_result)
-    
-        elif winner.source in ("homeostasis", "meta_cognition", "spontaneous"):
 
+        elif winner.source in ("homeostasis", "meta_cognition", "spontaneous"):
             logger.info(f"Внутренний процесс {winner.source} выиграл конкуренцию")
             await self._process_workspace_winner(winner, stimulus)
-    
+
         elif winner.source == "fast_decision":
             # Fast decision уже выполнен, просто логируем
             logger.debug("Fast decision выиграл конкуренцию (уже выполнен)")
-    
+
         else:
             logger.warning(f"Неизвестный источник workspace: {winner.source}")
 
@@ -417,7 +500,7 @@ class LeyaOS:
         logger.info("Загрузка Модели Себя...")
 
         # ===================================================================
-        # ✅ Загрузка soul (ЕДИНСТВЕННОЕ место загрузки)
+        # Загрузка soul (ЕДИНСТВЕННОЕ место загрузки)
         # self._soul_context кэшируется и используется во всех последующих вызовах
         # ===================================================================
         self._soul_context = ""  # Инициализация пустой строкой
@@ -2586,6 +2669,9 @@ async def main() -> None:
             logging.StreamHandler(sys.stdout),
         ],
     )
+
+    logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
+    logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
     # Создание и запуск LeyaOS
     leya = LeyaOS(config=config, use_web=config.web.enabled)
