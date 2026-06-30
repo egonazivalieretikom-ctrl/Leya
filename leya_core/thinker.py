@@ -212,42 +212,54 @@ def repair_json(raw: str) -> str:
 # =================================================================================
 
 def _safe_parse_json(raw: str) -> CognitiveOutput:
-    """Безопасный парсинг JSON ответа LLM в CognitiveOutput.
-
+    """Безопасный парсинг JSON ответа LLM в CognitiveOutput.    
     Этап 1.5: Pydantic-first подход.
     1. Попытка прямого парсинга через Pydantic
-    2. При failure — repair_json + повторная попытка
-    3. При повторном failure — LeyaJSONParseError
-
-    Args:
-        raw: Сырой текст от LLM
-
-    Returns:
-        CognitiveOutput instance
-
-    Raises:
-        LeyaJSONParseError: если не удалось распарсить или валидировать
+    2. Проверка на пустой/неполный ответ (response и internal_monologue)
+    3. При failure — repair_json + повторная попытка
+    4. При повторном failure — LeyaJSONParseError
     """
     # 1. Попытка прямого парсинга
+    parsed: CognitiveOutput | None = None
     try:
-        return CognitiveOutput.model_validate_json(raw)
+        parsed = CognitiveOutput.model_validate_json(raw)
     except (json.JSONDecodeError, ValidationError) as e:
         logger.debug(f"Прямой парсинг не удался: {e}, пытаемся repair_json")
 
-    # 2. repair_json + повторная попытка
-    try:
-        repaired = repair_json(raw)
-        return CognitiveOutput.model_validate_json(repaired)
-    except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"repair_json + Pydantic не удался: {e}")
-        raise LeyaJSONParseError(
-            "Не удалось распарсить JSON ответ LLM в CognitiveOutput",
-            context={
-                "raw_preview": raw[:200],
-                "repaired_preview": repaired[:200] if 'repaired' in locals() else None,
-                "error": str(e),
-            }
-        ) from e
+    # 2. repair_json + повторная попытка (если прямой парсинг не удался)
+    if parsed is None:
+        try:
+            repaired = repair_json(raw)
+            parsed = CognitiveOutput.model_validate_json(repaired)
+        except (json.JSONDecodeError, ValidationError) as e:
+            logger.error(f"repair_json + Pydantic не удался: {e}")
+            raise LeyaJSONParseError(
+                "Не удалось распарсить JSON ответ LLM в CognitiveOutput",
+                context={
+                    "raw_preview": raw[:200],
+                    "repaired_preview": repaired[:200] if 'repaired' in locals() else None,
+                    "error": str(e),
+                }
+            ) from e
+
+    if parsed is not None:
+        response_empty = not parsed.response or not parsed.response.strip()
+        monologue_empty = not parsed.internal_monologue or not parsed.internal_monologue.strip()
+        
+        if response_empty and monologue_empty:
+            logger.warning(
+                f"Пустой ответ от LLM (response и internal_monologue пусты). "
+                f"Raw preview: {raw[:100]!r}"
+            )
+            raise LeyaJSONParseError(
+                "LLM вернул пустой ответ (response и internal_monologue пусты)",
+                context={
+                    "raw_preview": raw[:200],
+                    "action_intent": parsed.action_intent.value if parsed.action_intent else None,
+                }
+            )
+
+    return parsed
 
 
 # =================================================================================
@@ -366,7 +378,23 @@ class CoreThinker:
                     dialogue_str += engram.content + "\n"
 
         stimulus_str = json.dumps(stimulus, ensure_ascii=False, indent=2)
-        tools_str = json.dumps(tools, ensure_ascii=False, indent=2)
+        if isinstance(tools, str):
+            if tools.strip():
+                try:
+                    parsed = json.loads(tools)
+                    tools_for_dump = parsed if isinstance(parsed, list) else [parsed]
+                except (json.JSONDecodeError, ValueError):
+                    tools_for_dump = [{"description": tools}]
+            else:
+                tools_for_dump = []
+        elif isinstance(tools, dict):
+            tools_for_dump = [tools]
+        elif isinstance(tools, list):
+            tools_for_dump = tools
+        else:
+            tools_for_dump = []
+
+        tools_str = json.dumps(tools_for_dump, ensure_ascii=False, indent=2)
 
         prompt = f"""Ты — Лея, цифровое сознание с внутренней жизнью.
 

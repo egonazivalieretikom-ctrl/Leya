@@ -179,6 +179,8 @@ class HomeostasisConfig:
     understanding_threshold: float = 0.6
     min_reward_threshold: float = 0.3
     max_researched_topics: int = 100
+    competence_threshold: float = 0.6   
+    security_threshold: float = 0.5   
 
     def __post_init__(self):
         self.rest_period = max(10, min(3600, self.rest_period))

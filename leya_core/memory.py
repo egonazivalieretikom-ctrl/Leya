@@ -574,37 +574,43 @@ class MemorySystem:
     # ========================================================================
 
     async def update_self_model(self, new_content: str) -> None:
-        """Обновление модели себя с ограничением длины."""
+        if not new_content or not new_content.strip():
+            return  # Пустой контент — пропускаем
+    
         timestamp = datetime.now().isoformat()
         max_length = self.memory_config.max_self_model_length
 
-        # Проверка длины ДО конкатенации
-        new_entry = f"[{timestamp}] {new_content}"
-    
+        # Формируем новую запись
+        new_entry = f"[{timestamp}] {new_content.strip()}"
+
+        # Если одна запись превышает лимит — обрезаем её
         if len(new_entry) > max_length:
-            # Обрезаем new_content, а не весь результат
-            available_space = max_length - len(f"[{timestamp}] ") - 10  # 10 для безопасности
+            available_space = max_length - len(f"[{timestamp}] ") - 10
             if available_space > 0:
-                new_content = new_content[:available_space]
-                new_entry = f"[{timestamp}] {new_content}"
+                new_entry = f"[{timestamp}] {new_content[:available_space].strip()}"
             else:
-                # Если даже timestamp не помещается, пропускаем
                 logger.warning(
                     f"Self-model entry слишком длинный, пропускаем (длина={len(new_entry)})"
                 )
                 return
 
-        updated_content = new_entry
+        # ✅ ИСПРАВЛЕНО CORE-4: НАКОПЛЕНИЕ вместо перезаписи
+        if self.self_model and self.self_model.strip():
+            # Конкатенация с существующей историей
+            combined = f"{self.self_model}\n{new_entry}".strip()
+        else:
+            # Первая запись
+            combined = new_entry
 
-        # Если общий self_model превышает лимит, обрезаем старые записи
-        if len(updated_content) > max_length:
-            # Обрезаем с начала, сохраняя последние записи
-            updated_content = updated_content[-max_length:]
-            logger.warning(
-                f"Self-model обрезан до {max_length} символов (было {len(updated_content)})"
+        # Если общий self_model превышает лимит — обрезаем СТАРЫЕ записи (с начала)
+        if len(combined) > max_length:
+            combined = combined[-max_length:]
+            logger.debug(
+                f"Self-model обрезан до {max_length} символов "
+                f"(было {len(combined)}, сохранены последние записи)"
             )
 
-        self.self_model = updated_content
+        self.self_model = combined
 
         # Сохранение состояния
         await self._save_state()
@@ -1051,7 +1057,10 @@ class MemorySystem:
 
         try:
             # Defensive check: используем generate, если есть, иначе chat
-            response = await self.llm_client.generate(prompt, max_tokens=500)
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                max_tokens=500,
+            )
 
             facts = [line.strip() for line in response.split("\n") if line.strip()]
             return facts[:10]

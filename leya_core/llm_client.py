@@ -77,7 +77,12 @@ class CircuitBreaker:
     
     @property
     def state(self) -> CircuitState:
-        """Текущее состояние (с автоматическим переходом в half-open)."""
+        """Текущее состояние (с автоматическим переходом в half-open).
+        
+        осознанный компромисс для Circuit Breaker.
+        Ленивая проверка восстановления позволяет избежать фоновых задач
+        и упрощает интеграцию. Это стандартная практика для CB паттерна.
+        """
         if (
             self._state == CircuitState.OPEN
             and time.time() - self._last_failure_time >= self.recovery_timeout
@@ -416,7 +421,9 @@ class OllamaClient:
                     )
                     raise
             except LeyaLLMError:
-                # Другие LLM-ошибки не ретраим
+                # Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error) не ретраим.
+                # Эти ошибки обычно стабильны — повтор не поможет.
+                # Retry только для transient ошибок: timeout и connection.
                 raise
 
         # Не должно достигнуть сюда, но на всякий случай

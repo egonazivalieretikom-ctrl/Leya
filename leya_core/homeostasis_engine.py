@@ -75,8 +75,8 @@ class HomeostasisEngine:
             DriveType.REST: self.config.rest_threshold,
             DriveType.CREATIVITY: self.config.creativity_threshold,
             DriveType.UNDERSTANDING: self.config.understanding_threshold,
-            DriveType.COMPETENCE: 0.6,   # Потребность в развитии навыков
-            DriveType.SECURITY: 0.5,     # Потребность в стабильности (ниже — фоновый драйв)
+            DriveType.COMPETENCE: self.config.competence_threshold,
+            DriveType.SECURITY: self.config.security_threshold,
         }
 
         # RPE tracking
@@ -418,16 +418,36 @@ class HomeostasisEngine:
         recent_topics.update(self.recently_researched[-5:])
 
         # Генерация запроса (избегая повторений)
+        recent_topics_lower = {t.lower() for t in recent_topics}
+    
+        # Уровень 1: Последнее dynamic_keyword
         query = self.dynamic_keywords[-1] if self.dynamic_keywords else "сознание"
 
-        # Проверка, не исследовали ли мы это недавно
-        if query.lower() in {t.lower() for t in recent_topics}:
-            # Выбираем альтернативу
-            alternatives = ["нейробиология", "космос", "философия", "математика", "биология"]
+        if query.lower() in recent_topics_lower:
+            # Уровень 2: Расширенный список альтернатив (10 тем)
+            alternatives = [
+                "нейробиология", "космос", "философия", "математика", "биология",
+                "квантовая физика", "искусственный интеллект", "эволюция",
+                "астрофизика", "когнитивная наука",
+            ]
+        
+            found_alternative = False
             for alt in alternatives:
-                if alt.lower() not in {t.lower() for t in recent_topics}:
+                if alt.lower() not in recent_topics_lower:
                     query = alt
+                    found_alternative = True
                     break
+        
+            # Уровень 3: Если все альтернативы исследованы — добавляем суффикс
+            # Это гарантирует уникальный query и предотвращает зацикливание
+            if not found_alternative:
+                import time
+                timestamp_suffix = int(time.time()) % 10000
+                query = f"{query} исследование {timestamp_suffix}"
+                logger.debug(
+                    f"HomeostasisEngine: Все альтернативы исследованы, "
+                    f"используем суффикс: {query}"
+                )
 
         return {
             "query": query,

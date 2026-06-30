@@ -59,23 +59,41 @@ class WorkspaceProposal:
     def compute_score(self, drive_state: dict[str, float]) -> float:
         """
         Вычисление итогового score для конкуренции.
-
+        
         Формула:
         score = priority_weight * priority + urgency_weight * urgency +
-                drive_relevance_weight * drive_relevance + age_decay
+                drive_relevance_weight * drive_relevance * avg_tension + age_decay
+    
+        Args:
+            drive_state: Текущее состояние драйвов (для оценки drive_relevance)
+    
+        Returns:
+            float: Итоговый score (0.0-1.0)
         """
         # Нормализация priority (1-4 → 0.25-1.0)
         priority_score = self.priority.value / 4.0
-
+    
         # Возраст (затухание со временем)
         age = time.time() - self.timestamp
         age_factor = max(0.1, 1.0 - age / 600.0)  # Затухание за 10 минут
-
+    
+        # Среднее tension драйвов (для оценки drive_relevance)
+        avg_tension = 0.5
+        if drive_state:
+            tensions = [
+                d.get("tension", 0.0) if isinstance(d, dict) else getattr(d, "tension", 0.0)
+                for d in drive_state.values()
+            ]
+            if tensions:
+                avg_tension = sum(tensions) / len(tensions)
+    
         # Базовый score
         score = (
-            0.4 * priority_score + 0.3 * self.urgency + 0.3 * self.drive_relevance
+            0.4 * priority_score 
+            + 0.3 * self.urgency 
+            + 0.3 * self.drive_relevance * avg_tension
         ) * age_factor
-
+    
         return score
 
 
@@ -195,16 +213,23 @@ class GlobalWorkspace:
             if p.source == "user":
                 filtered.append(p)
                 continue
-        
-            key = (p.content or "")[:80].lower().strip()
-            if key and key not in seen_contents:
-                seen_contents.add(key)
+    
+            # Увеличенный порог: 200 символов вместо 80
+            content_key = (p.content or " ")[:200].lower().strip()
+    
+            # Дополнительная проверка: если контент очень короткий, используем полный
+            if len(p.content or "") < 50:
+                content_key = (p.content or "").lower().strip()
+    
+            if content_key and content_key not in seen_contents:
+                seen_contents.add(content_key)
                 filtered.append(p)
+
         adjusted_proposals = filtered
 
         # Вычисление scores
         for proposal in adjusted_proposals:
-            score = 0.0
+            proposal.score = proposal.compute_score(drive_state or {})
             priority_scores = {
                 Priority.LOW: 0.2,
                 Priority.MEDIUM: 0.5,

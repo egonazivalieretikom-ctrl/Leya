@@ -218,44 +218,6 @@ class RequestClassifier:
         """
         text_lower = text.lower().strip()
     
-        # STATUS эвристики (высокий приоритет)
-        status_patterns = [
-            r"как(?:ое|ая|ую|ие)\s+(?:у\s+тебя\s+)?состояни",
-            r"как\s+ты\s+себя\s+чувству",
-            r"что\s+ты\s+(?:сейчас\s+)?делаешь",
-            r"как\s+твои\s+дела",
-            r"как\s+поживаешь",
-            r"что\s+нового",
-        ]
-    
-        for pattern in status_patterns:
-            if re.search(pattern, text_lower):
-                return IntentClassification(
-                    intent=UserIntent.STATUS,
-                    confidence=0.85,
-                    source="heuristic",  # ← ДОБАВЬТЕ
-                    topic=None,
-                    raw_input=text_lower,
-                )
-    
-        # QUESTION эвристики
-        question_patterns = [
-            r"^(?:что|кто|как|где|когда|почему|зачем)\s+",
-            r"\?$",
-        ]
-    
-        for pattern in question_patterns:
-            if re.search(pattern, text_lower):
-                # Извлекаем тему из вопроса
-                topic = self._extract_topic_heuristic(text_lower, UserIntent.QUESTION)
-                return IntentClassification(
-                    intent=UserIntent.QUESTION,
-                    confidence=0.75,
-                    source="heuristic",
-                    topic=topic,  # ← ИСПРАВЛЕНО
-                    raw_input=text_lower,
-                )
-    
         # Основной цикл по скомпилированным паттернам
         scores: dict[UserIntent, float] = {}
     
@@ -497,9 +459,9 @@ class RequestClassifier:
         try:
             await self.memory.store_perception(
                 content=classification.raw_input,
-                memory_type=MemoryType.EPISODIC,  # ← Используем Enum
+                memory_type=MemoryType.SEMANTIC,  # ← Исправлено: мета-информация
                 metadata={
-                    "type": "user_request",
+                    "type": "classification_cache",  # ← Уточнён тип
                     "intent": classification.intent,
                     "confidence": classification.confidence,
                     "topic": classification.topic,

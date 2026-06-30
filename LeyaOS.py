@@ -551,6 +551,7 @@ class LeyaOS:
             self._safe_create_task(self._spontaneous_thought_loop(), "spontaneous_thoughts"),
             self._safe_create_task(self._system_metrics_loop(), "system_metrics"),
             self._safe_create_task(self._workspace_loop(), "workspace"),
+            self._safe_create_task(self._drives_persistence_loop(), "drives_persistence"),
         ]
 
         # Обновление гомеостаза из self_model
@@ -2557,33 +2558,92 @@ class LeyaOS:
                 logger.error(f"Неожиданная ошибка в broadcast: {exc}", exc_info=True)
                 await asyncio.sleep(5)
 
-        def _safe_create_task(self, coro, name: str, max_retries: int = 10) -> asyncio.Task:
-            retry_count = 0
-        
-            async def wrapped():
-                nonlocal retry_count
+        async def _drives_persistence_loop(self) -> None:
+            """
+            Фоновый цикл периодического сохранения состояния драйвов.
+
+            ✅ ИСПРАВЛЕНО CORE-8: Метаболизм изменяет drive.current, но не сохраняет
+            состояние. При перезапуске LeyaOS — сброс к начальным значениям.
+
+            Этот цикл решает проблему:
+            - Сохраняет состояние драйвов каждые 300 секунд (5 минут)
+            - Защищает от потери данных при аварийном завершении
+            - Не блокирует основной event loop (asyncio.sleep)
+            - Graceful degradation при ошибках persistence
+
+            Биологический аналог: консолидация внутреннего состояния
+            (как сон консолидирует память).
+            """
+            logger.info("Drives persistence loop запущен (интервал=300с)")
+            PERSISTENCE_INTERVAL = 300  # 5 минут
+
+            while self.running:
                 try:
-                    await coro
+                    await asyncio.sleep(PERSISTENCE_INTERVAL)
+
+                    if not self.running:
+                        break
+
+                    # Сохраняем состояние драйвов через StatePersistence
+                    if self.persistence is not None:
+                        try:
+                            state_data = {
+                                "drives": (
+                                    self.drives.save_state()
+                                    if hasattr(self.drives, "save_state")
+                                    else {}
+                                ),
+                            }
+                            self.persistence.save_state(state_data)
+                            logger.debug(
+                                f"✅ Состояние драйвов сохранено "
+                                f"(drives={len(self.drives.drives)} entries)"
+                            )
+                        except LeyaPersistenceError as exc:
+                            logger.warning(f"Ошибка сохранения драйвов: {exc}")
+                        except Exception as exc:
+                            logger.error(
+                                f"Неожиданная ошибка сохранения драйвов: {exc}",
+                                exc_info=True,
+                            )
+
                 except asyncio.CancelledError:
-                    logger.info(f"Задача {name} отменена.")
+                    logger.info("Drives persistence loop отменён")
+                    break
                 except Exception as exc:
-                    logger.error(f"Задача {name} упала: {exc}", exc_info=True)
-                    retry_count += 1
-                
-                    if retry_count <= max_retries and self.running:
-                        logger.info(
-                            f"Перезапуск задачи {name} через 10с... "
-                            f"(попытка {retry_count}/{max_retries})"
-                        )
-                        await asyncio.sleep(10)
-                        asyncio.create_task(wrapped(), name=f"{name}_restart_{retry_count}")
-                    else:
-                        logger.error(
-                            f"Задача {name} превысила лимит попыток ({max_retries}). "
-                            f"Остановка. Последняя ошибка: {exc}"
-                        )
+                    logger.error(
+                        f"Неожиданная ошибка в drives persistence loop: {exc}",
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(60)  # Пауза перед рестартом
+
+    def _safe_create_task(self, coro, name: str, max_retries: int = 10) -> asyncio.Task:
+        retry_count = 0
         
-            return asyncio.create_task(wrapped(), name=name)
+        async def wrapped():
+            nonlocal retry_count
+            try:
+                await coro
+            except asyncio.CancelledError:
+                logger.info(f"Задача {name} отменена.")
+            except Exception as exc:
+                logger.error(f"Задача {name} упала: {exc}", exc_info=True)
+                retry_count += 1
+                
+                if retry_count <= max_retries and self.running:
+                    logger.info(
+                        f"Перезапуск задачи {name} через 10с... "
+                        f"(попытка {retry_count}/{max_retries})"
+                    )
+                    await asyncio.sleep(10)
+                    asyncio.create_task(wrapped(), name=f"{name}_restart_{retry_count}")
+                else:
+                    logger.error(
+                        f"Задача {name} превысила лимит попыток ({max_retries}). "
+                        f"Остановка. Последняя ошибка: {exc}"
+                    )
+        
+        return asyncio.create_task(wrapped(), name=name)
 
 
 # =========================================================================

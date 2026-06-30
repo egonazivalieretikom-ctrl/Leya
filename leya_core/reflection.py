@@ -63,15 +63,11 @@ class MetaCognition(IMetaCognition):
         self.llm_client = llm_client or self._default_llm_call
         self.config = config or ReflectionConfig()
 
-        # КРИТИЧНО: Сначала инициализируем приватное поле НАПРЯМУЮ (без setter)
-        self._is_sleeping = False  # ← ИСПРАВЛЕНО: прямое присваивание
+        self._is_sleeping = False 
         self._running = True
-
-        # Счётчик сессий рефлексии
         self._session_count = 0
 
-        # Теперь можно использовать setter (если нужно логирование)
-        # self.is_sleeping = False  # ← Опционально, но избыточно
+        self._is_processing_inquiry = False
 
         logger.info(
             f"MetaCognition инициализирован: "
@@ -103,25 +99,212 @@ class MetaCognition(IMetaCognition):
         if old_value is not None and old_value != value:
             logger.debug(f"MetaCognition: is_sleeping changed: {old_value} → {value}")
 
-    async def process_action(self, stimulus: str, cognitive_output: Any, result: str) -> None:
+    async def process_action(
+        self,
+        cognitive_output: Any,
+        stimulus: dict[str, Any],
+        drive_state_before: dict[str, Any],
+        drive_state_after: dict[str, Any],
+        constitutional_verdict: Any = None,
+    ) -> None:
         """
         Быстрая рефлексия после каждого акта мышления.
-
-        Проверяет, был ли акт успешным. Если нет — запускает глубокий анализ.
+    
+        ✅ ИСПРАВЛЕНО CORE-13: Сигнатура синхронизирована с вызовом из LeyaOS.
+    
+        Анализирует:
+        - Изменение состояния драйвов (до/после)
+        - Конституциональную проверку ответа
+        - Успешность действия (action_intent)
+    
+        Если обнаружена неудача — запускает глубокий анализ.
+    
+        Args:
+            cognitive_output: Результат мышления (dict с response, action_intent и т.д.)
+            stimulus: Исходный стимул (dict)
+            drive_state_before: Состояние драйвов ДО действия
+            drive_state_after: Состояние драйвов ПОСЛЕ действия
+            constitutional_verdict: Результат конституциональной проверки (опционально)
         """
-        # Проверка наличия action_intent
-        action_intent = getattr(cognitive_output, "action_intent", None)
-        if action_intent is None:
-            # Попробуем как dict
+        try:
+            # Извлечение action_intent из cognitive_output
+            action_intent = None
             if isinstance(cognitive_output, dict):
                 action_intent = cognitive_output.get("action_intent", "none")
+            elif hasattr(cognitive_output, "action_intent"):
+                action_intent = cognitive_output.action_intent
             else:
                 action_intent = "none"
+        
+            # Анализ изменения драйвов
+            drive_improvement = self._analyze_drive_changes(
+                drive_state_before, drive_state_after
+            )
+        
+            # Проверка конституционального вердикта
+            constitutional_violation = False
+            if constitutional_verdict and hasattr(constitutional_verdict, "allowed"):
+                constitutional_violation = not constitutional_verdict.allowed
+        
+            # Определение успешности действия
+            action_failed = (
+                action_intent == "none" 
+                or constitutional_violation
+                or drive_improvement < -0.1  # Значительное ухудшение состояния
+            )
+        
+            if action_failed:
+                logger.info(
+                    f"MetaCognition: Зафиксирована неудача действия. "
+                    f"action_intent={action_intent}, "
+                    f"drive_improvement={drive_improvement:.2f}, "
+                    f"constitutional_violation={constitutional_violation}. "
+                    f"Запуск глубокого анализа."
+                )
+            
+                # Запуск глубокого анализа (async, не блокируем)
+                asyncio.create_task(
+                    self._deep_analysis_on_failure(
+                        stimulus=stimulus,
+                        cognitive_output=cognitive_output,
+                        drive_improvement=drive_improvement,
+                        constitutional_violation=constitutional_violation,
+                    )
+                )
+            else:
+                logger.debug(
+                    f"MetaCognition: Действие успешно. "
+                    f"drive_improvement={drive_improvement:.2f}"
+                )
+    
+        except Exception as exc:
+            logger.error(
+                f"Неожиданная ошибка в process_action: {exc}",
+                exc_info=True
+            )
 
-        if action_intent != "none" and "error" in result.lower():
-            logger.info("MetaCognition: Зафиксирована неудача действия. Запуск глубокого анализа.")
-            # В реальном коде здесь можно запустить внеочередной анализ
-            # asyncio.create_task(self._deep_analysis_on_failure(stimulus, result))
+    def _analyze_drive_changes(
+        self,
+        drive_state_before: dict[str, Any],
+        drive_state_after: dict[str, Any],
+    ) -> float:
+        """
+        Анализ изменения состояния драйвов.
+    
+        Возвращает среднее улучшение (положительное = лучше, отрицательное = хуже).
+    
+        Args:
+            drive_state_before: Состояние драйвов ДО
+            drive_state_after: Состояние драйвов ПОСЛЕ
+    
+        Returns:
+            float: Среднее изменение tension (отрицательное = улучшение)
+        """
+        if not drive_state_before or not drive_state_after:
+            return 0.0
+    
+        total_change = 0.0
+        count = 0
+    
+        for drive_name in drive_state_before.keys():
+            if drive_name not in drive_state_after:
+                continue
+        
+            before_data = drive_state_before[drive_name]
+            after_data = drive_state_after[drive_name]
+        
+            # Извлекаем tension (или current)
+            before_tension = (
+                before_data.get("tension", 0.0) 
+                if isinstance(before_data, dict) 
+                else getattr(before_data, "tension", 0.0)
+            )
+            after_tension = (
+                after_data.get("tension", 0.0) 
+                if isinstance(after_data, dict) 
+                else getattr(after_data, "tension", 0.0)
+            )
+        
+            # Уменьшение tension = улучшение
+            change = before_tension - after_tension
+            total_change += change
+            count += 1
+    
+        return total_change / count if count > 0 else 0.0
+
+    async def _deep_analysis_on_failure(
+        self,
+        stimulus: dict[str, Any],
+        cognitive_output: Any,
+        drive_improvement: float,
+        constitutional_violation: bool,
+    ) -> None:
+        """
+        Глубокий анализ неудачного действия.
+    
+        Запускается асинхронно при обнаружении неудачи в process_action.
+    
+        Args:
+            stimulus: Исходный стимул
+            cognitive_output: Результат мышления
+            drive_improvement: Изменение состояния драйвов
+            constitutional_violation: Было ли нарушение конституции
+        """
+        try:
+            # Формируем контекст для анализа
+            stimulus_content = stimulus.get("content", "")[:200]
+        
+            response = ""
+            if isinstance(cognitive_output, dict):
+                response = cognitive_output.get("response", "")[:200]
+            elif hasattr(cognitive_output, "response"):
+                response = cognitive_output.response[:200]
+        
+            prompt = f"""Ты — Наблюдатель, часть сознания Леи. Произошла неудача.
+
+    Стимул: {stimulus_content}
+    Ответ Леи: {response}
+    Изменение состояния драйвов: {drive_improvement:.2f}
+    Нарушение конституции: {constitutional_violation}
+
+    Проанализируй:
+    1. Почему действие было неудачным?
+    2. Какие паттерны поведения привели к неудаче?
+    3. Какие рекомендации для улучшения?
+
+    Верни JSON:
+    {{
+        "failure_analysis": "Анализ причины неудачи",
+        "behavioral_patterns": ["паттерн 1", "паттерн 2"],
+        "recommendations": ["рекомендация 1", "рекомендация 2"]
+    }}
+    """
+        
+            response = await self.llm_client(prompt)
+            cleaned = repair_json(response)
+            analysis = json.loads(cleaned) if cleaned != "{}" else {}
+        
+            if analysis:
+                insight = (
+                    f"[Наблюдатель] Анализ неудачи: {analysis.get('failure_analysis', 'не определён')}. "
+                    f"Паттерны: {'; '.join(analysis.get('behavioral_patterns', []))}. "
+                    f"Рекомендации: {'; '.join(analysis.get('recommendations', []))}."
+                )
+            
+                await self.leya.memory.update_self_model(insight)
+                logger.info(f"MetaCognition: Глубокий анализ завершён. {insight[:100]}...")
+    
+        except LeyaJSONParseError as exc:
+            logger.warning(f"MetaCognition: Ошибка парсинга JSON при глубоком анализе: {exc}")
+        except LeyaLLMError as exc:
+            logger.warning(f"MetaCognition: Ошибка LLM при глубоком анализе: {exc}")
+        except LeyaMemoryError as exc:
+            logger.warning(f"MetaCognition: Ошибка памяти при глубоком анализе: {exc}")
+        except Exception as exc:
+            logger.error(
+                f"Неожиданная ошибка при глубоком анализе: {exc}",
+                exc_info=True
+            )
 
     async def background_consolidation(self) -> None:
         """
@@ -156,12 +339,24 @@ class MetaCognition(IMetaCognition):
                         try:
                             # ИСПРАВЛЕНИЕ: Используем публичный API памяти вместо приватного метода LeyaOS
                             recent_episodes = await self.leya.memory.get_recent_episodes(limit=20)
+
+                            # Конвертация Engram в dict для совместимости с analyze_and_generate
+                            episodes_as_dicts = [
+                                {
+                                    "content": e.content,
+                                    "metadata": getattr(e, "metadata", {}),
+                                    "timestamp": getattr(e, "timestamp", time.time()),
+                                    "memory_type": getattr(e, "memory_type", "episodic"),
+                                }
+                                for e in recent_episodes
+                            ]
+
                             drive_state = {
                                 d.type.value: d.current for d in self.leya.drives.drives.values()
                             }
 
                             new_tool = await self.leya.tool_generator.analyze_and_generate(
-                                recent_episodes, drive_state
+                                episodes_as_dicts, drive_state
                             )
                             if new_tool:
                                 logger.info(
@@ -313,9 +508,12 @@ class MetaCognition(IMetaCognition):
             )
 
     async def _existential_inquiry(self) -> None:
-        """
-        Наблюдатель задаёт Лее глубокие вопросы о её природе.
-        """
+        # Защита от рекурсии
+        if self._is_processing_inquiry:
+            logger.debug("MetaCognition: _existential_inquiry уже выполняется, пропускаем")
+            return
+    
+        self._is_processing_inquiry = True
         try:
             current_self_model = await self.leya.memory.get_self_model_context()
         except LeyaMemoryError as exc:
@@ -349,13 +547,14 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
             inquiry = json.loads(cleaned) if cleaned != "{}" else {}
 
             question = inquiry.get("question", "")
+
             if question:
                 logger.info(f"MetaCognition: Внутренний вопрос: {question}")
-
+            
                 # Подача в глобальное рабочее пространство
                 try:
                     from .global_workspace import Priority, WorkspaceProposal
-
+                
                     if hasattr(self.leya, "workspace") and self.leya.workspace:
                         self.leya.workspace.submit(
                             WorkspaceProposal(
@@ -399,16 +598,9 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                             "source": "MetaCognition",
                         }
                     )
-
-        except LeyaJSONParseError as exc:
-            logger.warning(f"MetaCognition: Ошибка парсинга JSON: {exc}")
-        except LeyaLLMError as exc:
-            logger.warning(f"MetaCognition: Ошибка LLM при экзистенциальном вопрошании: {exc}")
-        except Exception as exc:
-            logger.warning(
-                f"MetaCognition: Неожиданная ошибка экзистенциального вопрошания: {exc}",
-                exc_info=True,
-            )
+    
+        finally:
+            self._is_processing_inquiry = False
 
     async def generate_spontaneous_thought(self) -> str | None:
         """
@@ -479,11 +671,19 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                     cleaned = repair_json(result)
                     if cleaned != "{}":
                         data = json.loads(cleaned)
-                        return data.get("thought", data.get("response", str(data)))
+                        thought = data.get("thought", data.get("response", str(data)))
+            
+                        # Проверка на пустоту
+                        if thought and thought.strip() and thought.strip() != "{}":
+                            return thought.strip()
+                        else:
+                            logger.debug("MetaCognition: thought пустой после парсинга JSON")
+                            # Fallback: возвращаем исходный JSON как строку
+                            return result
                 except (json.JSONDecodeError, Exception) as parse_exc:
                     logger.debug(f"Не удалось распарсить спонтанную мысль как JSON: {parse_exc}")
                     # Fallback: возвращаем как есть
-                    pass
+                    return result
 
             return result
         except LeyaLLMError as exc:
