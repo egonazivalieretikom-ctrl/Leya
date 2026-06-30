@@ -1134,9 +1134,6 @@ class LeyaOS:
             elif classification.intent == UserIntent.HELP:
                 response = await self._handle_help(classification)
             else:
-                # ✅ QUESTION, SEARCH, REMEMBER, UNKNOWN — НЕ обрабатываем здесь
-                # Ответ будет сгенерирован в _cognitive_loop через полный цикл
-                # (включая Decision Engine, Emotional Support, Homeostasis, Self-Model)
                 response = ""
 
             result["response"] = response
@@ -1859,7 +1856,6 @@ class LeyaOS:
                 # ===================================================================
                 # ✅ MetaCognition — анализ когнитивного акта
                 # ===================================================================
-                # ✅ ИСПРАВЛЕНО CRITICAL-13: drive_state_after уже определён выше
                 try:
                     await self.reflection.process_action(
                         cognitive_output=cognitive_output,
@@ -1875,7 +1871,6 @@ class LeyaOS:
                     logger.error(f"Неожиданная ошибка MetaCognition: {exc}", exc_info=True)
 
                 # Отправка ответа (ЕДИНСТВЕННАЯ в этом пути)
-                # ✅ ИСПРАВЛЕНО CRITICAL-6: Проверяем флаг __response_sent
                 if not stimulus.get("__response_sent", False):
                     try:
                         await self.env.send_message(response)
@@ -1885,6 +1880,27 @@ class LeyaOS:
                         logger.error(f"Ошибка отправки ответа из _cognitive_loop: {type(e).__name__}: {e}", exc_info=True)
                 else:
                     logger.debug("Ответ уже отправлен в perceive(), пропускаем отправку в _cognitive_loop")
+
+                # ===================================================================
+                # ✅ Сохранение диалогового хода в память (после генерации ответа)
+                # ===================================================================
+                if stimulus.get("type") == "user_message" and response and response.strip():
+                    try:
+                        await self.memory.store_perception(
+                            content=f"Пользователь: {stimulus.get('content', '')}\nЛея: {response}",
+                            memory_type=MemoryType.EPISODIC,
+                            emotional_boost=0.65,
+                            metadata={
+                                "type": "dialogue_turn",
+                                "user_input": stimulus.get("content", ""),
+                                "response": response,
+                                "timestamp": time.time()
+                            }
+                        )
+                    except (LeyaMemoryError, LeyaEmbeddingError) as e:
+                        logger.warning(f"Не удалось сохранить диалоговый ход в память: {type(e).__name__}: {e}")
+                    except (LeyaAtomicWriteError, LeyaConfigError) as e:
+                        logger.warning(f"Ошибка персистентности при сохранении диалога: {type(e).__name__}: {e}")
 
                 # ===================================================================
                 # ✅ RPE для пользовательского запроса
