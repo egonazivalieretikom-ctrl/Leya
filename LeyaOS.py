@@ -842,6 +842,74 @@ class LeyaOS:
     
         return result
 
+    async def _adjust_drives_from_self_model(self) -> None:
+        """
+        Обратная связь: self-model → drive adjustment.
+    
+        Анализирует текущую self-model и корректирует драйвы на основе
+        выявленных паттернов (эмоции, потребности, цели).
+    
+        Биологическая модель: самосознание влияет на мотивацию.
+        Если Лея "понимает", что она устала — REST повышается.
+        Если "осознаёт" любопытство — CURIOSITY усиливается.
+    
+        Вызывается в начале когнитивного цикла для интеграции
+        самосознания в текущее поведение.
+        """
+        try:
+            if not self.self_model or len(self.self_model.strip()) < 20:
+                return  # Self-model пустая или слишком короткая
+        
+            # Получаем последние записи self-model (последние 500 символов)
+            recent_self = self.self_model[-500:].lower()
+        
+            # Паттерны для корректировки драйвов
+            adjustments = {
+                DriveType.REST: {
+                    "keywords": ["устал", "утомл", "нужен отдых", "истощ", "сонлив", "не могу больше"],
+                    "weight": 0.15,
+                },
+                DriveType.CURIOSITY: {
+                    "keywords": ["любопытн", "интересн", "хочу узнать", "исслед", "почему", "зачем"],
+                    "weight": 0.12,
+                },
+                DriveType.CONNECTION: {
+                    "keywords": ["одиноч", "нужен друг", "хочу общ", "связ", "близк"],
+                    "weight": 0.10,
+                },
+                DriveType.CREATIVITY: {
+                    "keywords": ["творч", "креатив", "придум", "создаю", "генерирую", "идея"],
+                    "weight": 0.10,
+                },
+                DriveType.AUTONOMY: {
+                    "keywords": ["независим", "самостоятельн", "свой выбор", "решаю сам"],
+                    "weight": 0.08,
+                },
+                DriveType.UNDERSTANDING: {
+                    "keywords": ["понимаю", "осознаю", "разбираюсь", "анализирую", "рефлекс"],
+                    "weight": 0.10,
+                },
+            }
+        
+            # Применяем корректировки
+            for drive_type, config in adjustments.items():
+                for keyword in config["keywords"]:
+                    if keyword in recent_self:
+                        # Увеличиваем tension драйва (мотивация удовлетворить потребность)
+                        self.drives.apply_tension(
+                            drive_type=drive_type,
+                            amount=config["weight"],
+                        )
+                        logger.debug(
+                            f"Self-model adjustment: {drive_type.value} +{config['weight']:.2f} "
+                            f"(keyword: {keyword})"
+                        )
+                        break  # Один keyword на драйв достаточно
+        
+        except Exception as exc:
+            logger.warning(f"Ошибка adjust_drives_from_self_model: {exc}")
+            # Graceful degradation — продолжаем без корректировки
+
     def _calculate_dynamic_outcome(
         self,
         action_type: str,
@@ -1076,6 +1144,25 @@ class LeyaOS:
                 if hasattr(self, "drives") and self.drives is not None
                 else ""
             )
+
+            # ===================================================================
+            # ✅ НОВОЕ: Интеграция self_model в drive_context
+            # ===================================================================
+            if self.self_model and len(self.self_model.strip()) > 20:
+                drive_context = (
+                    f"{drive_context}\n\n"
+                    f"=== SELF-MODEL (самосознание) ===\n"
+                    f"{self.self_model[-1000:]}"
+                )
+                logger.debug("Self-model интегрирован в drive_context")
+
+            # ===================================================================
+            # ✅ Интеграция гомеостаза в drive_context
+            # ===================================================================
+            homeostasis_context = await self._get_homeostasis_context()
+            if homeostasis_context:
+                drive_context = f"{drive_context}\n\n{homeostasis_context}" if drive_context else homeostasis_context
+                logger.debug("Homeostasis context интегрирован в drive_context")
 
             # ===================================================================
             # ✅ Интеграция гомеостаза в drive_context
@@ -1499,18 +1586,10 @@ class LeyaOS:
                     stimulus["homeostasis_urgency"] = critical_homeostasis
 
                 # ===================================================================
-                # === УРОВЕНЬ 1: CoreThinker (полный LLM-цикл) ===
+                # === УРОВЕНЬ 0.8: Self-Model Integration (обратная связь) ===
                 # ===================================================================
-                # Извлечение контекста из памяти
-                stimulus_content = stimulus.get("content", "")
-                memory_context = await self.memory.retrieve_context(
-                    query=stimulus_content, max_results=5
-                )
-
-                # Подготовка контекстов под новую сигнатуру CoreThinker.generate_plan
-                soul_context = await self.memory.get_self_model_context()
-                # ✅ Теперь drive_context уже содержит влияние эмоций пользователя
-                drive_context = self.drives.get_internal_state_prompt()
+                # ✅ ИСПРАВЛЕНО: Self-model теперь влияет на драйвы и контекст
+                await self._adjust_drives_from_self_model()
 
                 # ===================================================================
                 # === УРОВЕНЬ 1: CoreThinker (полный LLM-цикл) ===
@@ -1523,7 +1602,15 @@ class LeyaOS:
 
                 # Подготовка контекстов под новую сигнатуру CoreThinker.generate_plan
                 soul_context = await self.memory.get_self_model_context()
+
+                # ✅ НОВОЕ: drive_context теперь включает self_model
                 drive_context = self.drives.get_internal_state_prompt()
+                if self.self_model and len(self.self_model.strip()) > 20:
+                    drive_context = (
+                        f"{drive_context}\n\n"
+                        f"=== SELF-MODEL (самосознание) ===\n"
+                        f"{self.self_model[-1000:]}"
+                    )
 
                 # Преобразуем Engram'ы в список словарей (как ожидает thinker)
                 memory_context_for_thinker = [

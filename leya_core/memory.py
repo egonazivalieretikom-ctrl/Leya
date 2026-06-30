@@ -447,6 +447,47 @@ class MemorySystem:
         candidates.sort(key=lambda x: x[1])
         selected = [engram for engram, _ in candidates[:max_results]]
 
+        # ===================================================================
+        # ✅ Activation spreading через синаптические связи
+        # Биологическая модель: связанные энграммы получают boost
+        # ===================================================================
+        if selected and self.synapses:
+            try:
+                synaptic_boost = self._apply_synaptic_spreading(
+                    activated_engrams=selected,
+                    spreading_depth=2,
+                    decay_factor=0.7,
+                )
+            
+                if synaptic_boost:
+                    # Формируем расширенный список с учётом spreading
+                    selected_ids = {e.id for e in selected}
+                    extended_candidates: list[tuple[Engram, float]] = [
+                        (engram, score) for engram, score in candidates
+                        if engram.id in selected_ids
+                    ]
+                
+                    # Добавляем связанные энграммы с их synaptic boost
+                    for engram_id, boost in synaptic_boost.items():
+                        if engram_id in self.engrams and engram_id not in selected_ids:
+                            engram = self.engrams[engram_id]
+                            # Применяем забывание перед включением
+                            # (используем ту же логику, что и для основных candidates)
+                            if engram.retention_strength >= min_retention:
+                                # Boost: чем выше synaptic activation, тем ниже "distance"
+                                # Преобразуем boost в pseudo-distance (инверсия)
+                                pseudo_distance = max(0.0, 1.0 - boost)
+                                extended_candidates.append((engram, pseudo_distance))
+                
+                    # Пересортировка с учётом spreading
+                    extended_candidates.sort(key=lambda x: x[1])
+                    selected = [engram for engram, _ in extended_candidates[:max_results]]
+            except Exception as spreading_exc:
+                logger.warning(
+                    f"Ошибка synaptic spreading (graceful degradation): {spreading_exc}"
+                )
+                # Graceful degradation — продолжаем без spreading
+
         # Обновление статистики и усиление синапсов (LTP)
         for engram in selected:
             engram.retrieval_count += 1
@@ -781,6 +822,103 @@ class MemorySystem:
                     synapse = self.synapses[key2]
                     synapse.weight = min(1.0, synapse.weight + learning_rate)
                     synapse.activation_count += 1
+
+    def _apply_synaptic_spreading(
+        self,
+        activated_engrams: list[Engram],
+        spreading_depth: int = 2,
+        decay_factor: float = 0.7,
+    ) -> dict[str, float]:
+        """
+        Распространение активации по синаптическим связям (activation spreading).
+    
+        Биологическая модель: когда энграмма активируется (через ChromaDB query),
+        связанные с ней энграммы получают boost пропорционально weight синапса.
+        Это имитирует ассоциативную память — если вспомнили A, автоматически
+        активируются связанные B, C (Hebbian spreading).
+    
+        Args:
+            activated_engrams: Список активированных энграмм (из ChromaDB query)
+            spreading_depth: Глубина распространения (сколько итераций BFS)
+            decay_factor: Коэффициент затухания на каждом уровне (0.7 = 30% затухание)
+    
+        Returns:
+            Словарь {engram_id: synaptic_boost} — дополнительный boost для каждой
+            связанной энграммы (нормализованный к [0.0, 0.3]).
+        """
+        if not activated_engrams or not self.synapses:
+            return {}
+    
+        # Инициализируем активацию для исходных энграмм (сила = 1.0)
+        activation: dict[str, float] = {e.id: 1.0 for e in activated_engrams}
+        activated_ids = set(activation.keys())
+    
+        # Итеративное распространение (BFS-like)
+        for depth in range(spreading_depth):
+            new_activation: dict[str, float] = {}
+        
+            for source_id, source_activation in activation.items():
+                # Находим все синапсы, исходящие из source_id
+                for synapse in self.synapses.values():
+                    if synapse.source_id != source_id:
+                        continue
+                
+                    target_id = synapse.target_id
+                
+                    # Пропускаем уже активированные с большей силой
+                    current_target_activation = activation.get(target_id, 0.0)
+                    propagated_activation = (
+                        source_activation
+                        * synapse.weight
+                        * (decay_factor ** (depth + 1))
+                    )
+                
+                    if propagated_activation <= current_target_activation:
+                        continue
+                
+                    # Берём максимум, если target уже был активирован
+                    if target_id in new_activation:
+                        new_activation[target_id] = max(
+                            new_activation[target_id], propagated_activation
+                        )
+                    else:
+                        new_activation[target_id] = propagated_activation
+        
+            # Добавляем новую активацию к общей
+            for engram_id, act in new_activation.items():
+                if engram_id in activation:
+                    activation[engram_id] = max(activation[engram_id], act)
+                else:
+                    activation[engram_id] = act
+    
+        # Убираем исходные энграммы (они уже в результате ChromaDB)
+        for engram_id in activated_ids:
+            activation.pop(engram_id, None)
+    
+        if not activation:
+            return {}
+    
+        # Нормализуем и ограничиваем boost (максимум 30% от базового score)
+        max_activation = max(activation.values())
+        if max_activation <= 0:
+            return {}
+    
+        synaptic_boost = {
+            engram_id: (act / max_activation) * 0.3
+            for engram_id, act in activation.items()
+            if act > 0.1  # Порог значимости — отсекаем шум
+        }
+    
+        if synaptic_boost:
+            logger_thoughts = logging.getLogger("leya.thoughts")
+            logger_thoughts.debug(
+                "=== Synaptic Spreading ===\n"
+                f"Активировано: {len(activated_engrams)} энграмм\n"
+                f"Распространено на: {len(synaptic_boost)} связанных энграмм\n"
+                f"Глубина: {spreading_depth}, decay: {decay_factor}\n"
+            )
+    
+        return synaptic_boost
 
     def _forget_weak_memories_sync(self, threshold: float = 0.1) -> int:
         """Удаление энграмм с retention_strength ниже порога (sync версия)."""
