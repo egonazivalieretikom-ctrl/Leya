@@ -1815,15 +1815,6 @@ class LeyaOS:
                 action_intent = cognitive_output.get("action_intent", "none")
                 self_reflection = cognitive_output.get("self_reflection", "")
 
-                # Единое место определения — доступно для homeostasis, MetaCognition и RPE
-                drive_state_after = {
-                    d.type.value: {
-                        "current": d.current,
-                        "tension": d.tension,
-                        "target": d.target,
-                    }
-                    for d in self.drives.drives.values()
-                }
 
                 # Закрытие feedback loop для целей гомеостаза
                 if stimulus.get("source") == "homeostasis":
@@ -1835,7 +1826,6 @@ class LeyaOS:
                             else DriveType.AUTONOMY
                         )
 
-                        # ✅ ИСПРАВЛЕНО CRITICAL-13: drive_state_after уже определён выше
                         actual_outcome = self._calculate_dynamic_outcome(
                             action_type="homeostasis",
                             drive_state_after=drive_state_after,
