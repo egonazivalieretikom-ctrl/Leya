@@ -2574,64 +2574,64 @@ class LeyaOS:
                 logger.error(f"Неожиданная ошибка в broadcast: {exc}", exc_info=True)
                 await asyncio.sleep(5)
 
-        async def _drives_persistence_loop(self) -> None:
-            """
-            Фоновый цикл периодического сохранения состояния драйвов.
+    async def _drives_persistence_loop(self) -> None:
+        """
+        Фоновый цикл периодического сохранения состояния драйвов.
 
-            ✅ ИСПРАВЛЕНО CORE-8: Метаболизм изменяет drive.current, но не сохраняет
-            состояние. При перезапуске LeyaOS — сброс к начальным значениям.
+        ✅ ИСПРАВЛЕНО CORE-8: Метаболизм изменяет drive.current, но не сохраняет
+        состояние. При перезапуске LeyaOS — сброс к начальным значениям.
 
-            Этот цикл решает проблему:
-            - Сохраняет состояние драйвов каждые 300 секунд (5 минут)
-            - Защищает от потери данных при аварийном завершении
-            - Не блокирует основной event loop (asyncio.sleep)
-            - Graceful degradation при ошибках persistence
+        Этот цикл решает проблему:
+        - Сохраняет состояние драйвов каждые 300 секунд (5 минут)
+        - Защищает от потери данных при аварийном завершении
+        - Не блокирует основной event loop (asyncio.sleep)
+        - Graceful degradation при ошибках persistence
 
-            Биологический аналог: консолидация внутреннего состояния
-            (как сон консолидирует память).
-            """
-            logger.info("Drives persistence loop запущен (интервал=300с)")
-            PERSISTENCE_INTERVAL = 300  # 5 минут
+        Биологический аналог: консолидация внутреннего состояния
+        (как сон консолидирует память).
+        """
+        logger.info("Drives persistence loop запущен (интервал=300с)")
+        PERSISTENCE_INTERVAL = 300  # 5 минут
 
-            while self.running:
-                try:
-                    await asyncio.sleep(PERSISTENCE_INTERVAL)
+        while self.running:
+            try:
+                await asyncio.sleep(PERSISTENCE_INTERVAL)
 
-                    if not self.running:
-                        break
-
-                    # Сохраняем состояние драйвов через StatePersistence
-                    if self.persistence is not None:
-                        try:
-                            state_data = {
-                                "drives": (
-                                    self.drives.save_state()
-                                    if hasattr(self.drives, "save_state")
-                                    else {}
-                                ),
-                            }
-                            self.persistence.save_state(state_data)
-                            logger.debug(
-                                f"✅ Состояние драйвов сохранено "
-                                f"(drives={len(self.drives.drives)} entries)"
-                            )
-                        except LeyaPersistenceError as exc:
-                            logger.warning(f"Ошибка сохранения драйвов: {exc}")
-                        except Exception as exc:
-                            logger.error(
-                                f"Неожиданная ошибка сохранения драйвов: {exc}",
-                                exc_info=True,
-                            )
-
-                except asyncio.CancelledError:
-                    logger.info("Drives persistence loop отменён")
+                if not self.running:
                     break
-                except Exception as exc:
-                    logger.error(
-                        f"Неожиданная ошибка в drives persistence loop: {exc}",
-                        exc_info=True,
-                    )
-                    await asyncio.sleep(60)  # Пауза перед рестартом
+
+                # Сохраняем состояние драйвов через StatePersistence
+                if self.persistence is not None:
+                    try:
+                        state_data = {
+                            "drives": (
+                                self.drives.save_state()
+                                if hasattr(self.drives, "save_state")
+                                else {}
+                            ),
+                        }
+                        self.persistence.save_state(state_data)
+                        logger.debug(
+                            f"✅ Состояние драйвов сохранено "
+                            f"(drives={len(self.drives.drives)} entries)"
+                        )
+                    except LeyaPersistenceError as exc:
+                        logger.warning(f"Ошибка сохранения драйвов: {exc}")
+                    except Exception as exc:
+                        logger.error(
+                            f"Неожиданная ошибка сохранения драйвов: {exc}",
+                            exc_info=True,
+                        )
+
+            except asyncio.CancelledError:
+                logger.info("Drives persistence loop отменён")
+                break
+            except Exception as exc:
+                logger.error(
+                    f"Неожиданная ошибка в drives persistence loop: {exc}",
+                    exc_info=True,
+                )
+                await asyncio.sleep(60)  # Пауза перед рестартом
 
     def _safe_create_task(self, coro, name: str, max_retries: int = 10) -> asyncio.Task:
         retry_count = 0
