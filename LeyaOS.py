@@ -1164,14 +1164,6 @@ class LeyaOS:
                 drive_context = f"{drive_context}\n\n{homeostasis_context}" if drive_context else homeostasis_context
                 logger.debug("Homeostasis context интегрирован в drive_context")
 
-            # ===================================================================
-            # ✅ Интеграция гомеостаза в drive_context
-            # ===================================================================
-            homeostasis_context = await self._get_homeostasis_context()
-            if homeostasis_context:
-                drive_context = f"{drive_context}\n\n{homeostasis_context}" if drive_context else homeostasis_context
-                logger.debug("Homeostasis context интегрирован в drive_context")
-
             memory_context = (
                 await self.memory.retrieve_context(user_input)
                 if hasattr(self, "memory") and self.memory is not None
@@ -1658,8 +1650,8 @@ class LeyaOS:
                         # ===================================================================
                         actual_outcome = self._calculate_dynamic_outcome(
                             action_type="homeostasis",
-                            drive_state_before=drive_state_before,
                             drive_state_after=drive_state_after,
+                            drive_state_before=drive_state_before,
                             success=True,
                         )
                     
