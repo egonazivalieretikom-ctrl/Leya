@@ -48,6 +48,8 @@ from leya_core.exceptions import (
     LeyaReflectionError,
     LeyaSoulError,
     LeyaToolError,
+    LeyaToolExecutionError, 
+    LeyaToolNotFoundError,
     LeyaWorkspaceError,
     SoulTamperError,
 )
@@ -1046,13 +1048,25 @@ class LeyaOS:
     async def _execute_tool(self, tool_call: str) -> None:
         """
         Выполнение инструмента из tool_call.
-        _cognitive_loop
+
+        Вызывается из _cognitive_loop при action_intent == "use_tool".
+        Использует tool_registry (не tool_generator!) — registry отвечает
+        за выполнение существующих инструментов, generator — за создание новых.
+
         Args:
             tool_call: JSON-строка или dict с описанием вызова инструмента
         """
-        # ГАДР: Защита от недоступного ToolGenerator
-        if self.tool_generator is None:
-            logger.warning("ToolGenerator недоступен. Пропускаем выполнение инструмента.")
+        # ✅ ИСПРАВЛЕНО: проверяем tool_registry, а не tool_generator
+        if (
+            not hasattr(self, "env")
+            or self.env is None
+            or not hasattr(self.env, "tool_registry")
+            or self.env.tool_registry is None
+        ):
+            logger.error(
+                "_execute_tool: tool_registry недоступен. "
+                "Невозможно выполнить инструмент."
+            )
             return
 
         try:
@@ -1061,6 +1075,7 @@ class LeyaOS:
             tool_params = tool_data.get("parameters", {})
 
             if not tool_name:
+                logger.warning("_execute_tool: tool_name пустой, пропускаю")
                 return
 
             # Конституциональная проверка вызова инструмента
@@ -1085,6 +1100,9 @@ class LeyaOS:
 
         except json.JSONDecodeError as exc:
             logger.warning(f"Не удалось распарсить tool_call: {exc}")
+        except LeyaToolNotFoundError as exc:
+            # ✅ Теперь это исключение действительно достижимо
+            logger.warning(f"Инструмент не найден: {exc}")
         except LeyaToolError as exc:
             logger.error(f"Ошибка выполнения инструмента: {exc}", exc_info=True)
         except LeyaMemoryError as exc:

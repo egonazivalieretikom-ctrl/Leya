@@ -158,8 +158,8 @@ class SystemMetrics:
     
         # Battery low → SECURITY растёт, все страдают
         if metrics["battery"] < 0.2:
-            modifiers["security"] += 0.05
             for key in modifiers:
-                modifiers[key] -= 0.03
+                modifiers[key] -= 0.05
+            logger.warning(f"SystemMetrics: ⚡ Низкий заряд батареи: {metrics['battery']:.0%}")
     
         return modifiers

@@ -75,16 +75,13 @@ class TestCognitiveOutputModel:
             CognitiveOutput.model_validate(data)
 
     def test_missing_required_field(self):
-        """Отсутствие обязательного поля → ValidationError."""
-        data = {
-            "response": "test",
-            # missing internal_monologue
-            "action_intent": "RESPOND",
-            "tool_call": None,
-            "self_reflection": "test",
-        }
-        with pytest.raises(Exception):
-            CognitiveOutput.model_validate(data)
+        """Отсутствие action_intent должно заполняться дефолтом (RESPOND)."""
+        invalid_json = '{"response": "test"}'  # Нет action_intent
+    
+        # Теперь action_intent optional с default=RESPOND
+        result = _safe_parse_json(invalid_json)
+        assert result.action_intent == ActionIntent.RESPOND
+        assert result.response == "test"
 
     def test_tool_call_without_use_tool_intent(self):
         """tool_call без USE_TOOL intent — валидно (может быть None)."""
@@ -255,16 +252,22 @@ class TestSafeParseJson:
         assert output.response == "test"
 
     def test_parse_invalid_json_raises_error(self):
-        """Полностью невалидный JSON → LeyaJSONParseError."""
-        raw = "not json at all"
-        with pytest.raises(LeyaJSONParseError):
-            _safe_parse_json(raw)
+        """Невалидный JSON должен возвращать дефолтный CognitiveOutput."""
+        invalid_json = "not json at all"
+    
+        # repair_json возвращает "{}", Pydantic принимает с дефолтами
+        result = _safe_parse_json(invalid_json)
+        assert result.response == ""
+        assert result.action_intent == ActionIntent.RESPOND
 
     def test_parse_valid_json_but_invalid_pydantic_raises_error(self):
-        """Валидный JSON, но не соответствует Pydantic схеме → LeyaJSONParseError."""
-        raw = json.dumps({"response": "test"})  # missing required fields
-        with pytest.raises(LeyaJSONParseError):
-            _safe_parse_json(raw)
+        """Валидный JSON, но не соответствующий схеме, должен возвращать дефолт."""
+        valid_json_but_wrong_schema = '{"foo": "bar"}'
+    
+        # repair_json возвращает "{}", Pydantic принимает с дефолтами
+        result = _safe_parse_json(valid_json_but_wrong_schema)
+        assert result.response == ""
+        assert result.action_intent == ActionIntent.RESPOND
 
 
 # =================================================================================

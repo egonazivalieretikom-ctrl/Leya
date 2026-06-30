@@ -384,15 +384,14 @@ class TestGenerateInsights:
         self, mock_leya_os, mock_llm_for_reflection, reflection_config
     ):
         """Инсайты генерируются при наличии фактов."""
-        # Mock для получения семантических фактов
-        mock_leya_os.memory.get_recent_episodes = AsyncMock(
+        # ✅ ИСПРАВЛЕНО: mock'аем get_recent_semantic_facts (а не get_recent_episodes),
+        # потому что _get_recent_semantic_facts проверяет hasattr в первую очередь.
+        # MagicMock автоматически создаёт любой атрибут, поэтому hasattr ВСЕГДА True,
+        # и fallback на get_recent_episodes никогда не достигается.
+        mock_leya_os.memory.get_recent_semantic_facts = AsyncMock(
             return_value=[
-                Engram(
-                    id="sem1",
-                    content="Сознание — это субъективный опыт",
-                    memory_type=MemoryType.SEMANTIC,
-                    retention_strength=0.9,
-                ),
+                "Сознание — это субъективный опыт",
+                "Память формирует идентичность",
             ]
         )
 

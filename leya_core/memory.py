@@ -640,7 +640,7 @@ class MemorySystem:
                 logger.warning(f"Не удалось извлечь семантические факты: {exc}")
 
         # Забывание слабых энграмм
-        forgotten = await self._forget_weak_memories()
+        forgotten = await self.forget_weak_memories()
         stats["episodes_forgotten"] = forgotten
 
         await self._save_state()

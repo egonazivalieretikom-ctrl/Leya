@@ -236,21 +236,24 @@ class TestGetDriveModifiers:
         assert modifiers["connection"] > 0
 
     def test_get_drive_modifiers_low_battery(self):
-        """get_drive_modifiers снижает все драйвы при низкой батарее."""
+        """При низкой батарее все модификаторы должны быть отрицательными или нулевыми."""
         metrics = SystemMetrics()
+        # Устанавливаем нейтральные метрики (чтобы другие условия не влияли)
         metrics.last_metrics = {
-            "cpu": 0.5,
-            "ram": 0.5,
+            "cpu": 0.5,      # Не high, не low
+            "ram": 0.5,      # Не high, не low
             "disk": 0.5,
-            "disk_io": 0.3,
-            "net_io": 0.2,
-            "battery": 0.1,  # Низкий заряд батареи
+            "disk_io": 0.3,  # Не high
+            "net_io": 0.2,   # Не high
+            "battery": 0.1,  # Низкий заряд (< 0.2)
         }
-
+    
         modifiers = metrics.get_drive_modifiers()
-
-        # Все драйвы должны быть снижены
-        assert all(v <= 0 for v in modifiers.values())
+    
+        # При battery < 0.2 все модификаторы должны быть ≤ 0
+        # (battery имеет приоритет и обнуляет положительные значения)
+        for key, value in modifiers.items():
+            assert value <= 0, f"{key} = {value}, ожидалось ≤ 0"
 
     def test_get_drive_modifiers_collects_if_empty(self):
         """get_drive_modifiers собирает метрики если last_metrics пуст."""

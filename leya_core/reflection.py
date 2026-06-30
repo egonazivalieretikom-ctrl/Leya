@@ -499,30 +499,24 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     # leya_core/reflection.py, метод _generate_insights_from_facts
 
     async def _generate_insights_from_facts(self) -> None:
-        """
-        Генерирует новые инсайты на основе недавно изученных фактов.
-
-        Использует публичный API памяти вместо прямого доступа к semantic_collection.
-        """
+        """Генерация инсайтов из недавних семантических фактов."""
         try:
             # Получаем недавние семантические факты
-            recent_facts = self._get_recent_semantic_facts(limit=5)
+            recent_facts = await self._get_recent_semantic_facts(limit=5)
 
-            # ПРОВЕРКА: если фактов нет, не генерируем инсайт
-            if not recent_facts:
+            # ПРОВЕРКА: если фактов нет или они не итерируемы, не генерируем инсайт
+            if not recent_facts or not isinstance(recent_facts, (list, tuple)):
                 logger.debug("MetaCognition: Нет недавних фактов для генерации инсайтов.")
                 return
 
-            facts_text = "\n".join(recent_facts)
+            # Безопасное соединение строк
+            facts_text = "\n".join(str(fact) for fact in recent_facts)
 
             prompt = f"""
     Ты — Лея. Ты недавно изучила новые факты:
-
     {facts_text}
 
     На основе этих фактов, сформулируй ОДИН новый инсайт о себе или о мире.
-    Это должно быть что-то НОВОЕ, не повторение старых мыслей.
-
     Верни JSON:
     {{
         "insight": "Новый инсайт на русском языке"
@@ -530,8 +524,15 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     """
 
             response = await self.llm_client(prompt)
-            cleaned = repair_json(response) 
-            data = json.loads(cleaned) if cleaned != "{}" else {}
+        
+            # ✅ ИСПРАВЛЕНО: убрано двойное присваивание
+            cleaned = repair_json(response)
+            try:
+                data = json.loads(cleaned) if cleaned != "{}" else {}
+            except json.JSONDecodeError as exc:
+                logger.warning(f"MetaCognition: Не удалось распарсить JSON инсайта: {exc}")
+                data = {}
+        
             insight = data.get("insight", "")
 
             if insight:
@@ -577,10 +578,8 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
                 context={"error": str(exc)},
             ) from exc
         except Exception as exc:
-            raise LeyaInsightError(
-                "Неожиданная ошибка получения семантических фактов",
-                context={"error": str(exc)},
-            ) from exc
+            logger.warning(f"MetaCognition: Ошибка получения фактов: {exc}")
+            return []  # ← Всегда возвращаем список
 
     async def _default_llm_call(self, prompt: str) -> str:
         """Заглушка для LLM в MetaCognition."""
