@@ -145,21 +145,16 @@ class GlobalWorkspace:
             logger.debug(f"GlobalWorkspace: Удалено {len(removed)} устаревших proposals")
 
     def select_winner(
-        self, drive_state: dict[str, float] | None = None, inhibit_internal: bool = False
-    ) -> WorkspaceProposal | None:
+    self, drive_state: dict[str, float] | None = None, inhibit_internal: bool = False
+) -> WorkspaceProposal | None:
         """
         Выбор победителя из proposals.
-    
-        ИСПРАВЛЕНО CR1: Сохраняем ссылку на оригинальный proposal в metadata
-        для корректного удаления по identity.
         """
-        # Увеличение счётчика выборов
         self.total_selections += 1
 
         if not self.proposals:
             return None
 
-        # Очистка устаревших proposals
         self.clear_expired()
 
         if not self.proposals:
@@ -171,13 +166,15 @@ class GlobalWorkspace:
             adjusted = proposal
 
             if inhibit_internal and proposal.source in ("homeostasis", "meta_cognition"):
-                # Понижение приоритета на 1 уровень
                 priority_map = {
                     Priority.LOW: Priority.LOW,
                     Priority.MEDIUM: Priority.LOW,
                     Priority.HIGH: Priority.MEDIUM,
                     Priority.CRITICAL: Priority.HIGH,
                 }
+                new_metadata = proposal.metadata.copy() if proposal.metadata else {}
+                new_metadata["_original_proposal"] = proposal
+            
                 adjusted = WorkspaceProposal(
                     source=proposal.source,
                     content=proposal.content,
@@ -185,17 +182,20 @@ class GlobalWorkspace:
                     priority=priority_map.get(proposal.priority, proposal.priority),
                     urgency=proposal.urgency * 0.7,
                     drive_relevance=proposal.drive_relevance,
-                    metadata=proposal.metadata.copy(),  # Копируем metadata
+                    metadata=new_metadata,
+                    timestamp=proposal.timestamp,
                 )
-                # ✅ ИСПРАВЛЕНИЕ CR1: Сохраняем ссылку на оригинальный proposal
-                adjusted.metadata["_original_proposal"] = proposal
 
             adjusted_proposals.append(adjusted)
 
-        # Простая дедупликация по контенту (для предотвращения зацикливания одинаковых целей гомеостаза)
+        # Простая дедупликация по контенту
         seen_contents = set()
         filtered = []
         for p in adjusted_proposals:
+            if p.source == "user":
+                filtered.append(p)
+                continue
+        
             key = (p.content or "")[:80].lower().strip()
             if key and key not in seen_contents:
                 seen_contents.add(key)
@@ -205,8 +205,6 @@ class GlobalWorkspace:
         # Вычисление scores
         for proposal in adjusted_proposals:
             score = 0.0
-
-            # Priority score
             priority_scores = {
                 Priority.LOW: 0.2,
                 Priority.MEDIUM: 0.5,
@@ -214,25 +212,20 @@ class GlobalWorkspace:
                 Priority.CRITICAL: 1.0,
             }
             score += priority_scores.get(proposal.priority, 0.5) * 0.4
-
-            # Urgency score
             score += proposal.urgency * 0.3
 
-            # Drive relevance score
             if drive_state and proposal.drive_relevance > 0:
                 avg_tension = sum(drive_state.values()) / len(drive_state) if drive_state else 0.5
                 score += proposal.drive_relevance * avg_tension * 0.3
 
             proposal.score = score
 
-        # Сортировка по score
         adjusted_proposals.sort(key=lambda p: p.score, reverse=True)
 
-        # Выбор победителя
         winner = adjusted_proposals[0]
         self.focus = winner
 
-        # === Логирование победителя в Global Workspace ===
+        # Логирование
         logger_thoughts = logging.getLogger("leya.thoughts")
         logger_thoughts.debug(
             "=== GLOBAL WORKSPACE: ПОБЕДИТЕЛЬ ===\n"
@@ -244,14 +237,12 @@ class GlobalWorkspace:
             f"Содержание: {winner.content[:200]}...\n"
         )
 
-        # Перемещаем в историю только победителя
         self.history.append(winner)
 
-        # ✅ ИСПРАВЛЕНИЕ CR1: Удаляем ОРИГИНАЛЬНЫЙ proposal из proposals
-        # Если winner - это adjusted объект, получаем оригинал из metadata
+        # Не-победившие proposals (включая user) остаются в workspace
         original_winner = winner.metadata.get("_original_proposal", winner)
         self.proposals = [p for p in self.proposals if p is not original_winner]
-
+    
         # Ограничение истории
         if len(self.history) > 100:
             self.history = self.history[-100:]
