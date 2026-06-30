@@ -483,7 +483,19 @@ class LeyaOS:
                     # Флаг остаётся False — _cognitive_loop может попытаться отправить fallback
 
             # Когнитивный цикл для постобработки (RPE, self_model, broadcast)
-            await self._cognitive_loop(stimulus, handle_result)
+            # _handle_user_request возвращает dict, но _cognitive_loop и thinker
+            # ожидают str (JSON). Сериализуем для type safety.
+            if isinstance(handle_result, dict):
+                try:
+                    tool_context_str = json.dumps(handle_result, ensure_ascii=False)
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Не удалось сериализовать handle_result: {e}")
+                    tool_context_str = ""
+            else:
+                tool_context_str = handle_result if isinstance(handle_result, str) else ""
+
+            # Когнитивный цикл для постобработки (RPE, self_model, broadcast)
+            await self._cognitive_loop(stimulus, tool_context_str)
 
     async def run(self) -> None:
         """
@@ -1576,8 +1588,11 @@ class LeyaOS:
     async def _cognitive_loop(self, stimulus: dict[str, Any], tool_context: str) -> None:
         """
         Основной когнитивный цикл: планирование → действие → постобработка.
+    
+        ✅ ИСПРАВЛЕНО CRITICAL-8/9/10: Уровни 0-0.8 выполняются для ВСЕХ стимулов,
+        включая user_message. Ранний return удалён.
         """
-        async with self._perceive_lock:
+        async with self._user_perceive_lock:
             # ===================================================================
             # ✅ Сохраняем состояние драйвов ДО обработки для MetaCognition
             # ===================================================================
@@ -1589,52 +1604,12 @@ class LeyaOS:
                 }
                 for d in self.drives.drives.values()
             }
-    
+
             try:
-                emotion_state_for_meta = None
-                if (
-                    stimulus.get("type") == "user_message"
-                    and tool_context
-                    and self.emotional_support is not None
-                    and EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE
-                ):
-                    try:
-                        emotion_stimulus_content = stimulus.get("content", "")
-                        emotion_state_for_meta = await self.emotional_support.analyze_user_state(
-                            emotion_stimulus_content
-                        )
-                        if emotion_state_for_meta and emotion_state_for_meta.intensity > 0.5:
-                            await self.emotional_support.update_drives_from_emotion(
-                                emotion_state_for_meta, self.drives
-                            )
-                            logger.debug(
-                                f"EmotionalSupport (user_message): эмоции обновлены "
-                                f"(intensity={emotion_state_for_meta.intensity:.2f})"
-                            )
-                        if emotion_state_for_meta and emotion_state_for_meta.intensity > 0.6:
-                            asyncio.create_task(
-                                self.emotional_support.save_emotion_to_memory(emotion_state_for_meta)
-                            )
-                    except Exception as e:
-                        logger.error(f"Ошибка EmotionalSupport для user_message: {e}", exc_info=True)
-
-                # Ранний возврат для user_message с tool_context
-                is_user_message_with_classification = (
-                    stimulus.get("type") == "user_message" 
-                    and isinstance(tool_context, dict)
-                    and tool_context.get("response")  # Ответ уже сгенерирован
-                )
-            
-                if is_user_message_with_classification:
-                    logger.debug(
-                        "User message: выполняем полную архитектуру, "
-                        "пропуская только повторный вызов thinker"
-                    )
-
                 # ===================================================================
                 # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) ===
                 # ===================================================================
-                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
+                # ✅ ИСПРАВЛЕНО CRITICAL-8: Выполняется для ВСЕХ стимулов, включая user_message
                 if self.decision_engine:
                     try:
                         stimulus_content = stimulus.get("content", "")
@@ -1669,9 +1644,9 @@ class LeyaOS:
                         logger.error(f"Ошибка DecisionEngine: {e}", exc_info=True)
 
                 # ===================================================================
-                # === УРОВЕНЬ 0.5: Emotional Support ===
+                # === УРОВЕНЬ 0.5: Emotional Support (анализ эмоций ДО генерации) ===
                 # ===================================================================
-                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
+                # ✅ ИСПРАВЛЕНО CRITICAL-9: Выполняется для ВСЕХ стимулов, включая user_message
                 emotion_context = ""
                 emotion_state = None
             
@@ -1712,9 +1687,9 @@ class LeyaOS:
                         logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
 
                 # ===================================================================
-                # === УРОВЕНЬ 0.7: Homeostasis Integration ===
+                # === УРОВЕНЬ 0.7: Homeostasis Integration (проверка критического дисбаланса) ===
                 # ===================================================================
-                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
+                # ✅ ИСПРАВЛЕНО CRITICAL-10: Выполняется для ВСЕХ стимулов, включая user_message
                 critical_homeostasis = await self._check_critical_homeostasis()
                 if critical_homeostasis["is_critical"]:
                     logger.info(
@@ -1724,7 +1699,7 @@ class LeyaOS:
                     stimulus["homeostasis_urgency"] = critical_homeostasis
 
                 # ===================================================================
-                # === УРОВЕНЬ 0.8: Self-Model Integration ===
+                # === УРОВЕНЬ 0.8: Self-Model Integration (обратная связь) ===
                 # ===================================================================
                 # ✅ Выполняется для ВСЕХ стимулов, включая user_message
                 await self._adjust_drives_from_self_model()
@@ -1732,39 +1707,52 @@ class LeyaOS:
                 # ===================================================================
                 # === УРОВЕНЬ 1: CoreThinker (LLM-цикл) ===
                 # ===================================================================
-                # ✅ ИСПРАВЛЕНО CRITICAL-7: Для user_message с готовым ответом
-                # используем существующий ответ, НЕ вызываем thinker повторно
-            
+                # tool_context теперь всегда str (JSON), но поддерживаем legacy dict
+                parsed_tool_context: dict[str, Any] = {}
+                if isinstance(tool_context, dict):
+                    parsed_tool_context = tool_context
+                elif isinstance(tool_context, str) and tool_context:
+                    try:
+                        parsed = json.loads(tool_context)
+                        if isinstance(parsed, dict):
+                            parsed_tool_context = parsed
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.debug(f"tool_context не является JSON: {e}")
+
+                is_user_message_with_classification = (
+                    stimulus.get("type") == "user_message" 
+                    and parsed_tool_context.get("response")  # Ответ уже сгенерирован
+                )
                 if is_user_message_with_classification:
                     # Ответ уже есть из _handle_user_request (greeting, farewell, status, help,
                     # или сгенерирован через _handle_via_thinker)
                     cognitive_output = {
-                        "response": tool_context.get("response", ""),
-                        "internal_monologue": f"[User request: {tool_context.get('intent', 'UNKNOWN')}] ",
+                        "response": parsed_tool_context.get("response", ""),
+                        "internal_monologue": f"[User request: {parsed_tool_context.get('intent', 'UNKNOWN')}] ",
                         "action_intent": "respond",
                         "tool_call": "",
                         "self_reflection": "",
                         "source": "user_request",
-                        "intent": tool_context.get("intent", "UNKNOWN"),
-                        "confidence": tool_context.get("confidence", 0.0),
+                        "intent": parsed_tool_context.get("intent", "UNKNOWN"),
+                        "confidence": parsed_tool_context.get("confidence", 0.0),
                     }
-                
+            
                     if emotion_state:
                         cognitive_output["emotion_state"] = {
                             "emotion": getattr(emotion_state, "emotion", "unknown"),
                             "intensity": emotion_state.intensity,
                             "description": getattr(emotion_state, "description", ""),
                         }
-                
+            
                     logger.debug(
                         f"User message: используем существующий ответ из классификации "
-                        f"(intent={tool_context.get('intent')})"
+                        f"(intent={parsed_tool_context.get('intent')})"
                     )
-            
+        
                 else:
-                    # ✅ Полный цикл thinker для всех остальных случаев
+                    # Полный цикл thinker для всех остальных случаев
                     # (внутренние процессы, user_message без классификации, и т.д.)
-                
+            
                     stimulus_content = stimulus.get("content", "")
                     memory_context = await self.memory.retrieve_context(
                         query=stimulus_content, max_results=5
@@ -1800,7 +1788,7 @@ class LeyaOS:
                         tools=self.tools_description,
                         tool_context=tool_context,
                     )
-                
+            
                     logger.info(
                         f"Лея ответила: {cognitive_output.get('response', '')[:200]}..."
                     )
@@ -1809,12 +1797,22 @@ class LeyaOS:
                     )
 
                 # ===================================================================
-                # Постобработка продолжается как обычно (без изменений ниже)
+                # Постобработка (для ВСЕХ путей)
                 # ===================================================================
                 response = cognitive_output.get("response", "...")
                 internal_monologue = cognitive_output.get("internal_monologue", "")
                 action_intent = cognitive_output.get("action_intent", "none")
                 self_reflection = cognitive_output.get("self_reflection", "")
+
+                # Единое место определения — доступно для homeostasis, MetaCognition и RPE
+                drive_state_after = {
+                    d.type.value: {
+                        "current": d.current,
+                        "tension": d.tension,
+                        "target": d.target,
+                    }
+                    for d in self.drives.drives.values()
+                }
 
                 # Закрытие feedback loop для целей гомеостаза
                 if stimulus.get("source") == "homeostasis":
@@ -1826,20 +1824,16 @@ class LeyaOS:
                             else DriveType.AUTONOMY
                         )
 
-                        # ===================================================================
-                        # ✅ Динамическое вычисление actual_outcome
-                        # ===================================================================
+                        # ✅ ИСПРАВЛЕНО CRITICAL-13: drive_state_after уже определён выше
                         actual_outcome = self._calculate_dynamic_outcome(
                             action_type="homeostasis",
                             drive_state_after=drive_state_after,
                             drive_state_before=drive_state_before,
                             success=True,
                         )
-                    
-                        # Гранулярный action_key на основе типа драйва и цели
+                
                         action_key = f"homeostasis_{drive_type.value}_{goal_content[:20]}"
-                    
-                        # RPE с динамическим outcome
+                
                         rpe = self.drives.calculate_rpe(action_key, actual_outcome=actual_outcome)
                         self.drives.apply_satisfaction(drive_type, base_amount=0.22, rpe=rpe)
 
@@ -1864,17 +1858,7 @@ class LeyaOS:
                 # ===================================================================
                 # ✅ MetaCognition — анализ когнитивного акта
                 # ===================================================================
-                # Сохраняем состояние драйвов ПОСЛЕ обработки
-                drive_state_after = {
-                    d.type.value: {
-                        "current": d.current,
-                        "tension": d.tension,
-                        "target": d.target,
-                    }
-                    for d in self.drives.drives.values()
-                }
-            
-                # Вызываем MetaCognition для анализа когнитивного акта
+                # ✅ ИСПРАВЛЕНО CRITICAL-13: drive_state_after уже определён выше
                 try:
                     await self.reflection.process_action(
                         cognitive_output=cognitive_output,
@@ -1890,14 +1874,22 @@ class LeyaOS:
                     logger.error(f"Неожиданная ошибка MetaCognition: {exc}", exc_info=True)
 
                 # Отправка ответа (ЕДИНСТВЕННАЯ в этом пути)
-                await self.env.send_message(response)
+                # ✅ ИСПРАВЛЕНО CRITICAL-6: Проверяем флаг __response_sent
+                if not stimulus.get("__response_sent", False):
+                    try:
+                        await self.env.send_message(response)
+                        stimulus["__response_sent"] = True
+                        logger.debug(f"Ответ отправлен из _cognitive_loop")
+                    except (LeyaBroadcastError, LeyaEnvironmentError) as e:
+                        logger.error(f"Ошибка отправки ответа из _cognitive_loop: {type(e).__name__}: {e}", exc_info=True)
+                else:
+                    logger.debug("Ответ уже отправлен в perceive(), пропускаем отправку в _cognitive_loop")
 
                 # ===================================================================
                 # ✅ RPE для пользовательского запроса
                 # ===================================================================
                 if stimulus.get("type") == "user_message" or stimulus.get("source") != "homeostasis":
                     try:
-                        # Динамическое вычисление actual_outcome
                         actual_outcome = self._calculate_dynamic_outcome(
                             action_type="user_response",
                             drive_state_before=drive_state_before,
@@ -1905,20 +1897,17 @@ class LeyaOS:
                             success=True,
                             constitutional_verdict=verdict,
                         )
-                    
-                        # Гранулярный action_key на основе intent
+                
                         intent = stimulus.get("classified_intent", "unknown")
                         action_key = f"user_response_{intent}"
-                    
-                        # RPE для CONNECTION (социальный драйв)
+                
                         rpe = self.drives.calculate_rpe(action_key, actual_outcome=actual_outcome)
                         self.drives.apply_satisfaction(
                             DriveType.CONNECTION,
                             base_amount=0.15,
                             rpe=rpe,
                         )
-                    
-                        # Если использовался инструмент — RPE для AUTONOMY
+                
                         if action_intent == "use_tool":
                             rpe_tool = self.drives.calculate_rpe(
                                 f"tool_{cognitive_output.get('tool_call', 'unknown')[:20]}",
@@ -1929,7 +1918,7 @@ class LeyaOS:
                                 base_amount=0.12,
                                 rpe=rpe_tool,
                             )
-                    
+                
                         logger.debug(
                             f"RPE user_response: outcome={actual_outcome:.2f}, "
                             f"rpe={rpe:.2f}, intent={intent}"
@@ -1942,9 +1931,7 @@ class LeyaOS:
                     try:
                         await self.env.broadcast_thought("internal", internal_monologue)
                     except LeyaBroadcastError as exc:
-                        logger.warning(
-                            f"Не удалось broadcast внутренний монолог: {exc}"
-                        )
+                        logger.warning(f"Не удалось broadcast внутренний монолог: {exc}")
 
                 # Обновление self_model
                 if self_reflection:
@@ -1958,30 +1945,21 @@ class LeyaOS:
 
                 # Обработка action_intent
                 await self._process_action_intent(
-                    action_intent, cognitive_output, stimulus_content
+                    action_intent, cognitive_output, stimulus.get("content", "")
                 )
-
-                        # Graceful degradation — продолжаем без эмоционального контекста
 
             except LeyaLLMError as exc:
                 logger.error(f"Ошибка LLM в когнитивном цикле: {exc}", exc_info=True)
-                await self.env.send_message(
-                    "Мои когнитивные процессы временно нарушены..."
-                )
+                if not stimulus.get("__response_sent", False):
+                    await self.env.send_message("Мои когнитивные процессы временно нарушены...")
             except LeyaMemoryError as exc:
                 logger.error(f"Ошибка памяти в когнитивном цикле: {exc}", exc_info=True)
-                await self.env.send_message("Я не могу вспомнить контекст...")
+                if not stimulus.get("__response_sent", False):
+                    await self.env.send_message("Я не могу вспомнить контекст...")
             except Exception as exc:
-                logger.error(
-                    f"Неожиданная ошибка в когнитивном цикле: {exc}", exc_info=True
-                )
-                if isinstance(tool_context, dict) and tool_context.get("response"):
-                    # Ответ уже отправлен в perceive() после GWT-выбора
-                    logger.debug("Ответ уже отправлен через perceive() (после GWT-выбора)")
-                else:
-                    await self.env.send_message(
-                        "Произошла непредвиденная ошибка в моих когнитивных процессах."
-                    )
+                logger.error(f"Неожиданная ошибка в когнитивном цикле: {exc}", exc_info=True)
+                if not stimulus.get("__response_sent", False):
+                    await self.env.send_message("Произошла непредвиденная ошибка в моих когнитивных процессах.")
 
     async def _process_workspace_winner(
         self, winner: WorkspaceProposal, original_stimulus: dict[str, Any]
@@ -2025,71 +2003,71 @@ class LeyaOS:
             # Если это цель гомеостаза
             if winner.source == "homeostasis":
                 logger.info(f"🎯 Гомеостаз в фокусе: {winner.content}")
-            
+        
                 # ===================================================================
-                # ✅ НОВОЕ: Проверяем, есть ли активный диалог с пользователем
+                # ✅ ИСПРАВЛЕНО CRITICAL-14: Общая логика для homeostasis
                 # ===================================================================
+                # Проверяем, есть ли активный диалог с пользователем
                 user_content = original_stimulus.get("content", "")
                 is_active_dialogue = bool(user_content) and original_stimulus.get("type") == "user_message"
-            
+        
                 if is_active_dialogue:
-                    # Активный диалог — НЕ откладываем, а интегрируем в контекст
                     logger.info("Активный диалог: интегрируем гомеостаз в контекст")
+        
+                # ===================================================================
+                # 1. Выполняем инструмент гомеостаза (если есть) — ОБЩАЯ ЛОГИКА
+                # ===================================================================
+                if winner.action_type and winner.action_type != "none":
+                    try:
+                        result = await self.env.tool_registry.execute(
+                            tool_name=winner.action_type,
+                            parameters={}
+                        )
+                        logger.info(f"Инструмент гомеостаза выполнен: {result[:100]}...")
                 
-                    # 1. Выполняем инструмент гомеостаза (если есть)
-                    if winner.action_type and winner.action_type != "none":
-                        try:
-                            result = await self.env.tool_registry.execute(
-                                tool_name=winner.action_type,
-                                parameters={}
-                            )
-                            logger.info(f"Инструмент гомеостаза выполнен: {result[:100]}...")
-                        
-                            # Сохраняем результат в память
-                            await self.memory.store_perception(
-                                content=f"[Homeostasis action: {winner.action_type}] {result}",
-                                emotional_boost=0.5,
-                                metadata={
-                                    "type": "homeostasis_action",
-                                    "goal": winner.content,
-                                    "tool": winner.action_type,
-                                },
-                            )
-                        
-                            # Закрываем feedback loop для драйвов
-                            drive_type = DriveType.AUTONOMY
-                            if "integrity" in winner.content.lower() or "целостность" in winner.content.lower():
-                                drive_type = DriveType.INTEGRITY
-                        
-                            rpe = self.drives.calculate_rpe(
-                                "homeostasis_goal", actual_outcome=0.65
-                            )
-                            self.drives.apply_satisfaction(drive_type, base_amount=0.22, rpe=rpe)
-                        
-                            if hasattr(self.homeostasis, "mark_as_researched"):
-                                self.homeostasis.mark_as_researched(winner.content[:60])
-                        
-                            logger.info(f"✅ Homeostasis feedback closed: {drive_type.value}")
-                        
-                        except LeyaToolNotFoundError as exc:
-                            logger.warning(f"Инструмент гомеостаза не найден: {exc}")
-                        except LeyaToolError as exc:
-                            logger.error(f"Ошибка выполнения инструмента гомеостаза: {exc}", exc_info=True)
+                        # Сохраняем результат в память
+                        await self.memory.store_perception(
+                            content=f"[Homeostasis action: {winner.action_type}] {result}",
+                            emotional_boost=0.5,
+                            metadata={
+                                "type": "homeostasis_action",
+                                "goal": winner.content,
+                                "tool": winner.action_type,
+                            },
+                        )
                 
-                    # 2. ✅ НОВОЕ: Broadcast внутреннего состояния пользователю
-                    # (вместо "я занята, вернусь позже")
-                    if isinstance(self.env, WebEnvironment):
-                        try:
-                            # Формируем естественное сообщение о внутреннем состоянии
-                            homeostasis_thought = (
-                                f"[Внутреннее состояние] {winner.content}"
-                            )
-                            await self.env.broadcast_thought("homeostasis", homeostasis_thought)
-                            logger.info("Homeostasis broadcast выполнен")
-                        except LeyaBroadcastError as exc:
-                            logger.warning(f"Не удалось broadcast homeostasis: {exc}")
+                        # Закрываем feedback loop для драйвов
+                        drive_type = DriveType.AUTONOMY
+                        if "integrity" in winner.content.lower() or "целостность" in winner.content.lower():
+                            drive_type = DriveType.INTEGRITY
                 
-                    # 3. Обновляем self_model с учётом гомеостазной цели
+                        rpe = self.drives.calculate_rpe(
+                            "homeostasis_goal", actual_outcome=0.65
+                        )
+                        self.drives.apply_satisfaction(drive_type, base_amount=0.22, rpe=rpe)
+                
+                        if hasattr(self.homeostasis, "mark_as_researched"):
+                            self.homeostasis.mark_as_researched(winner.content[:60])
+                
+                        logger.info(f"✅ Homeostasis feedback closed: {drive_type.value}")
+                
+                    except LeyaToolNotFoundError as exc:
+                        logger.warning(f"Инструмент гомеостаза не найден: {exc}")
+                    except LeyaToolError as exc:
+                        logger.error(f"Ошибка выполнения инструмента гомеостаза: {exc}", exc_info=True)
+        
+                # ===================================================================
+                # 2. Broadcast и self_model — ТОЛЬКО при активном диалоге
+                # ===================================================================
+                if is_active_dialogue and isinstance(self.env, WebEnvironment):
+                    try:
+                        homeostasis_thought = f"[Внутреннее состояние] {winner.content}"
+                        await self.env.broadcast_thought("homeostasis", homeostasis_thought)
+                        logger.info("Homeostasis broadcast выполнен")
+                    except LeyaBroadcastError as exc:
+                        logger.warning(f"Не удалось broadcast homeostasis: {exc}")
+            
+                    # Обновляем self_model с учётом гомеостазной цели
                     try:
                         await self.memory.update_self_model(
                             f"Текущая внутренняя потребность: {winner.content}"
@@ -2164,7 +2142,7 @@ class LeyaOS:
                         logger.warning(f"Не удалось обновить self_model из meta_cognition: {exc}")
                 else:
                     # Нет активного диалога — обрабатываем через thinker
-                    await self._cognitive_loop(winner_stimulus, "", is_user_request=False)
+                    await self._cognitive_loop(winner_stimulus, "")
         
             # Если это спонтанная мысль
             elif winner.source == "spontaneous":
@@ -2187,7 +2165,7 @@ class LeyaOS:
             # Неизвестный источник
             else:
                 logger.warning(f"Неизвестный источник workspace: {winner.source}")
-                await self._cognitive_loop(winner_stimulus, "", is_user_request=False)
+                await self._cognitive_loop(winner_stimulus, "")
     
         except LeyaMemoryError as exc:
             logger.error(f"Ошибка памяти при обработке победителя workspace: {exc}", exc_info=True)
@@ -2244,8 +2222,27 @@ class LeyaOS:
                         }
                     
                         # Извлекаем tool_name из tool_call
-                        tool_data = json.loads(tool_call) if isinstance(tool_call, str) else tool_call
-                        tool_name = tool_data.get("tool", "unknown")
+                        if not tool_call:
+                            logger.warning("_process_action_intent: tool_call пустой, пропускаю")
+                            return
+                
+                        try:
+                            if isinstance(tool_call, str):
+                                tool_data = json.loads(tool_call)
+                            elif isinstance(tool_call, dict):
+                                tool_data = tool_call
+                            else:
+                                logger.warning(f"Неожиданный тип tool_call: {type(tool_call).__name__}")
+                                return
+                
+                            if not isinstance(tool_data, dict):
+                                logger.warning(f"tool_data не является dict после парсинга")
+                                return
+                
+                            tool_name = tool_data.get("tool", "unknown")
+                        except (json.JSONDecodeError, ValueError) as e:
+                            logger.warning(f"Не удалось распарсить tool_call в _process_action_intent: {e}")
+                            return
                     
                         # Динамическое вычисление actual_outcome
                         actual_outcome = self._calculate_dynamic_outcome(
@@ -2317,13 +2314,7 @@ class LeyaOS:
         Args:
             tool_call: JSON-строка или dict с описанием вызова инструмента
         """
-        # ✅ ИСПРАВЛЕНО: проверяем tool_registry, а не tool_generator
-        if (
-            not hasattr(self, "env")
-            or self.env is None
-            or not hasattr(self.env, "tool_registry")
-            or self.env.tool_registry is None
-        ):
+        if not hasattr(self.env, "tool_registry") or self.env.tool_registry is None:
             logger.error(
                 "_execute_tool: tool_registry недоступен. "
                 "Невозможно выполнить инструмент."
@@ -2386,7 +2377,7 @@ class LeyaOS:
                 predicted_state = self.drives.get_predicted_disbalance()
             
                 # ИСПРАВЛЕНО: убран await (get_recent_episodes теперь sync)
-                recent_episodes = await self.memory.get_recent_episodes(limit=5)
+                recent_episodes = self.memory.get_recent_episodes(limit=5)
 
                 goal = await self.homeostasis.generate_goal(
                     drive_state=drive_state,
@@ -2444,8 +2435,7 @@ class LeyaOS:
                 await asyncio.sleep(5)
                 drive_state = {d.type.value: d.current for d in self.drives.drives.values()}
 
-                # ✅ ИСПРАВЛЕНИЕ: Не подавляем внутренние proposals во время диалога
-                winner = self.workspace.select_winner(drive_state, inhibit_internal=False)
+                winner = self.workspace.select_winner(drive_state, inhibit_internal=True)
 
                 if not winner:
                     continue
@@ -2455,22 +2445,16 @@ class LeyaOS:
                     f"(priority={winner.priority}, urgency={winner.urgency:.2f})"
                 )
 
-                # ✅ ИСПРАВЛЕНИЕ CR-workspace-loop: Явная маршрутизация по источнику
                 if winner.source == "user":
-                    # Пользовательские запросы обрабатываются ТОЛЬКО через perceive().
-                    # Если proposal "завис" в workspace — значит perceive() уже завершился
-                    # (успешно или с ошибкой). Повторная обработка приведёт к дублированию.
-                    # Просто удаляем proposal из workspace (это уже сделано в select_winner)
-                    # и логируем.
+                    self.workspace.proposals = [p for p in self.workspace.proposals if p is not winner]
                     logger.debug(
-                        f"User proposal обнаружен в workspace loop "
+                        f"User proposal удалён из workspace "
                         f"(content={winner.content[:50]}...). "
-                        f"Пропускаем — должен был быть обработан через perceive()."
+                        f"Должен был быть обработан через perceive()."
                     )
                     continue
 
                 elif winner.source in ("homeostasis", "meta_cognition", "spontaneous"):
-                    # ✅ Внутренние процессы — корректная обработка
                     # Создаём стимул с ПРАВИЛЬНЫМ типом (НЕ "user_message"!)
                     internal_stimulus = {
                         "type": "workspace_focus",
@@ -2573,32 +2557,33 @@ class LeyaOS:
                 logger.error(f"Неожиданная ошибка в broadcast: {exc}", exc_info=True)
                 await asyncio.sleep(5)
 
-    def _safe_create_task(self, coro, name: str) -> asyncio.Task:
-        """
-        Создание задачи с защитой от падения event loop.
-
-        Args:
-            coro: Корoutine для выполнения
-            name: Имя задачи для логирования
-
-        Returns:
-            asyncio.Task
-        """
-
-        async def wrapped():
-            try:
-                await coro
-            except asyncio.CancelledError:
-                logger.info(f"Задача {name} отменена.")
-            except Exception as exc:
-                logger.error(f"Задача {name} упала: {exc}", exc_info=True)
-                # Автоматический рестарт с задержкой
-                if self.running:
-                    logger.info(f"Перезапуск задачи {name} через 10с...")
-                    await asyncio.sleep(10)
-                    asyncio.create_task(wrapped(), name=f"{name}_restart")
-
-        return asyncio.create_task(wrapped(), name=name)
+        def _safe_create_task(self, coro, name: str, max_retries: int = 10) -> asyncio.Task:
+            retry_count = 0
+        
+            async def wrapped():
+                nonlocal retry_count
+                try:
+                    await coro
+                except asyncio.CancelledError:
+                    logger.info(f"Задача {name} отменена.")
+                except Exception as exc:
+                    logger.error(f"Задача {name} упала: {exc}", exc_info=True)
+                    retry_count += 1
+                
+                    if retry_count <= max_retries and self.running:
+                        logger.info(
+                            f"Перезапуск задачи {name} через 10с... "
+                            f"(попытка {retry_count}/{max_retries})"
+                        )
+                        await asyncio.sleep(10)
+                        asyncio.create_task(wrapped(), name=f"{name}_restart_{retry_count}")
+                    else:
+                        logger.error(
+                            f"Задача {name} превысила лимит попыток ({max_retries}). "
+                            f"Остановка. Последняя ошибка: {exc}"
+                        )
+        
+            return asyncio.create_task(wrapped(), name=name)
 
 
 # =========================================================================
