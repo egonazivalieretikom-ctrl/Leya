@@ -461,35 +461,29 @@ class LeyaOS:
 
             handle_result = await self._handle_user_request(stimulus_content)
 
-            # Ответ отправляется ТОЛЬКО здесь, после выбора победителя
-            response = handle_result.get("response", "")
-            if response and not handle_result.get("__error"):
-                try:
-                    await self.env.send_message(response)
-                    logger.debug("Ответ пользователю отправлен (после GWT-выбора)")
-                except (LeyaBroadcastError, LeyaEnvironmentError) as e:
-                    logger.error(f"Ошибка отправки ответа: {type(e).__name__}: {e}", exc_info=True)
-
+            # Это гарантирует, что _cognitive_loop не отправит ответ повторно
             if isinstance(handle_result, dict):
                 stimulus["classified_intent"] = handle_result.get("intent", "UNKNOWN")
                 stimulus["classification_confidence"] = handle_result.get("confidence", 0.0)
                 stimulus["classification_topic"] = handle_result.get("topic")
                 stimulus["classification_source"] = handle_result.get("source", "unknown")
-                stimulus["__response_sent"] = True
+            
+                # КЛЮЧЕВОЙ МОМЕНТ: флаг устанавливается ДО отправки
+                stimulus["__response_sent"] = False  # Инициализация
+
+            # Ответ отправляется ТОЛЬКО здесь, после выбора победителя
+            response = handle_result.get("response", "")
+            if response and not handle_result.get("__error"):
+                try:
+                    await self.env.send_message(response)
+                    stimulus["__response_sent"] = True
+                    logger.debug("Ответ пользователю отправлен (после GWT-выбора)")
+                except (LeyaBroadcastError, LeyaEnvironmentError) as e:
+                    logger.error(f"Ошибка отправки ответа: {type(e).__name__}: {e}", exc_info=True)
+                    # Флаг остаётся False — _cognitive_loop может попытаться отправить fallback
 
             # Когнитивный цикл для постобработки (RPE, self_model, broadcast)
             await self._cognitive_loop(stimulus, handle_result)
-
-        elif winner.source in ("homeostasis", "meta_cognition", "spontaneous"):
-            logger.info(f"Внутренний процесс {winner.source} выиграл конкуренцию")
-            await self._process_workspace_winner(winner, stimulus)
-
-        elif winner.source == "fast_decision":
-            # Fast decision уже выполнен, просто логируем
-            logger.debug("Fast decision выиграл конкуренцию (уже выполнен)")
-
-        else:
-            logger.warning(f"Неизвестный источник workspace: {winner.source}")
 
     async def run(self) -> None:
         """
@@ -1122,18 +1116,15 @@ class LeyaOS:
                 response = await self._handle_greeting(classification)
             elif classification.intent == UserIntent.FAREWELL:
                 response = await self._handle_farewell(classification)
-            elif classification.intent == UserIntent.QUESTION:
-                response = await self._handle_question(classification)
-            elif classification.intent == UserIntent.SEARCH:
-                response = await self._handle_search(classification)
-            elif classification.intent == UserIntent.REMEMBER:
-                response = await self._handle_remember(classification)
             elif classification.intent == UserIntent.STATUS:
                 response = await self._handle_status(classification)
             elif classification.intent == UserIntent.HELP:
                 response = await self._handle_help(classification)
             else:
-                response = await self._handle_via_thinker(user_input, classification.intent)
+                # ✅ QUESTION, SEARCH, REMEMBER, UNKNOWN — НЕ обрабатываем здесь
+                # Ответ будет сгенерирован в _cognitive_loop через полный цикл
+                # (включая Decision Engine, Emotional Support, Homeostasis, Self-Model)
+                response = ""
 
             result["response"] = response
 
@@ -1628,88 +1619,22 @@ class LeyaOS:
                         logger.error(f"Ошибка EmotionalSupport для user_message: {e}", exc_info=True)
 
                 # Ранний возврат для user_message с tool_context
-                if stimulus.get("type") == "user_message" and tool_context:
-                    logger.debug("User message уже обработан, вызываем MetaCognition и пропускаем thinker")
-                
-                    # Формируем pseudo-cognitive_output из tool_context
-                    try:
-                        if isinstance(tool_context, dict):
-                            cognitive_output = {
-                                "response": tool_context.get("response", ""),
-                                "internal_monologue": f"[User request: {tool_context.get('intent', 'UNKNOWN')}]",
-                                "action_intent": "respond",
-                                "tool_call": "",
-                                "self_reflection": "",
-                                "source": "user_request",
-                                "intent": tool_context.get("intent", "UNKNOWN"),
-                                "confidence": tool_context.get("confidence", 0.0),
-                            }
-                        elif isinstance(tool_context, str) and tool_context:
-                            tc_data = json.loads(tool_context)
-                            cognitive_output = {
-                                "response": "",
-                                "internal_monologue": f"[User request: {tc_data.get('intent', 'UNKNOWN')}]",
-                                "action_intent": "respond",
-                                "tool_call": "",
-                                "self_reflection": "",
-                                "source": "user_request",
-                                "intent": tc_data.get("intent", "UNKNOWN"),
-                                "confidence": tc_data.get("confidence", 0.0),
-                            }
-                        else:
-                            cognitive_output = {
-                                "response": "",
-                                "internal_monologue": "[User request]",
-                                "action_intent": "respond",
-                                "tool_call": "",
-                                "self_reflection": "",
-                                "source": "user_request",
-                            }
+                is_user_message_with_classification = (
+                    stimulus.get("type") == "user_message" 
+                    and isinstance(tool_context, dict)
+                    and tool_context.get("response")  # Ответ уже сгенерирован
+                )
+            
+                if is_user_message_with_classification:
+                    logger.debug(
+                        "User message: выполняем полную архитектуру, "
+                        "пропуская только повторный вызов thinker"
+                    )
 
-                        if emotion_state_for_meta:
-                            cognitive_output["emotion_state"] = {
-                                "emotion": getattr(emotion_state_for_meta, "emotion", "unknown"),
-                                "intensity": emotion_state_for_meta.intensity,
-                                "description": getattr(emotion_state_for_meta, "description", ""),
-                            }
-                    
-                        # Сохраняем состояние драйвов ПОСЛЕ обработки
-                        drive_state_after = {
-                            d.type.value: {
-                                "current": d.current,
-                                "tension": d.tension,
-                                "target": d.target,
-                            }
-                            for d in self.drives.drives.values()
-                        }
-                    
-                        # Конституциональная проверка (если ответ есть)
-                        response = cognitive_output.get("response", "")
-                        verdict = None
-                        if response:
-                            verdict = self.constitutional.verify_response(response)
-                    
-                        # ✅ Вызываем MetaCognition для анализа user_message
-                        await self.reflection.process_action(
-                            cognitive_output=cognitive_output,
-                            stimulus=stimulus,
-                            drive_state_before=drive_state_before,
-                            drive_state_after=drive_state_after,
-                            constitutional_verdict=verdict,
-                        )
-                        logger.debug("MetaCognition: user_message проанализирован")
-                    
-                    except LeyaReflectionError as exc:
-                        logger.warning(f"Ошибка MetaCognition для user_message: {exc}")
-                    except Exception as exc:
-                        logger.error(f"Неожиданная ошибка MetaCognition для user_message: {exc}", exc_info=True)
-                
-                    # ✅ Ранний возврат после MetaCognition
-                    return
-        
                 # ===================================================================
-                # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) — этап 2.2 ===
+                # === УРОВЕНЬ 0: Decision Engine (мгновенные решения) ===
                 # ===================================================================
+                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
                 if self.decision_engine:
                     try:
                         stimulus_content = stimulus.get("content", "")
@@ -1724,10 +1649,9 @@ class LeyaOS:
                         )
 
                         if fast_decision:
-                            # ✅ НОВОЕ: Сохраняем stimulus_content в decision для MetaCognition
                             if not hasattr(fast_decision, "stimulus_content"):
                                 fast_decision.stimulus_content = stimulus_content
-                    
+                
                         if (
                             fast_decision
                             and (fast_decision.use_tool or getattr(fast_decision, "fast_response", None))
@@ -1739,20 +1663,18 @@ class LeyaOS:
                                 f"response={'yes' if getattr(fast_decision, 'fast_response', None) else 'no'} "
                                 f"(confidence={fast_decision.confidence:.2f})"
                             )
-                            # Выполняем быстрое решение без LLM и выходим
                             await self._execute_fast_decision(fast_decision)
-                            return  # Пропускаем LLM полностью
+                            return  # Fast decision выполнен, выходим
                     except Exception as e:
                         logger.error(f"Ошибка DecisionEngine: {e}", exc_info=True)
-                        # Graceful degradation — продолжаем с LLM
-
 
                 # ===================================================================
-                # === УРОВЕНЬ 0.5: Emotional Support (анализ эмоций ДО генерации) ===
+                # === УРОВЕНЬ 0.5: Emotional Support ===
                 # ===================================================================
-                emotion_context = ""  
+                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
+                emotion_context = ""
                 emotion_state = None
-                
+            
                 if (
                     self.emotional_support is not None
                     and EXPERIMENTAL_EMOTIONAL_SUPPORT_AVAILABLE
@@ -1762,7 +1684,7 @@ class LeyaOS:
                         emotion_state = await self.emotional_support.analyze_user_state(
                             emotion_stimulus_content
                         )
-                    
+                
                         if emotion_state and emotion_state.intensity > 0.5:
                             await self.emotional_support.update_drives_from_emotion(
                                 emotion_state, self.drives
@@ -1781,87 +1703,114 @@ class LeyaOS:
                                 f"Будь эмпатичной, но не навязчивой. "
                                 f"Если эмоция негативная — поддержи. Если позитивная — раздели радость."
                             )
-                    
-                        # Сохранение в память (async, не блокируем)
+                
                         if emotion_state and emotion_state.intensity > 0.6:
                             asyncio.create_task(
                                 self.emotional_support.save_emotion_to_memory(emotion_state)
                             )
                     except Exception as e:
                         logger.error(f"Ошибка EmotionalSupport: {e}", exc_info=True)
-                        # Graceful degradation — продолжаем без эмоционального контекста
 
                 # ===================================================================
-                # === УРОВЕНЬ 0.7: Homeostasis Integration (проверка критического дисбаланса) ===
+                # === УРОВЕНЬ 0.7: Homeostasis Integration ===
                 # ===================================================================
+                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
                 critical_homeostasis = await self._check_critical_homeostasis()
                 if critical_homeostasis["is_critical"]:
                     logger.info(
                         f"Критический гомеостаз обнаружен: "
                         f"{critical_homeostasis['critical_drives']}"
                     )
-                    # Сохраняем в stimulus для передачи в thinker
                     stimulus["homeostasis_urgency"] = critical_homeostasis
 
                 # ===================================================================
-                # === УРОВЕНЬ 0.8: Self-Model Integration (обратная связь) ===
+                # === УРОВЕНЬ 0.8: Self-Model Integration ===
                 # ===================================================================
-                # Self-model теперь влияет на драйвы и контекст
+                # ✅ Выполняется для ВСЕХ стимулов, включая user_message
                 await self._adjust_drives_from_self_model()
 
                 # ===================================================================
-                # === УРОВЕНЬ 1: CoreThinker (полный LLM-цикл) ===
+                # === УРОВЕНЬ 1: CoreThinker (LLM-цикл) ===
                 # ===================================================================
-                # Извлечение контекста из памяти
-                stimulus_content = stimulus.get("content", "")
-                memory_context = await self.memory.retrieve_context(
-                    query=stimulus_content, max_results=5
-                )
-
-                # Подготовка контекстов под новую сигнатуру CoreThinker.generate_plan
-                soul_context = await self.memory.get_self_model_context()
-
-                # drive_context теперь включает self_model
-                drive_context = self.drives.get_internal_state_prompt()
-                if self.self_model and len(self.self_model.strip()) > 20:
-                    drive_context = (
-                        f"{drive_context}\n\n"
-                        f"=== SELF-MODEL (самосознание) ===\n"
-                        f"{self.self_model[-1000:]}"
+                # ✅ ИСПРАВЛЕНО CRITICAL-7: Для user_message с готовым ответом
+                # используем существующий ответ, НЕ вызываем thinker повторно
+            
+                if is_user_message_with_classification:
+                    # Ответ уже есть из _handle_user_request (greeting, farewell, status, help,
+                    # или сгенерирован через _handle_via_thinker)
+                    cognitive_output = {
+                        "response": tool_context.get("response", ""),
+                        "internal_monologue": f"[User request: {tool_context.get('intent', 'UNKNOWN')}] ",
+                        "action_intent": "respond",
+                        "tool_call": "",
+                        "self_reflection": "",
+                        "source": "user_request",
+                        "intent": tool_context.get("intent", "UNKNOWN"),
+                        "confidence": tool_context.get("confidence", 0.0),
+                    }
+                
+                    if emotion_state:
+                        cognitive_output["emotion_state"] = {
+                            "emotion": getattr(emotion_state, "emotion", "unknown"),
+                            "intensity": emotion_state.intensity,
+                            "description": getattr(emotion_state, "description", ""),
+                        }
+                
+                    logger.debug(
+                        f"User message: используем существующий ответ из классификации "
+                        f"(intent={tool_context.get('intent')})"
+                    )
+            
+                else:
+                    # ✅ Полный цикл thinker для всех остальных случаев
+                    # (внутренние процессы, user_message без классификации, и т.д.)
+                
+                    stimulus_content = stimulus.get("content", "")
+                    memory_context = await self.memory.retrieve_context(
+                        query=stimulus_content, max_results=5
                     )
 
-                # добавляем emotion_context в drive_context
-                if emotion_context:
-                    drive_context = f"{drive_context}{emotion_context}"
-                    logger.debug("Emotional context интегрирован в drive_context")
+                    soul_context = await self.memory.get_self_model_context()
 
+                    drive_context = self.drives.get_internal_state_prompt()
+                    if self.self_model and len(self.self_model.strip()) > 20:
+                        drive_context = (
+                            f"{drive_context}\n\n"
+                            f"=== SELF-MODEL (самосознание) ===\n"
+                            f"{self.self_model[-1000:]}"
+                        )
 
-                # Преобразуем Engram'ы в список словарей (как ожидает thinker)
-                memory_context_for_thinker = [
-                    {
-                        "content": e.content,
-                        "metadata": getattr(e, "metadata", {}),
-                    }
-                    for e in memory_context
-                ]
+                    if emotion_context:
+                        drive_context = f"{drive_context}{emotion_context}"
+                        logger.debug("Emotional context интегрирован в drive_context")
 
-                # Генерация плана (новая чистая сигнатура)
-                cognitive_output = await self.thinker.generate_plan(
-                    stimulus=stimulus,
-                    soul_context=soul_context,
-                    drive_context=drive_context,
-                    memory_context=memory_context_for_thinker,
-                    tools=self.tools_description,  # list[dict] с описаниями инструментов
-                    tool_context=tool_context,
-                )
-                logger.info(
-                    f"Лея ответила: {cognitive_output.get('response', '')[:200]}..."
-                )
-                logger.debug(
-                    f"Внутренний монолог: {cognitive_output.get('internal_monologue', '')}"
-                )
+                    memory_context_for_thinker = [
+                        {
+                            "content": e.content,
+                            "metadata": getattr(e, "metadata", {}),
+                        }
+                        for e in memory_context
+                    ]
 
-                # Постобработка
+                    cognitive_output = await self.thinker.generate_plan(
+                        stimulus=stimulus,
+                        soul_context=soul_context,
+                        drive_context=drive_context,
+                        memory_context=memory_context_for_thinker,
+                        tools=self.tools_description,
+                        tool_context=tool_context,
+                    )
+                
+                    logger.info(
+                        f"Лея ответила: {cognitive_output.get('response', '')[:200]}..."
+                    )
+                    logger.debug(
+                        f"Внутренний монолог: {cognitive_output.get('internal_monologue', '')}"
+                    )
+
+                # ===================================================================
+                # Постобработка продолжается как обычно (без изменений ниже)
+                # ===================================================================
                 response = cognitive_output.get("response", "...")
                 internal_monologue = cognitive_output.get("internal_monologue", "")
                 action_intent = cognitive_output.get("action_intent", "none")
