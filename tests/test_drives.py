@@ -39,7 +39,18 @@ class TestDriveSystemInit:
     def test_init_default_config(self):
         """DriveSystem инициализируется с конфигом по умолчанию."""
         ds = DriveSystem()
-        assert len(ds.drives) == 7
+    
+        assert ds.config is not None
+        # ✅ ИСПРАВЛЕНО: теперь 9 драйвов (добавлены COMPETENCE и SECURITY)
+        assert len(ds.drives) == 9
+    
+        # Проверяем наличие всех типов драйвов
+        expected_drives = {
+            "curiosity", "connection", "autonomy", "competence", 
+            "security", "rest", "integrity", "creativity", "understanding"
+        }
+        actual_drives = {drive_type.value for drive_type in ds.drives.keys()}
+        assert actual_drives == expected_drives
 
     def test_initial_values(self, test_drives_config):
         """Начальные значения драйвов в разумных пределах."""
