@@ -470,8 +470,7 @@ class MemorySystem:
                     # Формируем расширенный список с учётом spreading
                     selected_ids = {e.id for e in selected}
                     extended_candidates: list[tuple[Engram, float]] = [
-                        (engram, score) for engram, score in candidates
-                        if engram.id in selected_ids
+                        (engram, score) for engram, score in candidates[:max_results]
                     ]
                 
                     # Добавляем связанные энграммы с их synaptic boost

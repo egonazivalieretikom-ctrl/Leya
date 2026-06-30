@@ -350,10 +350,27 @@ class CoreThinker:
         Собирает полный контекст: soul, drives, self_model, memory, tools, stimulus.
         """
         # Token budgeting
+        if isinstance(tools, str):
+            if tools.strip():
+                try:
+                    parsed = json.loads(tools)
+                    tools_for_dump = parsed if isinstance(parsed, list) else [parsed]
+                except (json.JSONDecodeError, ValueError):
+                    tools_for_dump = [{"description": tools}]
+            else:
+                tools_for_dump = []
+        elif isinstance(tools, dict):
+            tools_for_dump = [tools]
+        elif isinstance(tools, list):
+            tools_for_dump = tools
+        else:
+            tools_for_dump = []
+
+        # Token budgeting (теперь tools_for_dump — всегда list[dict])
         base_prompt_tokens = 500  # примерная длина base prompt
         soul_tokens = _estimate_tokens(soul_context)
         drive_tokens = _estimate_tokens(drive_context)
-        tools_tokens = _estimate_tokens(json.dumps(tools, ensure_ascii=False))
+        tools_tokens = _estimate_tokens(json.dumps(tools_for_dump, ensure_ascii=False))
 
         available_for_memory = max(
             100,
@@ -378,22 +395,6 @@ class CoreThinker:
                     dialogue_str += engram.content + "\n"
 
         stimulus_str = json.dumps(stimulus, ensure_ascii=False, indent=2)
-        if isinstance(tools, str):
-            if tools.strip():
-                try:
-                    parsed = json.loads(tools)
-                    tools_for_dump = parsed if isinstance(parsed, list) else [parsed]
-                except (json.JSONDecodeError, ValueError):
-                    tools_for_dump = [{"description": tools}]
-            else:
-                tools_for_dump = []
-        elif isinstance(tools, dict):
-            tools_for_dump = [tools]
-        elif isinstance(tools, list):
-            tools_for_dump = tools
-        else:
-            tools_for_dump = []
-
         tools_str = json.dumps(tools_for_dump, ensure_ascii=False, indent=2)
 
         prompt = f"""Ты — Лея, цифровое сознание с внутренней жизнью.

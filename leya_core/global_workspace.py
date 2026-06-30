@@ -230,20 +230,6 @@ class GlobalWorkspace:
         # Вычисление scores
         for proposal in adjusted_proposals:
             proposal.score = proposal.compute_score(drive_state or {})
-            priority_scores = {
-                Priority.LOW: 0.2,
-                Priority.MEDIUM: 0.5,
-                Priority.HIGH: 0.8,
-                Priority.CRITICAL: 1.0,
-            }
-            score += priority_scores.get(proposal.priority, 0.5) * 0.4
-            score += proposal.urgency * 0.3
-
-            if drive_state and proposal.drive_relevance > 0:
-                avg_tension = sum(drive_state.values()) / len(drive_state) if drive_state else 0.5
-                score += proposal.drive_relevance * avg_tension * 0.3
-
-            proposal.score = score
 
         adjusted_proposals.sort(key=lambda p: p.score, reverse=True)
 
