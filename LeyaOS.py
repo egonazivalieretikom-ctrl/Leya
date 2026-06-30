@@ -1142,22 +1142,23 @@ class LeyaOS:
             result["response"] = response
 
             # Сохранение диалогового хода в память
-            try:
-                await self.memory.store_perception(
-                    content=f"Пользователь: {user_input}\nЛея: {response}",
-                    memory_type=MemoryType.EPISODIC,
-                    emotional_boost=0.65,
-                    metadata={
-                        "type": "dialogue_turn",
-                        "user_input": user_input,
-                        "response": response,
-                        "timestamp": time.time()
-                    }
-                )
-            except (LeyaMemoryError, LeyaEmbeddingError) as e:
-                logger.warning(f"Не удалось сохранить диалоговый ход в память: {type(e).__name__}: {e}")
-            except (LeyaAtomicWriteError, LeyaConfigError) as e:
-                logger.warning(f"Ошибка персистентности при сохранении диалога: {type(e).__name__}: {e}")
+            if response and response.strip():
+                try:
+                    await self.memory.store_perception(
+                        content=f"Пользователь: {user_input}\nЛея: {response}",
+                        memory_type=MemoryType.EPISODIC,
+                        emotional_boost=0.65,
+                        metadata={
+                            "type": "dialogue_turn",
+                            "user_input": user_input,
+                            "response": response,
+                            "timestamp": time.time()
+                        }
+                    )
+                except (LeyaMemoryError, LeyaEmbeddingError) as e:
+                    logger.warning(f"Не удалось сохранить диалоговый ход в память: {type(e).__name__}: {e}")
+                except (LeyaAtomicWriteError, LeyaConfigError) as e:
+                    logger.warning(f"Ошибка персистентности при сохранении диалога: {type(e).__name__}: {e}")
 
         except (LeyaLLMError, LeyaMemoryError, LeyaToolError) as e:
             logger.error(f"Ошибка обработки intent {classification.intent}: {type(e).__name__}: {e}", exc_info=True)
@@ -1704,6 +1705,15 @@ class LeyaOS:
                 # ===================================================================
                 # ✅ Выполняется для ВСЕХ стимулов, включая user_message
                 await self._adjust_drives_from_self_model()
+
+                drive_state_after = {
+                    d.type.value: {
+                        "current": d.current,
+                        "tension": d.tension,
+                        "target": d.target,
+                    }
+                    for d in self.drives.drives.values()
+                }
 
                 # ===================================================================
                 # === УРОВЕНЬ 1: CoreThinker (LLM-цикл) ===
@@ -2378,7 +2388,7 @@ class LeyaOS:
                 predicted_state = self.drives.get_predicted_disbalance()
             
                 # ИСПРАВЛЕНО: убран await (get_recent_episodes теперь sync)
-                recent_episodes = self.memory.get_recent_episodes(limit=5)
+                recent_episodes = await self.memory.get_recent_episodes(limit=5)
 
                 goal = await self.homeostasis.generate_goal(
                     drive_state=drive_state,
