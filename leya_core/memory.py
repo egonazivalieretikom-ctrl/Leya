@@ -787,6 +787,25 @@ class MemorySystem:
             return []
 
     async def _save_state(self) -> None:
+        """Атомарное сохранение состояния памяти в JSON + HMAC.
+
+        Биологическая модель:
+        - Сохранение всех энграмм и синапсов
+        - HMAC-SHA256 подпись для целостности
+        - Атомарная запись через tempfile + os.replace
+
+        Обработка исключений (строго по специфичности):
+        1. OSError (включая PermissionError, IOError) → LeyaAtomicWriteError
+        2. TypeError / ValueError / OverflowError (ошибки json.dump) → LeyaAtomicWriteError
+        3. LeyaConfigError / LeyaMemoryError / LeyaAtomicWriteError → re-raise
+        4. asyncio.CancelledError / KeyboardInterrupt / SystemExit → re-raise
+        5. Exception → logger.exception() + raise БЕЗ обёртки (fail loud)
+
+        Raises:
+            LeyaAtomicWriteError: Ошибка записи файла или сериализации JSON
+            LeyaConfigError: Отсутствие/слабость HMAC ключа (если не отключён)
+            LeyaMemoryError: Другие ошибки памяти
+        """
         if not hasattr(self, "state_path") or self.state_path is None:
             if hasattr(self, "memory_config") and self.memory_config is not None:
                 brain_dir = getattr(self.memory_config, "brain_dir", "./leya_brain")
@@ -799,8 +818,11 @@ class MemorySystem:
         state_path = Path(self.state_path).expanduser().resolve()
         state_path.parent.mkdir(parents=True, exist_ok=True)
 
-        tmp_path = None
+        tmp_path: Path | None = None
         try:
+            # ===================================================================
+            # 1. Формирование payload
+            # ===================================================================
             payload = {
                 "__version__": MEMORY_STATE_VERSION,
                 "data": {
@@ -810,17 +832,40 @@ class MemorySystem:
                 },
             }
 
+            # ===================================================================
+            # 2. Атомарная запись во временный файл
+            # ===================================================================
             fd, tmp_path_str = tempfile.mkstemp(
                 prefix=state_path.name + ".", suffix=".tmp", dir=str(state_path.parent)
             )
             tmp_path = Path(tmp_path_str)
 
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except (TypeError, ValueError, OverflowError) as json_exc:
+                # Ошибки сериализации JSON (несериализуемый объект, NaN/Inf и т.п.)
+                if tmp_path is not None and tmp_path.exists():
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                raise LeyaAtomicWriteError(
+                    f"Ошибка сериализации JSON при сохранении состояния памяти "
+                    f"[path='{state_path}', error='{json_exc}']",
+                    context={
+                        "path": str(state_path),
+                        "error": str(json_exc),
+                        "error_type": type(json_exc).__name__,
+                    },
+                ) from json_exc
 
-            if not getattr(self, '_disable_hmac_check', False):
+            # ===================================================================
+            # 3. HMAC-подпись (если не отключена)
+            # ===================================================================
+            if not getattr(self, "_disable_hmac_check", False):
                 key = self._get_hmac_key()
                 signature = self._compute_hmac(tmp_path, key)
                 (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(
@@ -835,6 +880,9 @@ class MemorySystem:
                         pass
                 logger.debug("HMAC подпись пропущена (тестовый режим)")
 
+            # ===================================================================
+            # 4. Атомарная замена (с fallback для cross-device)
+            # ===================================================================
             try:
                 os.replace(tmp_path, state_path)
             except OSError as ose:
@@ -844,36 +892,58 @@ class MemorySystem:
                 else:
                     raise
 
-        except (OSError, IOError, PermissionError) as exc:
+        # ===================================================================
+        # ОБРАБОТКА ИСКЛЮЧЕНИЙ — СТРОГО ПО СПЕЦИФИЧНОСТИ
+        # ===================================================================
+
+        # 1. Файловые ошибки (включая PermissionError, IOError — подклассы OSError)
+        #    read-only директория, нет места на диске, недоступен путь и т.п.
+        except OSError as exc:
             if tmp_path is not None and tmp_path.exists():
                 try:
                     tmp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
             raise LeyaAtomicWriteError(
-                f"Сбой атомарной записи состояния памяти [path='{state_path}', error='{exc}']",
-                context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
+                f"Сбой атомарной записи состояния памяти "
+                f"[path='{state_path}', error='{exc}']",
+                context={
+                    "path": str(state_path),
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "errno": getattr(exc, "errno", None),
+                },
             ) from exc
 
+        # 2. Наши специфичные исключения — пробрасываем без обёртки
         except (LeyaConfigError, LeyaMemoryError, LeyaAtomicWriteError):
             raise
 
-        except Exception as exc:
-            if isinstance(exc, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
-                raise
+        # 3. BaseException-подклассы — пробрасываем немедленно
+        #    (Ctrl+C, отмена задачи, выход из процесса)
+        except asyncio.CancelledError:
+            raise
+        except KeyboardInterrupt:
+            raise
+        except SystemExit:
+            raise
 
+        # 4. Last resort: НЕОЖИДАННЫЕ исключения
+        #    ТОЛЬКО логирование + немедленный re-raise БЕЗ обёртки.
+        #    Это позволяет видеть реальный тип исключения и не маскировать баги.
+        except Exception as exc:
+            logger.exception(
+                "Unexpected error in memory._save_state",
+                extra={"context": {"path": str(state_path)}},
+            )
+            # cleanup tmp_path
             if tmp_path is not None and tmp_path.exists():
                 try:
                     tmp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-            raise LeyaAtomicWriteError(
-                f"Неожиданная ошибка при сохранении состояния памяти [path='{state_path}']",
-                context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
-            ) from exc
-
-    async def save_state(self) -> None:
-        await self._save_state()
+            # re-raise БЕЗ обёртки — fail loud
+            raise
 
     async def _load_state(self) -> None:
         if not hasattr(self, "state_path") or self.state_path is None:
