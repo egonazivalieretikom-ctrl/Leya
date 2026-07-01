@@ -14,7 +14,7 @@ import json
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
+from unittest.mock import AsyncMock, MagicMock 
 from leya_core.exceptions import LeyaJSONParseError
 from leya_core.thinker import (
     ActionIntent,

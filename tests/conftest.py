@@ -145,64 +145,48 @@ def mock_llm_response():
 
 @pytest.fixture
 def mock_llm_backend(mock_llm_response):
-    """Async mock для LLM-бэкенда, совместимый с LLMBackend Protocol."""
-    mock = MagicMock()
-
-    async def _chat(prompt: str, require_json: bool = False, **kwargs) -> str:
-        return mock_llm_response
-
-    async def _generate(prompt: str, system: str | None = None,
-                        max_tokens: int | None = None, require_json: bool = False,
-                        timeout: float | None = None) -> str:
-        return mock_llm_response
-
-    async def _close() -> None:
-        pass
-
-    def _health_check() -> bool:
-        return True
-
-    def _get_status() -> dict:
-        return {"backend_type": "MockLLMBackend", "is_available": True}
-
-    mock.chat = AsyncMock(side_effect=_chat)
-    mock.generate = AsyncMock(side_effect=_generate)
-    mock.close = AsyncMock(side_effect=_close)
-    mock.health_check = MagicMock(side_effect=_health_check)
-    mock.get_status = MagicMock(side_effect=_get_status)
-    type(mock).is_available = property(lambda self: True)
-    return mock
+    """
+    Настоящий класс, наследующийся от LLMBackend (не MagicMock).
+    """
+    from leya_core.llm_backend import LLMBackend
+    
+    class MockLLMBackend(LLMBackend):
+        async def chat(self, prompt: str, require_json: bool = False, **kwargs) -> str:
+            return mock_llm_response
+        
+        async def generate(self, prompt: str, **kwargs) -> str:
+            return mock_llm_response
+        
+        def health_check(self) -> bool:
+            return True
+        
+        @property
+        def is_available(self) -> bool:
+            return True
+    
+    return MockLLMBackend()
 
 @pytest.fixture
 def failing_llm_backend():
-    """Async mock для LLM, который всегда падает с LeyaLLMError."""
+    """Настоящий класс, наследующийся от LLMBackend, который всегда падает."""
+    from leya_core.llm_backend import LLMBackend
     from leya_core.exceptions import LeyaLLMError
-    mock = MagicMock()
-
-    async def _chat(prompt: str, require_json: bool = False, **kwargs) -> str:
-        raise LeyaLLMError("LLM недоступна", context={"test": True})
-
-    async def _generate(prompt: str, system: str | None = None,
-                        max_tokens: int | None = None, require_json: bool = False,
-                        timeout: float | None = None) -> str:
-        raise LeyaLLMError("LLM недоступна", context={"test": True})
-
-    async def _close() -> None:
-        pass
-
-    def _health_check() -> bool:
-        return False
-
-    def _get_status() -> dict:
-        return {"backend_type": "FailingLLMBackend", "is_available": False}
-
-    mock.chat = AsyncMock(side_effect=_chat)
-    mock.generate = AsyncMock(side_effect=_generate)
-    mock.close = AsyncMock(side_effect=_close)
-    mock.health_check = MagicMock(side_effect=_health_check)
-    mock.get_status = MagicMock(side_effect=_get_status)
-    type(mock).is_available = property(lambda self: False)
-    return mock
+    
+    class FailingLLMBackend(LLMBackend):
+        async def chat(self, prompt: str, require_json: bool = False, **kwargs) -> str:
+            raise LeyaLLMError("LLM недоступна", context={"test": True})
+        
+        async def generate(self, prompt: str, **kwargs) -> str:
+            raise LeyaLLMError("LLM недоступна", context={"test": True})
+        
+        def health_check(self) -> bool:
+            return False
+        
+        @property
+        def is_available(self) -> bool:
+            return False
+    
+    return FailingLLMBackend()
 
 @pytest.fixture
 def fake_llm_backend():

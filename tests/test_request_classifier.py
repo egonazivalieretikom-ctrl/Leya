@@ -204,8 +204,8 @@ class TestSemanticCache:
                     "intent": "GREETING",
                     "confidence": 0.95,
                     "topic": None,
+                    "similarity": 0.92,  # ← Перенесено внутрь metadata
                 },
-                "similarity": 0.92,
             }
         ]
 

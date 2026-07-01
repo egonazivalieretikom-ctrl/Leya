@@ -82,9 +82,6 @@ HEURISTIC_PATTERNS: dict[UserIntent, list[tuple[str, float]]] = {
     UserIntent.FORGET: [
         (r"\b(забудь|удали|стереть|не\s+помни)\b", 0.9),
     ],
-    UserIntent.STATUS: [
-        (r"\b(как\s+ты|как\s+себя\s+чувствуешь|какое\s+состояние|что\s+делаешь|как\s+дела)\b", 0.85),
-    ],
     UserIntent.HELP: [
         (r"\b(помоги|помощь|help|что\s+ты\s+умеешь|как\s+тобой\s+управлять)\b", 0.9),
     ],
@@ -181,7 +178,7 @@ class RequestClassifier:
         # Уровень 1: Проверка кэша (самый быстрый путь)
         cache_result = await self._cache_lookup(user_input)
         if cache_result:
-            logger.debug(f"Найдено в кэше: {cache_result.intent}")
+            logger.debug(f"Cache hit: {cache_result.intent}")
             return cache_result
 
         # Уровень 2: Быстрая эвристика
@@ -350,15 +347,11 @@ class RequestClassifier:
     def _extract_distance(self, item) -> float | None:
         """Извлечение distance из Engram или dict.
     
-        Поддерживает несколько форматов возврата из memory.retrieve_context():
-        - Engram с атрибутом .distance
-        - Engram с metadata["distance"]
-        - dict с ключом "distance"
-    
-        Returns:
-            float distance или None, если недоступен
+        Поддерживает оба формата:
+        - distance (ChromaDB)
+        - similarity (mock в тестах)
         """
-        # Вариант 1: Engram с атрибутом distance (предпочтительный)
+        # Вариант 1: Engram с атрибутом distance
         if hasattr(item, "distance"):
             distance = item.distance
             if isinstance(distance, (int, float)):
@@ -369,12 +362,22 @@ class RequestClassifier:
             distance = item.metadata.get("distance")
             if isinstance(distance, (int, float)):
                 return float(distance)
+        
+            # Поддержка similarity (конвертация в distance)
+            similarity = item.metadata.get("similarity")
+            if isinstance(similarity, (int, float)):
+                return 1.0 - float(similarity)
     
-        # Вариант 3: item — это dict (fallback для совместимости)
+        # Вариант 3: item — это dict
         if isinstance(item, dict):
             distance = item.get("distance")
             if isinstance(distance, (int, float)):
                 return float(distance)
+        
+            # Поддержка similarity (конвертация в distance)
+            similarity = item.get("similarity")
+            if isinstance(similarity, (int, float)):
+                return 1.0 - float(similarity)
     
         return None
 
