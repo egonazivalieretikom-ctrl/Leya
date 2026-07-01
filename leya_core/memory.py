@@ -41,27 +41,77 @@ MEMORY_STATE_VERSION: int = 3
 
 @dataclass
 class SyncReport:
-    added_to_chroma: int = 0
-    updated_in_chroma: int = 0
-    removed_from_chroma: int = 0
-    errors: int = 0
+    """Отчёт о синхронизации in-memory ↔ ChromaDB.
+
+    Биологическая модель: аналог отчёта о консолидации памяти —
+    что добавлено, что удалено, какие ошибки возникли.
+
+    Поля:
+        added: количество энграмм, добавленных в ChromaDB
+        updated: количество энграмм, обновлённых в ChromaDB
+        removed: количество осиротевших энграмм, удалённых из ChromaDB
+        errors: список конкретных сообщений об ошибках (не счётчик!)
+        timestamp: момент завершения синхронизации
+        duration_ms: длительность операции (для диагностики)
+    """
+
+    added: int = 0
+    updated: int = 0
+    removed: int = 0
+    errors: list[str] = field(default_factory=list)
+    timestamp: datetime = field(default_factory=datetime.now)
     duration_ms: float = 0.0
 
     @property
     def total_discrepancies(self) -> int:
-        return self.added_to_chroma + self.removed_from_chroma
+        """Общее количество расхождений (добавленные + удалённые)."""
+        return self.added + self.removed
 
     @property
     def is_clean(self) -> bool:
-        return self.total_discrepancies == 0 and self.errors == 0
+        """True если синхронизация прошла без расхождений и ошибок."""
+        return self.total_discrepancies == 0 and not self.errors
+
+    @property
+    def error_count(self) -> int:
+        """Количество ошибок (для обратной совместимости с логикой подсчёта)."""
+        return len(self.errors)
+
+    def merge(self, other: "SyncReport") -> None:
+        """Агрегация другого отчёта в текущий (in-place).
+
+        Используется в _sync_chroma_from_memory для объединения
+        отчётов episodic и semantic коллекций.
+        """
+        self.added += other.added
+        self.updated += other.updated
+        self.removed += other.removed
+        self.errors.extend(other.errors)
+        self.duration_ms += other.duration_ms
+        # timestamp остаётся от текущего отчёта (момент завершения агрегации)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Сериализация для логирования и веб-интерфейса."""
+        return {
+            "added": self.added,
+            "updated": self.updated,
+            "removed": self.removed,
+            "errors": list(self.errors),
+            "error_count": len(self.errors),
+            "timestamp": self.timestamp.isoformat(),
+            "duration_ms": round(self.duration_ms, 2),
+            "total_discrepancies": self.total_discrepancies,
+            "is_clean": self.is_clean,
+        }
 
     def __str__(self) -> str:
         return (
-            f"SyncReport(added={self.added_to_chroma}, "
-            f"updated={self.updated_in_chroma}, "
-            f"removed={self.removed_from_chroma}, "
-            f"errors={self.errors}, "
-            f"duration={self.duration_ms:.1f}ms)"
+            f"SyncReport(added={self.added}, "
+            f"updated={self.updated}, "
+            f"removed={self.removed}, "
+            f"errors={len(self.errors)}, "
+            f"duration={self.duration_ms:.1f}ms, "
+            f"timestamp={self.timestamp.isoformat()})"
         )
 
 
@@ -1028,6 +1078,10 @@ class MemorySystem:
         collection,
         memory_type: MemoryType,
     ) -> SyncReport:
+        """Синхронизация одной коллекции (episodic или semantic).
+
+        Возвращает SyncReport с конкретными сообщениями об ошибках.
+        """
         report = SyncReport()
         start_time = time.time()
 
@@ -1037,6 +1091,9 @@ class MemorySystem:
             if getattr(engram, "memory_type", None) == memory_type
         }
 
+        # ===================================================================
+        # Случай: в памяти нет энграмм этого типа — удаляем осиротевшие в Chroma
+        # ===================================================================
         if not type_engrams:
             try:
                 chroma_data = await asyncio.to_thread(collection.get)
@@ -1045,16 +1102,24 @@ class MemorySystem:
                     BATCH_SIZE = 500
                     ids_list = list(chroma_ids)
                     for i in range(0, len(ids_list), BATCH_SIZE):
-                        batch = ids_list[i: i + BATCH_SIZE]
+                        batch = ids_list[i : i + BATCH_SIZE]
                         await asyncio.to_thread(collection.delete, ids=batch)
-                    report.removed_from_chroma = len(chroma_ids)
+                    report.removed = len(chroma_ids)
             except Exception as exc:
-                logger.error(f"Ошибка удаления осиротевших {memory_type.value}: {exc}", exc_info=True)
-                report.errors += 1
+                error_msg = (
+                    f"Ошибка удаления осиротевших {memory_type.value}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                logger.error(error_msg, exc_info=True)
+                report.errors.append(error_msg)
             finally:
                 report.duration_ms = (time.time() - start_time) * 1000
+                report.timestamp = datetime.now()
             return report
 
+        # ===================================================================
+        # Основной случай: синхронизация in-memory ↔ ChromaDB
+        # ===================================================================
         try:
             chroma_data = await asyncio.to_thread(collection.get)
             chroma_ids = set(chroma_data.get("ids", [])) if chroma_data else set()
@@ -1064,12 +1129,15 @@ class MemorySystem:
             ids_to_update = in_memory_ids & chroma_ids
             ids_to_remove = chroma_ids - in_memory_ids
 
+            # -------------------------------------------------------------------
+            # Upsert: добавление + обновление
+            # -------------------------------------------------------------------
             if in_memory_ids:
                 BATCH_SIZE = 500
                 ids_list = list(in_memory_ids)
 
                 for i in range(0, len(ids_list), BATCH_SIZE):
-                    batch_ids = ids_list[i: i + BATCH_SIZE]
+                    batch_ids = ids_list[i : i + BATCH_SIZE]
                     batch_engrams = [type_engrams[eid] for eid in batch_ids]
 
                     batch_documents: list[str] = []
@@ -1081,12 +1149,23 @@ class MemorySystem:
                         if getattr(engram, "retention_strength", 1.0) < 0.05:
                             continue
                         try:
-                            emb = await asyncio.to_thread(self._generate_embedding, engram.content)
-                        except Exception:
-                            report.errors += 1
+                            emb = await asyncio.to_thread(
+                                self._generate_embedding, engram.content
+                            )
+                        except Exception as emb_exc:
+                            error_msg = (
+                                f"Ошибка генерации эмбеддинга для {memory_type.value} "
+                                f"engram_id={engram.id[:8]}: "
+                                f"{type(emb_exc).__name__}: {emb_exc}"
+                            )
+                            report.errors.append(error_msg)
                             continue
                         if emb is None or len(emb) == 0:
-                            report.errors += 1
+                            error_msg = (
+                                f"Пустой эмбеддинг для {memory_type.value} "
+                                f"engram_id={engram.id[:8]}"
+                            )
+                            report.errors.append(error_msg)
                             continue
 
                         batch_documents.append(engram.content)
@@ -1096,12 +1175,22 @@ class MemorySystem:
                         batch_metadatas.append(
                             {
                                 "id": engram.id,
-                                "memory_type": getattr(engram, "memory_type", memory_type).value,
+                                "memory_type": getattr(
+                                    engram, "memory_type", memory_type
+                                ).value,
                                 "timestamp": getattr(engram, "timestamp", 0),
-                                "retention_strength": getattr(engram, "retention_strength", 0.0),
-                                "emotional_boost": getattr(engram, "emotional_boost", 0.0),
-                                "retrieval_count": getattr(engram, "retrieval_count", 0),
-                                "consolidation_level": getattr(engram, "consolidation_level", 0),
+                                "retention_strength": getattr(
+                                    engram, "retention_strength", 0.0
+                                ),
+                                "emotional_boost": getattr(
+                                    engram, "emotional_boost", 0.0
+                                ),
+                                "retrieval_count": getattr(
+                                    engram, "retrieval_count", 0
+                                ),
+                                "consolidation_level": getattr(
+                                    engram, "consolidation_level", 0
+                                ),
                             }
                         )
 
@@ -1122,78 +1211,123 @@ class MemorySystem:
                             embeddings=batch_embeddings,
                             metadatas=batch_metadatas,
                         )
-                    except Exception as exc:
-                        report.errors += 1
+                    except Exception as upsert_exc:
+                        error_msg = (
+                            f"Сбой upsert в ChromaDB ({memory_type.value}): "
+                            f"{type(upsert_exc).__name__}: {upsert_exc}"
+                        )
+                        report.errors.append(error_msg)
                         raise LeyaMemoryError(
                             f"Сбой upsert в ChromaDB ({memory_type.value})",
-                            context={"error": str(exc)},
-                        ) from exc
+                            context={"error": str(upsert_exc)},
+                        ) from upsert_exc
 
-                report.added_to_chroma = len(ids_to_add)
-                report.updated_in_chroma = len(ids_to_update)
+                report.added = len(ids_to_add)
+                report.updated = len(ids_to_update)
 
+            # -------------------------------------------------------------------
+            # Удаление осиротевших записей
+            # -------------------------------------------------------------------
             if ids_to_remove:
                 BATCH_SIZE = 500
                 rem_list = list(ids_to_remove)
                 for i in range(0, len(rem_list), BATCH_SIZE):
-                    batch = rem_list[i: i + BATCH_SIZE]
+                    batch = rem_list[i : i + BATCH_SIZE]
                     try:
                         await asyncio.to_thread(collection.delete, ids=batch)
-                    except Exception:
-                        report.errors += 1
-                report.removed_from_chroma = len(ids_to_remove)
+                    except Exception as del_exc:
+                        error_msg = (
+                            f"Ошибка удаления осиротевших {memory_type.value} "
+                            f"(batch_size={len(batch)}): "
+                            f"{type(del_exc).__name__}: {del_exc}"
+                        )
+                        report.errors.append(error_msg)
+                report.removed = len(ids_to_remove)
 
+        except LeyaMemoryError:
+            # Специфичные ошибки памяти — пробрасываем, но уже залогированы
+            raise
         except Exception as exc:
-            report.errors += 1
-            logger.error(f"Критическая ошибка sync {memory_type.value}: {exc}", exc_info=True)
+            error_msg = (
+                f"Критическая ошибка sync {memory_type.value}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            logger.error(error_msg, exc_info=True)
+            report.errors.append(error_msg)
         finally:
             report.duration_ms = (time.time() - start_time) * 1000
+            report.timestamp = datetime.now()
 
         return report
 
     async def _sync_chroma_from_memory(self) -> SyncReport:
+        """Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
+
+        Агрегирует результаты синхронизации эпизодической и семантической памяти
+        в единый SyncReport через метод merge().
+
+        Returns:
+            SyncReport с суммарной информацией о синхронизации,
+            включая timestamp завершения и список всех ошибок.
+        """
         logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
         total_report = SyncReport()
         start_time = time.time()
 
+        # ===================================================================
+        # 1. Синхронизация эпизодической памяти
+        # ===================================================================
         try:
             report_episodic = await self._sync_collection(
                 collection=self.episodic_collection,
                 memory_type=MemoryType.EPISODIC,
             )
-            total_report.added_to_chroma += report_episodic.added_to_chroma
-            total_report.updated_in_chroma += report_episodic.updated_in_chroma
-            total_report.removed_from_chroma += report_episodic.removed_from_chroma
-            total_report.errors += report_episodic.errors
+            total_report.merge(report_episodic)
             logger.info(f"Sync episodic: {report_episodic}")
         except Exception as exc:
-            logger.error(f"Сбой sync episodic: {exc}", exc_info=True)
-            total_report.errors += 1
+            error_msg = (
+                f"Сбой sync episodic: {type(exc).__name__}: {exc}"
+            )
+            logger.error(error_msg, exc_info=True)
+            total_report.errors.append(error_msg)
 
+        # ===================================================================
+        # 2. Синхронизация семантической памяти
+        # ===================================================================
         try:
             report_semantic = await self._sync_collection(
                 collection=self.semantic_collection,
                 memory_type=MemoryType.SEMANTIC,
             )
-            total_report.added_to_chroma += report_semantic.added_to_chroma
-            total_report.updated_in_chroma += report_semantic.updated_in_chroma
-            total_report.removed_from_chroma += report_semantic.removed_from_chroma
-            total_report.errors += report_semantic.errors
+            total_report.merge(report_semantic)
             logger.info(f"Sync semantic: {report_semantic}")
         except Exception as exc:
-            logger.error(f"Сбой sync semantic: {exc}", exc_info=True)
-            total_report.errors += 1
+            error_msg = (
+                f"Сбой sync semantic: {type(exc).__name__}: {exc}"
+            )
+            logger.error(error_msg, exc_info=True)
+            total_report.errors.append(error_msg)
 
+        # ===================================================================
+        # 3. Финализация
+        # ===================================================================
         total_report.duration_ms = (time.time() - start_time) * 1000
+        total_report.timestamp = datetime.now()
 
         logger.info(
             f"✅ Полная синхронизация завершена: "
-            f"added={total_report.added_to_chroma}, "
-            f"updated={total_report.updated_in_chroma}, "
-            f"removed={total_report.removed_from_chroma}, "
-            f"errors={total_report.errors}, "
+            f"added={total_report.added}, "
+            f"updated={total_report.updated}, "
+            f"removed={total_report.removed}, "
+            f"errors={len(total_report.errors)}, "
             f"duration={total_report.duration_ms:.1f}ms"
         )
+
+        if total_report.errors:
+            logger.warning(
+                f"Sync завершился с {len(total_report.errors)} ошибкой(ами). "
+                f"Первые 3: {total_report.errors[:3]}"
+            )
 
         return total_report
 
