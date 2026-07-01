@@ -1,17 +1,18 @@
-# ============================================
-# LeyaOS — Git Ignore (v2.0)
-# ============================================
+============================================
+LeyaOS — Git Ignore (v3.0, усилено 1 июля 2026)
+============================================
 
-# --- Python ---
+--- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg
+*.egg-info/
+*.whl
 .Python
 build/
 dist/
-*.egg-info/
-*.egg
 pip-log.txt
 pip-delete-this-directory.txt
 .mypy_cache/
@@ -20,14 +21,16 @@ pip-delete-this-directory.txt
 htmlcov/
 .coverage
 .coverage.*
+.cache/
 
-# --- Virtual environments ---
+--- Virtual environments ---
 venv/
+.venv/
 ENV/
 env/
-.venv/
+.envrc
 
-# --- IDE / editors ---
+--- IDE / editors ---
 .vscode/
 .vs/
 .idea/
@@ -37,37 +40,54 @@ env/
 .DS_Store
 Thumbs.db
 
-# --- LeyaOS: состояние мозга (КРИТИЧНО) ---
+--- LeyaOS: состояние мозга (КРИТИЧНО) ---
 leya_brain/
 *.pkl
 *.pkl.tmp
 *.pkl.hmac
+*.hmac
 chroma.sqlite3
 chroma.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
+chroma_data/
 
-# --- LeyaOS: секреты и конфигурация окружения ---
+--- LeyaOS: секреты и конфигурация окружения ---
+# Игнорируем все .env файлы, КРОМЕ .env.example (шаблон для коммита)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.key
 *.pem
 
-# --- LeyaOS: логи ---
+--- LeyaOS: логи ---
 leya_consciousness.log
 leya_consciousness.log.*
 *.log
 
-# --- LeyaOS: бэкапы и временные файлы ---
+--- LeyaOS: бэкапы и временные файлы ---
 scripts/backup/
 backups/
 *.bak
 *.tmp
 *.temp
+*.pid
+*.seed
+*.pid.lock
 
-# --- Ollama локальные кэши (если случайно создаются в проекте) ---
+--- Ollama локальные кэши (если случайно создаются в проекте) ---
 ollama_cache/
 
-# --- Node (если появится frontend-сборка) ---
+--- Node (если появится frontend-сборка) ---
 node_modules/
 package-lock.json
 yarn.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+
+--- Прочее ---
+uv.lock
+poetry.lock
+dump.rdb
