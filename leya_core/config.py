@@ -90,7 +90,6 @@ class OllamaConfig:
 @dataclass
 class MemoryConfig:
     """Конфигурация системы памяти."""
-
     brain_dir: str = "./leya_brain"
     embedding_model: str = "all-MiniLM-L6-v2"
     consolidation_threshold: float = 0.15
@@ -112,6 +111,9 @@ class MemoryConfig:
     # Новая JSON persistence (hardening)
     hmac_key: str = ""
     state_version: int = 1
+    
+    # Флаг небезопасного режима (передаётся из LeyaConfig)
+    unsafe_mode: bool = False
 
     def __post_init__(self) -> None:
         from .exceptions import LeyaConfigError
@@ -139,6 +141,20 @@ class MemoryConfig:
                 "metabolism_interval_seconds должен быть > 0",
                 context={"value": self.metabolism_interval_seconds},
             )
+            
+        # --- Жёсткая валидация HMAC-ключа ---
+        if not self.hmac_key or len(str(self.hmac_key)) < 32:
+            if self.unsafe_mode:
+                logger.warning(
+                    "КРИТИЧНО: LEYA_STATE_HMAC_KEY отсутствует, пустой или короче 32 символов. "
+                    "Работа в unsafe_mode! Использование в production запрещено."
+                )
+            else:
+                raise LeyaConfigError(
+                    "LEYA_STATE_HMAC_KEY отсутствует, пустой или короче 32 символов. "
+                    "Это критическая уязвимость. Установите LEYA_UNSAFE_MODE=1 в .env для игнорирования (не рекомендуется).",
+                    context={"key_length": len(str(self.hmac_key)) if self.hmac_key else 0}
+                )
 
 
 @dataclass
@@ -384,7 +400,6 @@ class ExperimentalConfig:
 @dataclass
 class LeyaConfig:
     """Главная конфигурация системы Леи."""
-
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     drives: DrivesConfig = field(default_factory=DrivesConfig)
@@ -397,6 +412,9 @@ class LeyaConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     soul: SoulConfig = field(default_factory=SoulConfig)
     experimental: ExperimentalConfig = field(default_factory=ExperimentalConfig)
+    
+    # Глобальный флаг небезопасного режима
+    unsafe_mode: bool = False
 
     @classmethod
     def from_env(cls) -> "LeyaConfig":
@@ -408,188 +426,97 @@ class LeyaConfig:
         try:
             try:
                 from dotenv import load_dotenv
-
                 load_dotenv()
                 logger.info("✅ .env загружен через python-dotenv")
             except ImportError:
                 logger.warning("python-dotenv не установлен. Используем os.environ напрямую")
 
+            # Парсим unsafe_mode в самом начале, чтобы передать в подконфиги
+            unsafe_mode = _parse_bool(os.environ.get("LEYA_UNSAFE_MODE"), False)
+
             ollama = OllamaConfig(
                 base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
                 model=os.environ.get("LEYA_MODEL", "qwen2.5:14b-instruct-q3_K_M"),
                 timeout=_parse_int(os.environ.get("OLLAMA_TIMEOUT"), 180, "OLLAMA_TIMEOUT"),
-                temperature=_parse_float(
-                    os.environ.get("OLLAMA_TEMPERATURE"), 0.7, "OLLAMA_TEMPERATURE"
-                ),
+                temperature=_parse_float(os.environ.get("OLLAMA_TEMPERATURE"), 0.7, "OLLAMA_TEMPERATURE"),
                 top_p=_parse_float(os.environ.get("OLLAMA_TOP_P"), 0.9, "OLLAMA_TOP_P"),
                 top_k=_parse_int(os.environ.get("OLLAMA_TOP_K"), 40, "OLLAMA_TOP_K"),
-                max_tokens=_parse_int(
-                    os.environ.get("OLLAMA_MAX_TOKENS"), 1024, "OLLAMA_MAX_TOKENS"
-                ),
-                repeat_penalty=_parse_float(
-                    os.environ.get("OLLAMA_REPEAT_PENALTY"), 1.1, "OLLAMA_REPEAT_PENALTY"
-                ),
+                max_tokens=_parse_int(os.environ.get("OLLAMA_MAX_TOKENS"), 1024, "OLLAMA_MAX_TOKENS"),
+                repeat_penalty=_parse_float(os.environ.get("OLLAMA_REPEAT_PENALTY"), 1.1, "OLLAMA_REPEAT_PENALTY"),
             )
 
             memory = MemoryConfig(
                 brain_dir=os.environ.get("LEYA_BRAIN_DIR", "./leya_brain"),
                 embedding_model=os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
-                consolidation_threshold=_parse_float(
-                    os.environ.get("CONSOLIDATION_THRESHOLD"), 0.15, "CONSOLIDATION_THRESHOLD"
-                ),
-                max_recent_episodes=_parse_int(
-                    os.environ.get("MAX_RECENT_EPISODES"), 20, "MAX_RECENT_EPISODES"
-                ),
+                consolidation_threshold=_parse_float(os.environ.get("CONSOLIDATION_THRESHOLD"), 0.15, "CONSOLIDATION_THRESHOLD"),
+                max_recent_episodes=_parse_int(os.environ.get("MAX_RECENT_EPISODES"), 20, "MAX_RECENT_EPISODES"),
                 context_limit=_parse_int(os.environ.get("CONTEXT_LIMIT"), 5, "CONTEXT_LIMIT"),
-                forgetting_threshold=_parse_float(
-                    os.environ.get("FORGETTING_THRESHOLD"), 0.1, "FORGETTING_THRESHOLD"
-                ),
-                forgetting_base_stability=_parse_float(
-                    os.environ.get("FORGETTING_BASE_STABILITY"), 3600.0, "FORGETTING_BASE_STABILITY"
-                ),
-                metabolism_interval_seconds=_parse_int(
-                    os.environ.get("METABOLISM_INTERVAL_SECONDS"), 60, "METABOLISM_INTERVAL_SECONDS"
-                ),
-                synapse_learning_rate=_parse_float(
-                    os.environ.get("SYNAPSE_LEARNING_RATE"), 0.05, "SYNAPSE_LEARNING_RATE"
-                ),
-                synapse_max_weight=_parse_float(
-                    os.environ.get("SYNAPSE_MAX_WEIGHT"), 1.0, "SYNAPSE_MAX_WEIGHT"
-                ),
-                max_self_model_length=_parse_int(
-                    os.environ.get("MAX_SELF_MODEL_LENGTH"), 5000, "MAX_SELF_MODEL_LENGTH"
-                ),
-                hmac_key=os.environ.get("HMAC_KEY", ""),
+                forgetting_threshold=_parse_float(os.environ.get("FORGETTING_THRESHOLD"), 0.1, "FORGETTING_THRESHOLD"),
+                forgetting_base_stability=_parse_float(os.environ.get("FORGETTING_BASE_STABILITY"), 3600.0, "FORGETTING_BASE_STABILITY"),
+                metabolism_interval_seconds=_parse_int(os.environ.get("METABOLISM_INTERVAL_SECONDS"), 60, "METABOLISM_INTERVAL_SECONDS"),
+                synapse_learning_rate=_parse_float(os.environ.get("SYNAPSE_LEARNING_RATE"), 0.05, "SYNAPSE_LEARNING_RATE"),
+                synapse_max_weight=_parse_float(os.environ.get("SYNAPSE_MAX_WEIGHT"), 1.0, "SYNAPSE_MAX_WEIGHT"),
+                max_self_model_length=_parse_int(os.environ.get("MAX_SELF_MODEL_LENGTH"), 5000, "MAX_SELF_MODEL_LENGTH"),
+                hmac_key=os.environ.get("LEYA_STATE_HMAC_KEY", ""), # ИСПРАВЛЕНО: было "HMAC_KEY"
                 state_version=_parse_int(os.environ.get("STATE_VERSION"), 1, "STATE_VERSION"),
+                unsafe_mode=unsafe_mode,
             )
 
             drives = DrivesConfig(
-                metabolism_interval=_parse_int(
-                    os.environ.get("METABOLISM_INTERVAL"), 60, "METABOLISM_INTERVAL"
-                ),
-                curiosity_rate=_parse_float(
-                    os.environ.get("CURIOSITY_RATE"), 0.015, "CURIOSITY_RATE"
-                ),
-                connection_rate=_parse_float(
-                    os.environ.get("CONNECTION_RATE"), 0.01, "CONNECTION_RATE"
-                ),
+                metabolism_interval=_parse_int(os.environ.get("METABOLISM_INTERVAL"), 60, "METABOLISM_INTERVAL"),
+                curiosity_rate=_parse_float(os.environ.get("CURIOSITY_RATE"), 0.015, "CURIOSITY_RATE"),
+                connection_rate=_parse_float(os.environ.get("CONNECTION_RATE"), 0.01, "CONNECTION_RATE"),
                 rest_rate=_parse_float(os.environ.get("REST_RATE"), 0.008, "REST_RATE"),
-                creativity_rate=_parse_float(
-                    os.environ.get("CREATIVITY_RATE"), 0.012, "CREATIVITY_RATE"
-                ),
-                understanding_rate=_parse_float(
-                    os.environ.get("UNDERSTANDING_RATE"), 0.01, "UNDERSTANDING_RATE"
-                ),
+                creativity_rate=_parse_float(os.environ.get("CREATIVITY_RATE"), 0.012, "CREATIVITY_RATE"),
+                understanding_rate=_parse_float(os.environ.get("UNDERSTANDING_RATE"), 0.01, "UNDERSTANDING_RATE"),
                 autonomy_rate=_parse_float(os.environ.get("AUTONOMY_RATE"), 0.005, "AUTONOMY_RATE"),
-                max_action_history=_parse_int(
-                    os.environ.get("MAX_ACTION_HISTORY"), 100, "MAX_ACTION_HISTORY"
-                ),
+                max_action_history=_parse_int(os.environ.get("MAX_ACTION_HISTORY"), 100, "MAX_ACTION_HISTORY"),
             )
 
             homeostasis = HomeostasisConfig(
-                rest_period=_parse_int(
-                    os.environ.get("HOMEOSTASIS_REST_PERIOD"), 60, "HOMEOSTASIS_REST_PERIOD"
-                ),
-                curiosity_threshold=_parse_float(
-                    os.environ.get("CURIOSITY_THRESHOLD"), 0.6, "CURIOSITY_THRESHOLD"
-                ),
-                connection_threshold=_parse_float(
-                    os.environ.get("CONNECTION_THRESHOLD"), 0.6, "CONNECTION_THRESHOLD"
-                ),
-                autonomy_threshold=_parse_float(
-                    os.environ.get("AUTONOMY_THRESHOLD"), 0.7, "AUTONOMY_THRESHOLD"
-                ),
-                integrity_threshold=_parse_float(
-                    os.environ.get("INTEGRITY_THRESHOLD"), 0.5, "INTEGRITY_THRESHOLD"
-                ),
-                rest_threshold=_parse_float(
-                    os.environ.get("REST_THRESHOLD"), 0.6, "REST_THRESHOLD"
-                ),
-                creativity_threshold=_parse_float(
-                    os.environ.get("CREATIVITY_THRESHOLD"), 0.5, "CREATIVITY_THRESHOLD"
-                ),
-                understanding_threshold=_parse_float(
-                    os.environ.get("UNDERSTANDING_THRESHOLD"), 0.6, "UNDERSTANDING_THRESHOLD"
-                ),
-                min_reward_threshold=_parse_float(
-                    os.environ.get("MIN_REWARD_THRESHOLD"), 0.3, "MIN_REWARD_THRESHOLD"
-                ),
-                max_researched_topics=_parse_int(
-                    os.environ.get("MAX_RESEARCHED_TOPICS"), 100, "MAX_RESEARCHED_TOPICS"
-                ),
+                rest_period=_parse_int(os.environ.get("HOMEOSTASIS_REST_PERIOD"), 60, "HOMEOSTASIS_REST_PERIOD"),
+                curiosity_threshold=_parse_float(os.environ.get("CURIOSITY_THRESHOLD"), 0.6, "CURIOSITY_THRESHOLD"),
+                connection_threshold=_parse_float(os.environ.get("CONNECTION_THRESHOLD"), 0.6, "CONNECTION_THRESHOLD"),
+                autonomy_threshold=_parse_float(os.environ.get("AUTONOMY_THRESHOLD"), 0.7, "AUTONOMY_THRESHOLD"),
+                integrity_threshold=_parse_float(os.environ.get("INTEGRITY_THRESHOLD"), 0.5, "INTEGRITY_THRESHOLD"),
+                rest_threshold=_parse_float(os.environ.get("REST_THRESHOLD"), 0.6, "REST_THRESHOLD"),
+                creativity_threshold=_parse_float(os.environ.get("CREATIVITY_THRESHOLD"), 0.5, "CREATIVITY_THRESHOLD"),
+                understanding_threshold=_parse_float(os.environ.get("UNDERSTANDING_THRESHOLD"), 0.6, "UNDERSTANDING_THRESHOLD"),
+                min_reward_threshold=_parse_float(os.environ.get("MIN_REWARD_THRESHOLD"), 0.3, "MIN_REWARD_THRESHOLD"),
+                max_researched_topics=_parse_int(os.environ.get("MAX_RESEARCHED_TOPICS"), 100, "MAX_RESEARCHED_TOPICS"),
             )
 
             thinker = ThinkerConfig(
-                temperature=_parse_float(
-                    os.environ.get("THINKER_TEMPERATURE"), 0.7, "THINKER_TEMPERATURE"
-                ),
-                max_tokens=_parse_int(
-                    os.environ.get("THINKER_MAX_TOKENS"), 1024, "THINKER_MAX_TOKENS"
-                ),
+                temperature=_parse_float(os.environ.get("THINKER_TEMPERATURE"), 0.7, "THINKER_TEMPERATURE"),
+                max_tokens=_parse_int(os.environ.get("THINKER_MAX_TOKENS"), 1024, "THINKER_MAX_TOKENS"),
                 top_p=_parse_float(os.environ.get("THINKER_TOP_P"), 0.9, "THINKER_TOP_P"),
                 fallback_enabled=_parse_bool(os.environ.get("THINKER_FALLBACK_ENABLED"), True),
-                max_context_tokens=_parse_int(
-                    os.environ.get("THINKER_MAX_CONTEXT_TOKENS"), 6000, "THINKER_MAX_CONTEXT_TOKENS"
-                ),
-                token_buffer=_parse_int(
-                    os.environ.get("THINKER_TOKEN_BUFFER"), 500, "THINKER_TOKEN_BUFFER"
-                ),
-                estimate_tokens_ratio=_parse_float(
-                    os.environ.get("THINKER_TOKENS_RATIO"), 3.5, "THINKER_TOKENS_RATIO"
-                ),
+                max_context_tokens=_parse_int(os.environ.get("THINKER_MAX_CONTEXT_TOKENS"), 6000, "THINKER_MAX_CONTEXT_TOKENS"),
+                token_buffer=_parse_int(os.environ.get("THINKER_TOKEN_BUFFER"), 500, "THINKER_TOKEN_BUFFER"),
+                estimate_tokens_ratio=_parse_float(os.environ.get("THINKER_TOKENS_RATIO"), 3.5, "THINKER_TOKENS_RATIO"),
             )
 
             reflection = ReflectionConfig(
-                consolidation_interval=_parse_int(
-                    os.environ.get("REFLECTION_INTERVAL"), 1800, "REFLECTION_INTERVAL"
-                ),
-                max_insights_per_session=_parse_int(
-                    os.environ.get("REFLECTION_MAX_INSIGHTS"), 5, "REFLECTION_MAX_INSIGHTS"
-                ),
-                max_spontaneous_thoughts=_parse_int(
-                    os.environ.get("REFLECTION_MAX_THOUGHTS"), 10, "REFLECTION_MAX_THOUGHTS"
-                ),
-                existential_inquiry_enabled=_parse_bool(
-                    os.environ.get("REFLECTION_EXISTENTIAL"), True
-                ),
-                behavioral_analysis_enabled=_parse_bool(
-                    os.environ.get("REFLECTION_BEHAVIORAL"), True
-                ),
+                consolidation_interval=_parse_int(os.environ.get("REFLECTION_INTERVAL"), 1800, "REFLECTION_INTERVAL"),
+                max_insights_per_session=_parse_int(os.environ.get("REFLECTION_MAX_INSIGHTS"), 5, "REFLECTION_MAX_INSIGHTS"),
+                max_spontaneous_thoughts=_parse_int(os.environ.get("REFLECTION_MAX_THOUGHTS"), 10, "REFLECTION_MAX_THOUGHTS"),
+                existential_inquiry_enabled=_parse_bool(os.environ.get("REFLECTION_EXISTENTIAL"), True),
+                behavioral_analysis_enabled=_parse_bool(os.environ.get("REFLECTION_BEHAVIORAL"), True),
                 insight_generation_enabled=_parse_bool(os.environ.get("REFLECTION_INSIGHTS"), True),
             )
 
             workspace = WorkspaceConfig(
-                max_proposals=_parse_int(
-                    os.environ.get("WORKSPACE_MAX_PROPOSALS"), 50, "WORKSPACE_MAX_PROPOSALS"
-                ),
-                max_history=_parse_int(
-                    os.environ.get("WORKSPACE_MAX_HISTORY"), 100, "WORKSPACE_MAX_HISTORY"
-                ),
-                proposal_decay_start=_parse_float(
-                    os.environ.get("WORKSPACE_DECAY_START"), 60.0, "WORKSPACE_DECAY_START"
-                ),
-                proposal_decay_duration=_parse_float(
-                    os.environ.get("WORKSPACE_DECAY_DURATION"), 300.0, "WORKSPACE_DECAY_DURATION"
-                ),
+                max_proposals=_parse_int(os.environ.get("WORKSPACE_MAX_PROPOSALS"), 50, "WORKSPACE_MAX_PROPOSALS"),
+                max_history=_parse_int(os.environ.get("WORKSPACE_MAX_HISTORY"), 100, "WORKSPACE_MAX_HISTORY"),
+                proposal_decay_start=_parse_float(os.environ.get("WORKSPACE_DECAY_START"), 60.0, "WORKSPACE_DECAY_START"),
+                proposal_decay_duration=_parse_float(os.environ.get("WORKSPACE_DECAY_DURATION"), 300.0, "WORKSPACE_DECAY_DURATION"),
             )
 
             constitutional = ConstitutionalConfig(
-                max_violations_logged=_parse_int(
-                    os.environ.get("CONSTITUTIONAL_MAX_VIOLATIONS"),
-                    100,
-                    "CONSTITUTIONAL_MAX_VIOLATIONS",
-                ),
-                enable_response_verification=_parse_bool(
-                    os.environ.get("CONSTITUTIONAL_VERIFY_RESPONSE"), True
-                ),
-                enable_tool_verification=_parse_bool(
-                    os.environ.get("CONSTITUTIONAL_VERIFY_TOOLS"), True
-                ),
-                python_execution_timeout=_parse_int(
-                    os.environ.get("CONSTITUTIONAL_PYTHON_TIMEOUT"),
-                    10,
-                    "CONSTITUTIONAL_PYTHON_TIMEOUT",
-                ),
+                max_violations_logged=_parse_int(os.environ.get("CONSTITUTIONAL_MAX_VIOLATIONS"), 100, "CONSTITUTIONAL_MAX_VIOLATIONS"),
+                enable_response_verification=_parse_bool(os.environ.get("CONSTITUTIONAL_VERIFY_RESPONSE"), True),
+                enable_tool_verification=_parse_bool(os.environ.get("CONSTITUTIONAL_VERIFY_TOOLS"), True),
+                python_execution_timeout=_parse_int(os.environ.get("CONSTITUTIONAL_PYTHON_TIMEOUT"), 10, "CONSTITUTIONAL_PYTHON_TIMEOUT"),
             )
 
             web = WebConfig(
@@ -601,9 +528,7 @@ class LeyaConfig:
             logging_config = LoggingConfig(
                 level=os.environ.get("LOG_LEVEL", "INFO"),
                 file=os.environ.get("LOG_FILE", "leya_consciousness.log"),
-                format=os.environ.get(
-                    "LOG_FORMAT", "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-                ),
+                format=os.environ.get("LOG_FORMAT", "%(asctime)s | %(name)s | %(levelname)s | %(message)s"),
                 log_thoughts=_parse_bool(os.environ.get("LOG_THOUGHTS"), True),
                 thoughts_log_level=os.environ.get("THOUGHTS_LOG_LEVEL", "DEBUG"),
             )
@@ -612,9 +537,7 @@ class LeyaConfig:
                 soul_dir=os.environ.get("SOUL_DIR", "./leya_soul"),
                 hmac_key=os.environ.get("SOUL_HMAC_KEY", ""),
                 enable_versioning=_parse_bool(os.environ.get("SOUL_ENABLE_VERSIONING"), False),
-                max_history_size=_parse_int(
-                    os.environ.get("SOUL_MAX_HISTORY_SIZE"), 50, "SOUL_MAX_HISTORY_SIZE"
-                ),
+                max_history_size=_parse_int(os.environ.get("SOUL_MAX_HISTORY_SIZE"), 50, "SOUL_MAX_HISTORY_SIZE"),
                 personality_file=os.environ.get("SOUL_PERSONALITY_FILE", "personality.txt"),
                 rules_file=os.environ.get("SOUL_RULES_FILE", "rules.txt"),
                 values_file=os.environ.get("SOUL_VALUES_FILE", "values.txt"),
@@ -622,34 +545,12 @@ class LeyaConfig:
 
             experimental = ExperimentalConfig(
                 enable_decision_engine=_parse_bool(os.environ.get("ENABLE_DECISION_ENGINE"), False),
-                decision_engine_curiosity_threshold=_parse_float(
-                    os.environ.get("DECISION_ENGINE_CURIOSITY_THRESHOLD"),
-                    0.5,
-                    "DECISION_ENGINE_CURIOSITY_THRESHOLD",
-                ),
-                decision_engine_connection_threshold=_parse_float(
-                    os.environ.get("DECISION_ENGINE_CONNECTION_THRESHOLD"),
-                    0.6,
-                    "DECISION_ENGINE_CONNECTION_THRESHOLD",
-                ),
-                decision_engine_autonomy_threshold=_parse_float(
-                    os.environ.get("DECISION_ENGINE_AUTONOMY_THRESHOLD"),
-                    0.6,
-                    "DECISION_ENGINE_AUTONOMY_THRESHOLD",
-                ),
-                decision_engine_confidence_threshold=_parse_float(
-                    os.environ.get("DECISION_ENGINE_CONFIDENCE_THRESHOLD"),
-                    0.8,
-                    "DECISION_ENGINE_CONFIDENCE_THRESHOLD",
-                ),
-                enable_emotional_support=_parse_bool(
-                    os.environ.get("ENABLE_EMOTIONAL_SUPPORT"), False
-                ),
-                emotional_support_intensity_threshold=_parse_float(
-                    os.environ.get("EMOTIONAL_SUPPORT_INTENSITY_THRESHOLD"),
-                    0.6,
-                    "EMOTIONAL_SUPPORT_INTENSITY_THRESHOLD",
-                ),
+                decision_engine_curiosity_threshold=_parse_float(os.environ.get("DECISION_ENGINE_CURIOSITY_THRESHOLD"), 0.5, "DECISION_ENGINE_CURIOSITY_THRESHOLD"),
+                decision_engine_connection_threshold=_parse_float(os.environ.get("DECISION_ENGINE_CONNECTION_THRESHOLD"), 0.6, "DECISION_ENGINE_CONNECTION_THRESHOLD"),
+                decision_engine_autonomy_threshold=_parse_float(os.environ.get("DECISION_ENGINE_AUTONOMY_THRESHOLD"), 0.6, "DECISION_ENGINE_AUTONOMY_THRESHOLD"),
+                decision_engine_confidence_threshold=_parse_float(os.environ.get("DECISION_ENGINE_CONFIDENCE_THRESHOLD"), 0.8, "DECISION_ENGINE_CONFIDENCE_THRESHOLD"),
+                enable_emotional_support=_parse_bool(os.environ.get("ENABLE_EMOTIONAL_SUPPORT"), False),
+                emotional_support_intensity_threshold=_parse_float(os.environ.get("EMOTIONAL_SUPPORT_INTENSITY_THRESHOLD"), 0.6, "EMOTIONAL_SUPPORT_INTENSITY_THRESHOLD"),
                 enable_voice=_parse_bool(os.environ.get("ENABLE_VOICE"), False),
                 enable_desktop_control=_parse_bool(os.environ.get("ENABLE_DESKTOP_CONTROL"), False),
             )
@@ -667,6 +568,7 @@ class LeyaConfig:
                 logging=logging_config,
                 soul=soul,
                 experimental=experimental,
+                unsafe_mode=unsafe_mode,
             )
 
             logger.info("✅ Конфигурация успешно загружена из .env")
