@@ -245,8 +245,10 @@ class LeyaOS:
                 )
 
         logger.info(
-            f"✅ Все {len(_protocol_checks)} компонентов прошли Protocol-проверки"
+            f" Все {len(_protocol_checks)} компонентов прошли Protocol-проверки"
         )
+
+        self.tool_generator = None
 
         # ToolGenerator — опционален (может быть None), но если создан — проверяем
         if self.tool_generator is not None and not hasattr(self.tool_generator, "analyze_and_generate"):

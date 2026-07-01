@@ -60,22 +60,23 @@ class TestProtocolCompliance:
         cl = ConstitutionalLayer(config=test_constitutional_config)
         assert isinstance(cl, IConstitutionalLayer)
 
-    def test_thinker_implements_protocol(self, test_thinker_config, mock_llm_client):
+    def test_thinker_implements_protocol(self, test_thinker_config, mock_llm_backend):
         """CoreThinker реализует ICoreThinker."""
         from leya_core.interfaces import ICoreThinker
-
+    
         thinker = CoreThinker(
-            llm_client=mock_llm_client,
+            llm_client=mock_llm_backend,
             config=test_thinker_config,
         )
         assert isinstance(thinker, ICoreThinker)
 
-    def test_reflection_implements_protocol(self, test_reflection_config, mock_llm_client):
+
+    def test_reflection_implements_protocol(self, test_reflection_config, mock_llm_backend):
         """MetaCognition реализует IMetaCognition."""
         mock_leya = MagicMock()
         reflection = MetaCognition(
             leya_os=mock_leya,
-            llm_client=mock_llm_client,
+            llm_client=mock_llm_backend,
             config=test_reflection_config,
         )
         assert isinstance(reflection, IMetaCognition)

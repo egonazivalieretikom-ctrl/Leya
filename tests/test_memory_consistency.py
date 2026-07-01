@@ -181,8 +181,8 @@ class TestSyncChromaFromMemory:
 
         report = await mem._sync_chroma_from_memory()
 
-        assert report.added_to_chroma == 2
-        assert report.removed_from_chroma == 0
+        assert report.added == 2  # ✅ Было: report.added_to_chroma
+        assert report.removed == 0  # ✅ Было: report.removed_from_chroma
         assert epi.count() == 2
         assert "e1" in epi._store
         assert "e2" in epi._store
@@ -202,7 +202,7 @@ class TestSyncChromaFromMemory:
 
         report = await mem._sync_chroma_from_memory()
 
-        assert report.removed_from_chroma == 2
+        assert report.removed == 2
         assert epi.count() == 0
 
     @pytest.mark.asyncio
@@ -219,7 +219,7 @@ class TestSyncChromaFromMemory:
 
         report = await mem._sync_chroma_from_memory()
 
-        assert report.updated_in_chroma >= 1  # upsert всегда вызывается
+        assert report.updated >= 1
         assert epi._store["e1"]["document"] == "new content"
 
     @pytest.mark.asyncio
@@ -236,7 +236,7 @@ class TestSyncChromaFromMemory:
 
         assert fake_client.collections["episodic"].count() == 1
         assert fake_client.collections["semantic"].count() == 1
-        assert report.added_to_chroma == 2
+        assert report.added == 2 
 
     @pytest.mark.asyncio
     async def test_sync_logs_discrepancies(self, memory_with_fake_chroma, caplog):
@@ -260,8 +260,8 @@ class TestSyncChromaFromMemory:
             or "synchro" in rec.message.lower()
             for rec in caplog.records
         )
-        assert report.added_to_chroma == 1
-        assert report.removed_from_chroma == 1
+        assert report.added == 1  
+        assert report.removed == 1
 
     @pytest.mark.asyncio
     async def test_sync_idempotent(self, memory_with_fake_chroma):
@@ -274,8 +274,8 @@ class TestSyncChromaFromMemory:
         # Второй sync
         report = await mem._sync_chroma_from_memory()
         # Добавлений/удалений быть не должно (только upsert существующих)
-        assert report.added_to_chroma == 0
-        assert report.removed_from_chroma == 0
+        assert report.added == 0  
+        assert report.removed == 0 
 
 
 # =================================================================================
@@ -346,7 +346,7 @@ class TestSyncGracefulDegradation:
 
         # Не должно упасть
         report = await mem._sync_chroma_from_memory()
-        assert report.errors > 0 or report.added_to_chroma == 0
+        assert len(report.errors) > 0 or report.added == 0 
 
     @pytest.mark.asyncio
     async def test_sync_survives_embedding_failure(self, memory_with_fake_chroma):
@@ -358,7 +358,7 @@ class TestSyncGracefulDegradation:
         with patch.object(mem, "_generate_embedding", side_effect=RuntimeError("embed fail")):
             report = await mem._sync_chroma_from_memory()
             # Engram не добавлен, но система не упала
-            assert report.errors >= 1 or report.added_to_chroma == 0
+            assert len(report.errors) >= 1 or report.added == 0
 
 
 # =================================================================================

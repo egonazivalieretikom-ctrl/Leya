@@ -330,46 +330,32 @@ class TestTruncateContext:
         truncated = _truncate_context([], 100)
         assert truncated == []
 
-
-# =================================================================================
-# GENERATE_PLAN STRUCTURED ERROR TESTS
-# =================================================================================
-
-
 # =========================================================================
 # GENERATE_PLAN STRUCTURED ERROR TESTS
 # =========================================================================
-class TestGeneratePlanStructuredError:
-    """Проверяем generate_plan с structured error при failure."""
-
-    # ✅ ИСПРАВЛЕНО (Этап 3.2): Используем failing_llm_backend fixture
-    # вместо AsyncMock, потому что CoreThinker после Шага 2.3 требует LLMBackend
-    @pytest.mark.asyncio
-    async def test_generate_plan_returns_structured_error_on_failure(
-        self, failing_llm_backend
-    ):
-        """generate_plan при failure возвращает structured error, не просто static dict."""
-        from leya_core.config import ThinkerConfig
-        from leya_core.thinker import CoreThinker
-
-        config = ThinkerConfig()
-        # ✅ Передаём LLMBackend-совместимый mock вместо AsyncMock
-        thinker = CoreThinker(config, failing_llm_backend)
-
-        # Мокаем остальные зависимости
-        thinker._build_cognitive_prompt = MagicMock(return_value="test prompt")
-
-        # generate_plan должен вернуть structured error
-        result = await thinker.generate_plan(
-            stimulus={"type": "USER_MESSAGE", "content": "test"},
-            soul_context="test soul",
-            drive_context="test drives",
-            memory_context=[],
-            tools=[],
-        )
-
-        # Результат должен содержать информацию об ошибке
-        assert "error" in result or "fallback" in result or isinstance(result, dict)
-        # Если это dict — должен иметь структуру CognitiveOutput (хотя бы частично)
-        if isinstance(result, dict):
-            assert "response" in result or "error" in result
+@pytest.mark.asyncio
+async def test_generate_plan_returns_structured_error_on_failure(failing_llm_backend):
+    """generate_plan при failure возвращает structured error, не просто static dict."""
+    from leya_core.config import ThinkerConfig
+    from leya_core.thinker import CoreThinker
+    
+    config = ThinkerConfig()
+    thinker = CoreThinker(config, failing_llm_backend)
+    
+    # Мокаем остальные зависимости
+    thinker._build_cognitive_prompt = MagicMock(return_value="test prompt")
+    
+    # generate_plan должен вернуть structured error
+    result = await thinker.generate_plan(
+        stimulus={"type": "USER_MESSAGE", "content": "test"},
+        soul_context="test soul",
+        drive_context="test drives",
+        memory_context=[],
+        tools=[],
+    )
+    
+    # Результат должен содержать информацию об ошибке
+    assert "error" in result or "fallback" in result or isinstance(result, dict)
+    # Если это dict — должен иметь структуру CognitiveOutput (хотя бы частично)
+    if isinstance(result, dict):
+        assert "response" in result or "error" in result

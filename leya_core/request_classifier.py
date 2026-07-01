@@ -94,6 +94,12 @@ HEURISTIC_PATTERNS: dict[UserIntent, list[tuple[str, float]]] = {
     UserIntent.PERSONAL: [
         (r"\b(ты\s+кто|расскажи\s+о\s+себе|твоё\s+имя|сколько\s+тебе\s+лет|ты\s+живая)\b", 0.85),
     ],
+     UserIntent.STATUS: [
+        (r"как\s+(ты\s+)?себя\s+чувствуешь", 0.95),
+        (r"какое\s+(у\s+тебя\s+)?состояние", 0.95),
+        (r"что\s+ты\s+(сейчас\s+)?делаешь", 0.95),
+        (r"\b(дела|настроение|состояние|чувствуешь)\b", 0.6),
+    ],
 }
 
 
@@ -222,7 +228,7 @@ class RequestClassifier:
         for intent, patterns in self._compiled_patterns.items():
             total_weight = 0.0
             for pattern, weight in patterns:
-                if pattern.search(text_lower):  # ✅ ИСПРАВЛЕНО: было user_input
+                if pattern.search(text_lower): 
                     total_weight += weight
         
             if total_weight > 0:
@@ -233,7 +239,7 @@ class RequestClassifier:
             return IntentClassification(
                 intent=UserIntent.UNKNOWN,
                 confidence=0.0,
-                source="heuristic",  # ← ДОБАВЬТЕ
+                source="heuristic", 
                 topic=None,
                 raw_input=text_lower,
             )
@@ -246,7 +252,7 @@ class RequestClassifier:
         return IntentClassification(
             intent=best_intent,
             confidence=confidence,
-            source="heuristic",  # ← ДОБАВЬТЕ
+            source="heuristic", 
             topic=topic,
             raw_input=text_lower,
         )
@@ -271,7 +277,6 @@ class RequestClassifier:
         topic_words = [w for w in words if w not in stop_words and len(w) > 2]
         
         if topic_words:
-            # Берём первые 3-5 значимых слов
             topic = " ".join(topic_words[:5])
             return topic
         
@@ -303,15 +308,10 @@ class RequestClassifier:
         if not similar:
             return None
 
-        # Проверяем similarity для каждого item
         for item in similar:
-            # ✅ Вычисляем similarity через distance из ChromaDB
-            # ChromaDB query возвращает distance (1 - cosine_similarity)
             distance = self._extract_distance(item)
         
             if distance is None:
-                # ✅ ИСПРАВЛЕНИЕ CR3 (v2): Убран тяжёлый fallback
-                # Если distance нет — это баг в memory.py, а не задача кэша
                 logger.debug(
                     f"Cache miss: distance недоступен для item "
                     f"{getattr(item, 'id', 'unknown')}. "
@@ -320,9 +320,6 @@ class RequestClassifier:
                 )
                 continue
 
-            # distance ∈ [0, 2] для cosine distance, конвертируем в similarity ∈ [-1, 1]
-            # Для нормализованных embeddings (all-MiniLM-L6-v2) distance ∈ [0, 1]
-            # similarity = 1 - distance
             similarity = 1.0 - distance
 
             if similarity >= self.cache_similarity_threshold:
