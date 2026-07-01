@@ -1,11 +1,14 @@
 """
 leya_core/llm_client.py
-Circuit Breaker + обёртка для HTTP-запросов к Ollama.
+OllamaBackend — конкретная реализация LLMBackend для Ollama HTTP API.
 
-Состояния Circuit Breaker:
-- CLOSED: нормальная работа
-- OPEN: LLM недоступна, все запросы идут в fallback
-- HALF_OPEN: периодическая проверка восстановления
+Шаг 2.2: Рефакторинг OllamaClient → OllamaBackend с наследованием от LLMBackend.
+- Все абстрактные методы LLMBackend реализованы
+- Circuit Breaker сохранён (CLOSED/OPEN/HALF_OPEN)
+- Retry с exponential backoff для transient-ошибок
+- generate() — обёртка над chat() для обратной совместимости с memory.py
+- health_check() — синхронная быстрая проверка для диагностики
+- Обратная совместимость: OllamaClient = OllamaBackend (алиас)
 
 Защита от:
 - Таймаутов
@@ -33,6 +36,7 @@ from .exceptions import (
     LeyaLLMTimeoutError,
     LeyaLLMUnavailableError,
 )
+from .llm_backend import LLMBackend
 
 logger = logging.getLogger(__name__)
 
@@ -155,18 +159,26 @@ class CircuitBreaker:
 
 
 # =========================================================================
-# OllamaClient
+# OllamaBackend — конкретная реализация LLMBackend
 # =========================================================================
-class OllamaClient:
+class OllamaBackend(LLMBackend):
     """
-    Клиент для Ollama с Circuit Breaker и retry-логикой.
+    Ollama HTTP API бэкенд с Circuit Breaker и retry-логикой.
+
+    Наследуется от LLMBackend (абстрактный базовый класс), что гарантирует:
+    - Реализацию всех абстрактных методов (chat, generate, health_check, is_available)
+    - Совместимость с ILLMClient Protocol (структурная типизация)
+    - Возможность замены на другой бэкенд (OpenAI, Anthropic) без изменения LeyaOS
 
     Использование:
-        client = OllamaClient(
+        backend = OllamaBackend(
             base_url="http://localhost:11434",
             model="qwen2.5:14b-instruct-q3_K_M",
         )
-        response = await client.chat(prompt, require_json=True)
+        response = await backend.chat(prompt, require_json=True)
+
+    Обратная совместимость:
+        OllamaClient = OllamaBackend  # алиас в конце файла
     """
 
     def __init__(
@@ -212,12 +224,100 @@ class OllamaClient:
             self._session = aiohttp.ClientSession()
         return self._session
 
+    # ===================================================================
+    # Реализация абстрактных методов LLMBackend
+    # ===================================================================
+
     async def close(self) -> None:
-        """Закрытие HTTP-сессии."""
+        """Закрытие HTTP-сессии.
+
+        Переопределение LLMBackend.close() для корректного освобождения
+        ресурсов aiohttp.ClientSession.
+        """
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
 
+    # -------------------------------------------------------------------
+    # chat() — основной метод взаимодействия с LLM
+    # -------------------------------------------------------------------
+    async def chat(
+        self,
+        prompt: str,
+        system: str | None = None,
+        require_json: bool = False,
+        timeout: float | None = None,
+        max_retries: int = 3,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Отправка запроса к Ollama с retry и exponential backoff.
+
+        Реализация абстрактного метода LLMBackend.chat() с расширенной сигнатурой:
+        - system: системный промпт (опционально)
+        - timeout: переопределение таймаута
+        - max_retries: количество попыток (по умолчанию 3)
+        - max_tokens: переопределение max_tokens
+
+        Retry применяется ТОЛЬКО для transient-ошибок:
+        - LeyaLLMTimeoutError
+        - LeyaLLMConnectionError
+
+        Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error) не ретраим —
+        эти ошибки обычно стабильны, повтор не поможет.
+
+        Args:
+            prompt: Промпт для LLM
+            system: Системный промпт (опционально)
+            require_json: Требовать JSON-формат
+            timeout: Таймаут запроса
+            max_retries: Максимальное количество попыток (по умолчанию 3)
+            max_tokens: Максимальное количество токенов в ответе
+                         (переопределяет self.max_tokens для данного вызова)
+
+        Returns:
+            Ответ LLM или fallback
+        """
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self._chat_impl(
+                    prompt=prompt,
+                    system=system,
+                    require_json=require_json,
+                    timeout=timeout,
+                    max_tokens=max_tokens,
+                )
+            except (LeyaLLMTimeoutError, LeyaLLMConnectionError) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s + jitter
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        f"Retry {attempt + 1}/{max_retries} после {wait_time:.1f}s "
+                        f"(ошибка: {type(e).__name__})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Последняя попытка провалилась
+                    logger.error(
+                        f"Все {max_retries} попыток провалились: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    raise
+            except (LeyaLLMError, LeyaJSONParseError):
+                # Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error)
+                # не ретраим. Эти ошибки обычно стабильны — повтор не поможет.
+                raise
+
+        # Не должно достигнуть сюда, но на всякий случай
+        if last_exception:
+            raise last_exception
+        raise LeyaLLMError("Неожиданная ошибка в retry-логике")
+
+    # -------------------------------------------------------------------
+    # generate() — упрощённая генерация (обёртка над chat)
+    # -------------------------------------------------------------------
     async def generate(
         self,
         prompt: str,
@@ -228,6 +328,7 @@ class OllamaClient:
     ) -> str:
         """Обёртка для обратной совместимости с memory.py.
 
+        Реализация абстрактного метода LLMBackend.generate() с расширенной сигнатурой.
         Полностью делегирует chat(), корректно передавая ВСЕ параметры,
         включая max_tokens (ранее игнорировался).
 
@@ -249,15 +350,72 @@ class OllamaClient:
             max_tokens=max_tokens,
         )
 
-    async def __aenter__(self) -> "OllamaClient":
-        return self
+    # -------------------------------------------------------------------
+    # health_check() — быстрая синхронная проверка (для диагностики)
+    # -------------------------------------------------------------------
+    def health_check(self) -> bool:
+        """Быстрая проверка доступности LLM (синхронная).
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        await self.close()
+        Реализация абстрактного метода LLMBackend.health_check().
+        Не делает реальный запрос к LLM (это дорого) — достаточно проверки
+        состояния Circuit Breaker.
 
-    # =====================================================================
-    # _chat_impl — внутренняя реализация без retry
-    # =====================================================================
+        Returns:
+            True если Circuit Breaker в состоянии CLOSED или HALF_OPEN,
+            False если OPEN.
+        """
+        return self.circuit_breaker.is_available
+
+    # -------------------------------------------------------------------
+    # is_available — property (алиас для health_check)
+    # -------------------------------------------------------------------
+    @property
+    def is_available(self) -> bool:
+        """Свойство: доступен ли LLM для запросов прямо сейчас.
+
+        Реализация абстрактного property LLMBackend.is_available.
+        Делегирует Circuit Breaker.
+
+        Returns:
+            True если Circuit Breaker в состоянии CLOSED или HALF_OPEN,
+            False если OPEN.
+        """
+        return self.circuit_breaker.is_available
+
+    # -------------------------------------------------------------------
+    # get_status() — расширенная диагностика
+    # -------------------------------------------------------------------
+    def get_status(self) -> dict[str, Any]:
+        """Диагностическая информация о состоянии бэкенда.
+
+        Переопределение LLMBackend.get_status() для добавления специфичных
+        данных Ollama: Circuit Breaker status, модель, URL и т.д.
+
+        Returns:
+            dict с диагностической информацией.
+        """
+        base_status = super().get_status()
+        base_status.update(
+            {
+                "backend_type": "OllamaBackend",
+                "model": self.model,
+                "base_url": self.base_url,
+                "timeout": self.timeout,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+                "circuit_breaker": self.circuit_breaker.get_status(),
+                "session_active": (
+                    self._session is not None and not self._session.closed
+                ),
+                "fallback_configured": self._fallback_fn is not None,
+            }
+        )
+        return base_status
+
+    # ===================================================================
+    # Приватные методы (остаются приватными, не часть интерфейса)
+    # ===================================================================
+
     async def _chat_impl(
         self,
         prompt: str,
@@ -429,73 +587,20 @@ class OllamaClient:
             # не хотим ложно открывать Circuit Breaker.
             raise
 
-    # =====================================================================
-    # chat — публичный метод с retry
-    # =====================================================================
-    async def chat(
-        self,
-        prompt: str,
-        system: str | None = None,
-        require_json: bool = False,
-        timeout: float | None = None,
-        max_retries: int = 3,
-        max_tokens: int | None = None,
-    ) -> str:
-        """Отправка запроса к Ollama с retry и exponential backoff.
+    # ===================================================================
+    # Context manager support (наследуется от LLMBackend, но переопределяем
+    # для явного указания типа возврата)
+    # ===================================================================
+    async def __aenter__(self) -> "OllamaBackend":
+        return self
 
-        Retry применяется ТОЛЬКО для transient-ошибок:
-        - LeyaLLMTimeoutError
-        - LeyaLLMConnectionError
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
 
-        Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error) не ретраим —
-        эти ошибки обычно стабильны, повтор не поможет.
 
-        Args:
-            prompt: Промпт для LLM
-            system: Системный промпт (опционально)
-            require_json: Требовать JSON-формат
-            timeout: Таймаут запроса
-            max_retries: Максимальное количество попыток (по умолчанию 3)
-            max_tokens: Максимальное количество токенов в ответе
-                         (переопределяет self.max_tokens для данного вызова)
-
-        Returns:
-            Ответ LLM или fallback
-        """
-        last_exception = None
-
-        for attempt in range(max_retries):
-            try:
-                return await self._chat_impl(
-                    prompt=prompt,
-                    system=system,
-                    require_json=require_json,
-                    timeout=timeout,
-                    max_tokens=max_tokens,
-                )
-            except (LeyaLLMTimeoutError, LeyaLLMConnectionError) as e:
-                last_exception = e
-                if attempt < max_retries - 1:
-                    # Exponential backoff: 1s, 2s, 4s + jitter
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
-                    logger.warning(
-                        f"Retry {attempt + 1}/{max_retries} после {wait_time:.1f}s "
-                        f"(ошибка: {type(e).__name__})"
-                    )
-                    await asyncio.sleep(wait_time)
-                else:
-                    # Последняя попытка провалилась
-                    logger.error(
-                        f"Все {max_retries} попыток провалились: "
-                        f"{type(e).__name__}: {e}"
-                    )
-                    raise
-            except (LeyaLLMError, LeyaJSONParseError):
-                # Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error)
-                # не ретраим. Эти ошибки обычно стабильны — повтор не поможет.
-                raise
-
-        # Не должно достигнуть сюда, но на всякий случай
-        if last_exception:
-            raise last_exception
-        raise LeyaLLMError("Неожиданная ошибка в retry-логике")
+# =========================================================================
+# Обратная совместимость: алиас для старого имени
+# =========================================================================
+# Все существующие импорты `from leya_core.llm_client import OllamaClient`
+# продолжат работать. Новый код должен использовать OllamaBackend.
+OllamaClient = OllamaBackend
