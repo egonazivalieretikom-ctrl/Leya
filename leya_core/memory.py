@@ -16,6 +16,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from .llm_backend import LLMBackend
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -195,12 +196,24 @@ class MemorySystem:
         config,
         *,
         disable_hmac_check: bool = False,
-        llm_client=None,
+        llm_client: LLMBackend | None = None,
     ) -> None:
+        """Инициализация MemorySystem.
+
+        Args:
+            config: Может быть либо LeyaConfig (тогда извлекается config.memory),
+                    либо MemoryConfig напрямую (для тестов и упрощённого использования).
+            disable_hmac_check: Если True, отключает проверку HMAC при загрузке (для тестов).
+            llm_client: Опциональный LLM-бэкенд (абстрактный LLMBackend)
+                        для консолидации памяти. Конкретная реализация
+                        (OllamaBackend и т.д.) передаётся из LeyaOS.
+        """
+        # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
         if isinstance(config, LeyaConfig):
             self.config = config
             self.memory_config = config.memory
         elif isinstance(config, MemoryConfig):
+            # Для тестов и прямого использования
             self.config = None
             self.memory_config = config
         else:
@@ -208,9 +221,19 @@ class MemorySystem:
                 f"config должен быть LeyaConfig или MemoryConfig, получено {type(config)}"
             )
 
+        # Флаг для отключения HMAC в тестах
         self._disable_hmac_check = disable_hmac_check
+
+        # LLM-бэкенд для консолидации (опциональный)
+        # Проверка типа: если передан, должен быть LLMBackend
+        if llm_client is not None and not isinstance(llm_client, LLMBackend):
+            raise TypeError(
+                f"llm_client должен быть экземпляром LLMBackend или None, "
+                f"получен {type(llm_client).__name__}"
+            )
         self.llm_client = llm_client
 
+        # Инициализация ChromaDB
         try:
             self.chroma_client = chromadb.PersistentClient(
                 path=self.memory_config.brain_dir,
@@ -231,9 +254,12 @@ class MemorySystem:
                 context={"brain_dir": self.memory_config.brain_dir, "error": str(exc)},
             ) from exc
 
+        # Состояние памяти
         self.engrams: dict[str, Engram] = {}
         self.synapses: dict[str, Synapse] = {}
         self.self_model: str = ""
+
+        # Путь к файлу состояния (гарантированная инициализация)
         self.state_path: Path = Path(self.memory_config.brain_dir) / "memory_state.json"
 
         logger.info(f"MemorySystem инициализирован: {self.memory_config.brain_dir}")

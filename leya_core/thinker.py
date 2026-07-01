@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
-
+from .llm_backend import LLMBackend
 from pydantic import BaseModel, Field, ValidationError
 
 from .config import ThinkerConfig
@@ -471,7 +471,20 @@ class CoreThinker:
     relevance-based truncation, structured error при failure.
     """
 
-    def __init__(self, config: ThinkerConfig, llm_client):
+    def __init__(self, config: ThinkerConfig, llm_client: LLMBackend) -> None:
+        """Инициализация когнитивного планировщика.
+
+        Args:
+            config: Конфигурация thinker.
+            llm_client: LLM-бэкенд (абстрактный LLMBackend).
+                        Конкретная реализация (OllamaBackend, OpenAIBackend и т.д.)
+                        передаётся из LeyaOS.
+        """
+        if not isinstance(llm_client, LLMBackend):
+            raise TypeError(
+                f"llm_client должен быть экземпляром LLMBackend, "
+                f"получен {type(llm_client).__name__}"
+            )
         self.config = config
         self.llm_client = llm_client
         logger.info("✅ CoreThinker инициализирован")
@@ -613,8 +626,8 @@ class CoreThinker:
         )
 
         try:
-            # LLM вызов
-            raw_response = await self.llm_client(
+            # LLM вызов через абстрактный LLMBackend.chat()
+            raw_response = await self.llm_client.chat(
                 prompt=prompt,
                 require_json=True,
             )
@@ -648,7 +661,6 @@ class CoreThinker:
 
         except LeyaJSONParseError as e:
             logger.error(f"Ошибка парсинга JSON от LLM: {e}")
-            # Structured error с частичным разбором
             return self._build_structured_error(
                 error_type="JSON_PARSE_ERROR",
                 error_message=str(e),

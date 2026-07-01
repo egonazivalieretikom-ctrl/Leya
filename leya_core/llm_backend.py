@@ -89,19 +89,35 @@ class LLMBackend(ABC):
         ...
 
     @abstractmethod
-    async def generate(self, prompt: str) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        require_json: bool = False,
+        timeout: float | None = None,
+    ) -> str:
         """Упрощённая генерация текста (обёртка над chat).
 
         Используется там, где не требуется сложная логика chat
         (например, для извлечения семантических фактов из эпизодов
         в MemorySystem._extract_semantic_facts).
 
+        Сигнатура расширена для совместимости с OllamaBackend.generate(),
+        который поддерживает max_tokens, require_json и timeout.
+        Наследники могут игнорировать необязательные параметры, но
+        обязаны принять их для совместимости интерфейса.
+
         Реализация по умолчанию может делегировать chat():
-            async def generate(self, prompt: str) -> str:
+            async def generate(self, prompt: str, **kwargs) -> str:
                 return await self.chat(prompt, require_json=False)
 
         Args:
             prompt: Промпт для генерации.
+            system: Системный промпт (опционально).
+            max_tokens: Максимальное количество токенов в ответе.
+            require_json: Требовать JSON-формат ответа.
+            timeout: Таймаут запроса.
 
         Returns:
             Сгенерированный текст.

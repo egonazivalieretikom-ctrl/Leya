@@ -26,7 +26,7 @@ import logging
 import time
 from collections.abc import Callable
 from typing import Any
-
+from .llm_backend import LLMBackend
 from .config import ReflectionConfig
 from .exceptions import (
     LeyaDriveNotFoundError,
@@ -57,18 +57,33 @@ class MetaCognition(IMetaCognition):
     def __init__(
         self,
         leya_os: Any,
-        llm_client: Callable | None = None,
+        llm_client: LLMBackend | None = None,
         config: ReflectionConfig | None = None,
     ) -> None:
+        """Инициализация мета-когниции.
+
+        Args:
+            leya_os: Ссылка на оркестратор LeyaOS.
+            llm_client: LLM-бэкенд (абстрактный LLMBackend).
+                        Если None — используется заглушка _default_llm_call
+                        (только для тестов и edge cases).
+            config: Конфигурация reflection.
+        """
         self.name = "MetaCognition"
         self.leya = leya_os
-        self.llm_client = llm_client or self._default_llm_call
+
+        # Проверка типа: если передан, должен быть LLMBackend
+        if llm_client is not None and not isinstance(llm_client, LLMBackend):
+            raise TypeError(
+                f"llm_client должен быть экземпляром LLMBackend или None, "
+                f"получен {type(llm_client).__name__}"
+            )
+        self.llm_client = llm_client
         self.config = config or ReflectionConfig()
 
-        self._is_sleeping = False 
+        self._is_sleeping = False
         self._running = True
         self._session_count = 0
-
         self._is_processing_inquiry = False
 
         logger.info(
@@ -100,6 +115,26 @@ class MetaCognition(IMetaCognition):
         # Логируем только если значение изменилось и поле уже существовало
         if old_value is not None and old_value != value:
             logger.debug(f"MetaCognition: is_sleeping changed: {old_value} → {value}")
+    
+    async def _call_llm(self, prompt: str) -> str:
+        """Унифицированный вызов LLM с fallback на заглушку.
+
+        Если llm_client установлен (LLMBackend) — вызывает .chat().
+        Если llm_client отсутствует — использует _default_llm_call (заглушка).
+
+        Это позволяет сохранить обратную совместимость с тестами,
+        где llm_client может быть None.
+
+        Args:
+            prompt: Промпт для LLM.
+
+        Returns:
+            Текстовый ответ LLM.
+        """
+        if self.llm_client is not None:
+            return await self.llm_client.chat(prompt=prompt)
+        # Fallback на заглушку (для тестов и edge cases)
+        return self._default_llm_call(prompt)
 
     async def process_action(
         self,
@@ -283,7 +318,7 @@ class MetaCognition(IMetaCognition):
     """
         
             try:
-                response = await self.llm_client(prompt)
+                response = await self._call_llm(prompt)
             except LeyaLLMError as e:
                 logger.warning(f"Existential inquiry: LLM error: {e}")
                 return
@@ -490,7 +525,7 @@ class MetaCognition(IMetaCognition):
 """
 
         try:
-            response = await self.llm_client(prompt)
+            response = await self._call_llm(prompt)
             cleaned = repair_json(response)
             analysis = json.loads(cleaned) if cleaned != "{}" else {}
 
@@ -551,7 +586,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
 """
 
         try:
-            response = await self.llm_client(prompt)
+            response = await self._call_llm(prompt)
             cleaned = repair_json(response)
             inquiry = json.loads(cleaned) if cleaned != "{}" else {}
 
@@ -663,7 +698,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     """
 
         try:
-            thought = await self.llm_client(prompt)
+            thought = await self._call_llm(prompt)
             result = thought.strip()
 
             # === Логирование спонтанной мысли ===
@@ -732,7 +767,7 @@ CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
     }}
     """
 
-            response = await self.llm_client(prompt)
+            response = await self._call_llm(prompt)
         
             # ✅ ИСПРАВЛЕНО: убрано двойное присваивание
             cleaned = repair_json(response)

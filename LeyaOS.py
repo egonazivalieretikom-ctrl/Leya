@@ -89,7 +89,8 @@ from leya_core.interfaces import (
     IMetaCognition,
 )
 
-from leya_core.llm_client import OllamaClient  # ✅ Этот импорт теперь выполнится
+from leya_core.llm_client import OllamaBackend
+from leya_core.llm_backend import LLMBackend
 from leya_core.memory import MemorySystem, MemoryType
 from leya_core.reflection import MetaCognition
 from leya_core.request_classifier import RequestClassifier, IntentClassification, UserIntent
@@ -193,9 +194,10 @@ class LeyaOS:
             logger.error(f"Не удалось инициализировать SoulCryptoManager: {e}", exc_info=True)
             self.soul_crypto_manager = None
 
-        # LLM-клиент (создаётся ДО memory, т.к. передаётся в MemorySystem)
+        # LLM-бэкенд (создаётся ДО memory, т.к. передаётся в MemorySystem)
+        # Типизация как LLMBackend — конкретная реализация OllamaBackend
         try:
-            self.llm_client = OllamaClient(
+            ollama_backend: LLMBackend = OllamaBackend(
                 base_url=self.config.ollama.base_url,
                 model=self.config.ollama.model,
                 timeout=self.config.ollama.timeout,
@@ -205,9 +207,11 @@ class LeyaOS:
                 max_tokens=self.config.ollama.max_tokens,
                 repeat_penalty=self.config.ollama.repeat_penalty,
             )
-            self.llm_client.set_fallback(self._llm_fallback)
+            ollama_backend.set_fallback(self._llm_fallback)
+            self.llm_client: LLMBackend = ollama_backend
+            logger.info(f"✅ LLM-бэкенд инициализирован: {type(ollama_backend).__name__}")
         except Exception as e:
-            logger.error(f"Не удалось создать OllamaClient: {e}", exc_info=True)
+            logger.error(f"Не удалось создать OllamaBackend: {e}", exc_info=True)
             # Cleanup уже созданных ресурсов
             self._cleanup_resources()
             raise
@@ -240,10 +244,10 @@ class LeyaOS:
             self._cleanup_resources()
             raise TypeError("constitutional должен реализовывать IConstitutionalLayer")
 
-        # Thinker
+        # Thinker — передаём абстрактный LLMBackend напрямую
         self.thinker = CoreThinker(
             config=self.config.thinker,
-            llm_client=self._llm_call,
+            llm_client=self.llm_client,
         )
 
         # Request Classifier
@@ -257,10 +261,10 @@ class LeyaOS:
         # Гомеостаз
         self.homeostasis = HomeostasisEngine(config=self.config.homeostasis)
 
-        # Мета-когниция
+        # Мета-когниция — передаём абстрактный LLMBackend напрямую
         self.reflection = MetaCognition(
             leya_os=self,
-            llm_client=self._llm_call,
+            llm_client=self.llm_client,
             config=self.config.reflection,
         )
 
@@ -350,7 +354,7 @@ class LeyaOS:
         logger.warning("Выполняется cleanup ресурсов после ошибки инициализации")
         
         # Закрываем LLM-клиент (aiohttp сессия)
-        if hasattr(self, 'llm_client') and self.llm_client is not None:
+        if hasattr(self, 'llm_client') and isinstance(self.llm_client, LLMBackend):
             try:
                 # Синхронный close для cleanup
                 if hasattr(self.llm_client, '_session') and self.llm_client._session:
