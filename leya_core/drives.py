@@ -317,7 +317,12 @@ class DriveSystem:
             except asyncio.CancelledError:
                 logger.info("DriveSystem: Метаболизм отменён.")
                 break
+            except (KeyboardInterrupt, SystemExit):
+                logger.info("DriveSystem: Метаболизм остановлен (KeyboardInterrupt/SystemExit).")
+                break
             except Exception as exc:
+                # Явная защита: BaseException-подклассы уже обработаны выше,
+                # но для ясности — не перехватываем их здесь.
                 logger.error(f"DriveSystem: Ошибка в метаболизме: {exc}", exc_info=True)
                 await asyncio.sleep(10)  # Пауза перед рестартом
 

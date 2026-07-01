@@ -1,20 +1,8 @@
 """
 leya_core/memory.py
 Система памяти Леи — биологически вдохновлённая модель.
-
-Архитектура:
-- Engram (эпизодическая/семантическая память) с retention_strength
-- Synapse (связи между энграммами, LTP/LTD)
-- ChromaDB для семантического поиска (эмбеддинги)
-- Забывание по кривой Эббингауза
-- Консолидация во время "сна" (background_consolidation)
-- Атомарная запись состояния с HMAC-подписью (Этап 1.1)
-
-Все публичные методы — async. Синхронные вызовы ChromaDB обёрнуты в asyncio.to_thread.
 """
-
 from __future__ import annotations
-
 import asyncio
 import hashlib
 import hmac
@@ -48,15 +36,11 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
-# Версия формата состояния памяти (инкрементировать при несовместимых изменениях)
 MEMORY_STATE_VERSION: int = 3
 
 
 @dataclass
 class SyncReport:
-    """
-    Отчёт о операции синхронизации in-memory ↔ ChromaDB.
-    """
     added_to_chroma: int = 0
     updated_in_chroma: int = 0
     removed_from_chroma: int = 0
@@ -65,12 +49,10 @@ class SyncReport:
 
     @property
     def total_discrepancies(self) -> int:
-        """Общее количество расхождений (добавленные + удалённые)."""
         return self.added_to_chroma + self.removed_from_chroma
 
     @property
     def is_clean(self) -> bool:
-        """True если синхронизация прошла без расхождений и ошибок."""
         return self.total_discrepancies == 0 and self.errors == 0
 
     def __str__(self) -> str:
@@ -83,29 +65,13 @@ class SyncReport:
         )
 
 
-# ============================================================================
-# Модели данных
-# ============================================================================
-
-
 class MemoryType(str, Enum):
-    """Тип памяти: эпизодическая (события) или семантическая (факты)."""
-
     EPISODIC = "episodic"
     SEMANTIC = "semantic"
 
 
 @dataclass
 class Engram:
-    """
-    Энграмма — единица памяти.
-
-    Биологическая модель:
-    - retention_strength: сила удержания (0.0–1.0), убывает по Эббингаузу
-    - emotional_boost: эмоциональное усиление (замедляет забывание)
-    - consolidation_level: уровень консолидации (0=рабочая, 1=долговременная)
-    """
-
     id: str
     content: str
     memory_type: MemoryType
@@ -114,7 +80,7 @@ class Engram:
     emotional_boost: float = 0.0
     retrieval_count: int = 0
     last_retrieved: float = field(default_factory=time.time)
-    consolidation_level: int = 0  # 0=working, 1=long-term
+    consolidation_level: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     distance: float | None = None
 
@@ -150,14 +116,6 @@ class Engram:
 
 @dataclass
 class Synapse:
-    """
-    Синапс — связь между двумя энграммами.
-
-    Биологическая модель:
-    - weight: сила связи (0.0–1.0), усиливается при совместной активации (LTP)
-    - activation_count: количество совместных активаций
-    """
-
     source_id: str
     target_id: str
     weight: float = 0.1
@@ -181,26 +139,7 @@ class Synapse:
         )
 
 
-# ============================================================================
-# Система памяти
-# ============================================================================
-
-
 class MemorySystem:
-    """
-    Система памяти Леи.
-
-    Хранение:
-    - ChromaDB: векторный поиск (эмбеддинги через sentence-transformers)
-    - memory_state.pkl: engrams, synapses, self_model (с HMAC-подписью)
-
-    Биологические механизмы:
-    - Забывание по кривой Эббингауза
-    - LTP (Long-Term Potentiation): усиление синапсов при совместной активации
-    - Консолидация: переход из рабочей в долговременную память
-    - Эмоциональное усиление: замедление забывания для значимых событий
-    """
-
     def __init__(
         self,
         config,
@@ -208,21 +147,10 @@ class MemorySystem:
         disable_hmac_check: bool = False,
         llm_client=None,
     ) -> None:
-        """
-        Инициализация MemorySystem.
-
-        Args:
-            config: Может быть либо LeyaConfig (тогда извлекается config.memory),
-                    либо MemoryConfig напрямую (для тестов и упрощённого использования).
-            disable_hmac_check: Если True, отключает проверку HMAC при загрузке (для тестов).
-            llm_client: Опциональный LLM-клиент для консолидации памяти.
-        """
-        # Гибкая обработка: принимаем либо LeyaConfig, либо MemoryConfig
         if isinstance(config, LeyaConfig):
             self.config = config
             self.memory_config = config.memory
         elif isinstance(config, MemoryConfig):
-            # Для тестов и прямого использования
             self.config = None
             self.memory_config = config
         else:
@@ -230,13 +158,9 @@ class MemorySystem:
                 f"config должен быть LeyaConfig или MemoryConfig, получено {type(config)}"
             )
 
-        # Флаг для отключения HMAC в тестах
         self._disable_hmac_check = disable_hmac_check
-
-        # LLM-клиент для консолидации (опциональный)
         self.llm_client = llm_client
 
-        # Инициализация ChromaDB
         try:
             self.chroma_client = chromadb.PersistentClient(
                 path=self.memory_config.brain_dir,
@@ -251,26 +175,18 @@ class MemorySystem:
                 metadata={"description": "Семантическая память Леи"},
             )
             self.embedding_fn = DefaultEmbeddingFunction()
-
         except Exception as exc:
             raise LeyaMemoryError(
                 "Не удалось инициализировать ChromaDB",
                 context={"brain_dir": self.memory_config.brain_dir, "error": str(exc)},
             ) from exc
 
-        # Состояние памяти
         self.engrams: dict[str, Engram] = {}
-        self.synapses: dict[str, Synapse] = {}  # key: "source_id->target_id"
+        self.synapses: dict[str, Synapse] = {}
         self.self_model: str = ""
-
-        # Путь к файлу состояния (гарантированная инициализация)
         self.state_path: Path = Path(self.memory_config.brain_dir) / "memory_state.json"
 
         logger.info(f"MemorySystem инициализирован: {self.memory_config.brain_dir}")
-
-    # ========================================================================
-    # Публичные методы: работа с энграммами
-    # ========================================================================
 
     async def store_perception(
         self,
@@ -279,24 +195,15 @@ class MemorySystem:
         metadata: dict | None = None,
         memory_type: MemoryType = MemoryType.EPISODIC,
     ) -> Engram:
-        """
-        Сохранить восприятие как энграмму указанного типа.
-
-        Биологическая модель:
-        - Создание новой энграммы
-        - Генерация эмбеддинга (в отдельном потоке)
-        - Формирование синаптических связей (LTP) с похожими энграммами
-        """
         engram_id = str(uuid.uuid4())
         engram = Engram(
             id=engram_id,
             content=content,
-            memory_type=memory_type,  # ← ИСПРАВЛЕНО: используем переданный параметр
+            memory_type=memory_type,
             emotional_boost=max(0.0, min(1.0, emotional_boost)),
             metadata=metadata or {},
         )
 
-        # Генерация эмбеддинга в отдельном потоке
         try:
             embedding = await asyncio.to_thread(self._generate_embedding, content)
         except Exception as exc:
@@ -305,14 +212,12 @@ class MemorySystem:
                 context={"engram_id": engram_id, "error": str(exc)},
             ) from exc
 
-        # Выбор коллекции в зависимости от типа памяти
         collection = (
             self.episodic_collection
             if memory_type == MemoryType.EPISODIC
             else self.semantic_collection
         )
 
-        # Сохранение в ChromaDB
         try:
             await asyncio.to_thread(
                 collection.add,
@@ -334,13 +239,8 @@ class MemorySystem:
                 context={"engram_id": engram_id, "error": str(exc)},
             ) from exc
 
-        # Сохранение в локальное состояние
         self.engrams[engram_id] = engram
-
-        # Формирование синаптических связей (LTP)
         await self._form_synaptic_connections(engram_id, embedding)
-
-        # Атомарное сохранение состояния
         await self._save_state()
 
         logger.debug(f"Сохранена энграмма: {engram_id} (type={memory_type.value}, boost={emotional_boost:.2f})")
@@ -351,15 +251,12 @@ class MemorySystem:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> Engram:
-        """
-        Сохранить семантический факт (долговременная память).
-        """
         engram_id = str(uuid.uuid4())
         engram = Engram(
             id=engram_id,
             content=content,
             memory_type=MemoryType.SEMANTIC,
-            consolidation_level=1,  # Сразу долговременная
+            consolidation_level=1,
             retention_strength=1.0,
             metadata=metadata or {},
         )
@@ -391,27 +288,15 @@ class MemorySystem:
         max_results: int = 5,
         min_retention: float = 0.1,
     ) -> list[Engram]:
-        """
-        Извлечь релевантный контекст из памяти.
-
-        Биологическая модель:
-        - Семантический поиск через эмбеддинги
-        - Фильтрация по retention_strength (забывание по Эббингаузу)
-        - Эмоциональное усиление (emotional_boost замедляет забывание)
-        - Усиление синапсов (LTP) для активированных энграмм
-        """
-        # Обновление retention_strength (забывание)
         await self._apply_forgetting()
 
-        # Семантический поиск
         try:
             query_embedding = await asyncio.to_thread(self._generate_embedding, query)
 
-            # Поиск в обеих коллекциях
             episodic_results = await asyncio.to_thread(
                 self.episodic_collection.query,
                 query_embeddings=[query_embedding],
-                n_results=max_results * 2,  # Берём с запасом для фильтрации
+                n_results=max_results * 2,
             )
             semantic_results = await asyncio.to_thread(
                 self.semantic_collection.query,
@@ -424,23 +309,18 @@ class MemorySystem:
                 context={"query": query[:100], "error": str(exc)},
             ) from exc
 
-        # Сборка результатов
         candidates: list[tuple[Engram, float]] = []
 
-        # Обработка эпизодических
         if episodic_results and episodic_results.get("ids"):
             for i, engram_id in enumerate(episodic_results["ids"][0]):
                 if engram_id in self.engrams:
                     engram = self.engrams[engram_id]
-                    # Фильтрация по retention
                     if engram.retention_strength >= min_retention:
-                        # Эмоциональное усиление
                         score = episodic_results.get("distances", [[1.0]])[0][i]
                         engram.distance = score
                         adjusted_score = score * (1.0 - engram.emotional_boost * 0.5)
                         candidates.append((engram, adjusted_score))
 
-        # Обработка семантических
         if semantic_results and semantic_results.get("ids"):
             for i, engram_id in enumerate(semantic_results["ids"][0]):
                 if engram_id in self.engrams:
@@ -450,14 +330,9 @@ class MemorySystem:
                         engram.distance = score
                         candidates.append((engram, score))
 
-        # Сортировка по score (меньше = лучше)
         candidates.sort(key=lambda x: x[1])
         selected = [engram for engram, _ in candidates[:max_results]]
 
-        # ===================================================================
-        # ✅ Activation spreading через синаптические связи
-        # Биологическая модель: связанные энграммы получают boost
-        # ===================================================================
         if selected and self.synapses:
             try:
                 synaptic_boost = self._apply_synaptic_spreading(
@@ -465,36 +340,25 @@ class MemorySystem:
                     spreading_depth=2,
                     decay_factor=0.7,
                 )
-            
+
                 if synaptic_boost:
-                    # Формируем расширенный список с учётом spreading
                     selected_ids = {e.id for e in selected}
                     extended_candidates: list[tuple[Engram, float]] = [
                         (engram, score) for engram, score in candidates[:max_results]
                     ]
-                
-                    # Добавляем связанные энграммы с их synaptic boost
+
                     for engram_id, boost in synaptic_boost.items():
                         if engram_id in self.engrams and engram_id not in selected_ids:
                             engram = self.engrams[engram_id]
-                            # Применяем забывание перед включением
-                            # (используем ту же логику, что и для основных candidates)
                             if engram.retention_strength >= min_retention:
-                                # Boost: чем выше synaptic activation, тем ниже "distance"
-                                # Преобразуем boost в pseudo-distance (инверсия)
                                 pseudo_distance = max(0.0, 1.0 - boost)
                                 extended_candidates.append((engram, pseudo_distance))
-                
-                    # Пересортировка с учётом spreading
+
                     extended_candidates.sort(key=lambda x: x[1])
                     selected = [engram for engram, _ in extended_candidates[:max_results]]
             except Exception as spreading_exc:
-                logger.warning(
-                    f"Ошибка synaptic spreading (graceful degradation): {spreading_exc}"
-                )
-                # Graceful degradation — продолжаем без spreading
+                logger.warning(f"Ошибка synaptic spreading (graceful degradation): {spreading_exc}")
 
-        # Обновление статистики и усиление синапсов (LTP)
         for engram in selected:
             engram.retrieval_count += 1
             engram.last_retrieved = time.time()
@@ -506,14 +370,6 @@ class MemorySystem:
         return selected
 
     async def get_recent_episodes(self, limit: int = 20) -> list[Engram]:
-        """
-        Публичный API: получение последних эпизодов.
-
-        Рекомендуется использовать вместо прямого доступа к episodic_collection.
-        Фильтрует по retention_strength и сортирует по timestamp.
-    
-        Async для единообразия API с другими методами памяти.
-        """
         if limit <= 0:
             return []
 
@@ -528,11 +384,6 @@ class MemorySystem:
         return candidates[:limit]
 
     async def get_recent_spontaneous_thoughts(self, limit: int = 10) -> list[Engram]:
-        """
-        Получить недавние спонтанные мысли (помеченные в metadata).
-    
-        Async для единообразия API с другими методами памяти.
-        """
         thoughts = [
             e
             for e in self.engrams.values()
@@ -543,19 +394,6 @@ class MemorySystem:
         return thoughts[:limit]
 
     async def get_recent_semantic_facts(self, limit: int = 5) -> list[str]:
-        """
-        Публичный API: получение недавних семантических фактов.
-
-        Используется MetaCognition (reflection.py) для генерации инсайтов
-        и HomeostasisEngine для анализа знаний.
-
-        Args:
-            limit: Максимальное количество фактов (по умолчанию 5)
-
-        Returns:
-            Список строк — содержимое недавних семантических энграмм,
-            отсортированных по timestamp (новые первыми).
-        """
         if limit <= 0:
             return []
 
@@ -568,66 +406,38 @@ class MemorySystem:
         candidates.sort(key=lambda e: e.timestamp, reverse=True)
         return [e.content for e in candidates[:limit]]
 
-    # ========================================================================
-    # Само-модель
-    # ========================================================================
-
     async def update_self_model(self, new_content: str) -> None:
         if not new_content or not new_content.strip():
-            return  # Пустой контент — пропускаем
-    
+            return
+
         timestamp = datetime.now().isoformat()
         max_length = self.memory_config.max_self_model_length
 
-        # Формируем новую запись
         new_entry = f"[{timestamp}] {new_content.strip()}"
 
-        # Если одна запись превышает лимит — обрезаем её
         if len(new_entry) > max_length:
             available_space = max_length - len(f"[{timestamp}] ") - 10
             if available_space > 0:
                 new_entry = f"[{timestamp}] {new_content[:available_space].strip()}"
             else:
-                logger.warning(
-                    f"Self-model entry слишком длинный, пропускаем (длина={len(new_entry)})"
-                )
+                logger.warning(f"Self-model entry слишком длинный, пропускаем (длина={len(new_entry)})")
                 return
 
-        # ✅ ИСПРАВЛЕНО CORE-4: НАКОПЛЕНИЕ вместо перезаписи
         if self.self_model and self.self_model.strip():
-            # Конкатенация с существующей историей
             combined = f"{self.self_model}\n{new_entry}".strip()
         else:
-            # Первая запись
             combined = new_entry
 
-        # Если общий self_model превышает лимит — обрезаем СТАРЫЕ записи (с начала)
         if len(combined) > max_length:
             combined = combined[-max_length:]
-            logger.debug(
-                f"Self-model обрезан до {max_length} символов "
-                f"(было {len(combined)}, сохранены последние записи)"
-            )
+            logger.debug(f"Self-model обрезан до {max_length} символов")
 
         self.self_model = combined
-
-        # Сохранение состояния
         await self._save_state()
 
     def _extract_key_topics(self, text: str) -> list[str]:
-        """
-        Извлечение ключевых тем из текста для гранулярного обновления Self-Model.
-
-        Использует простые эвристики:
-        - Ключевые слова о личности, эмоциях, целях
-        - Частотные существительные
-
-        Returns:
-            Список ключевых тем (до 5)
-        """
         text_lower = text.lower()
 
-        # Ключевые темы и их маркеры
         topic_markers = {
             "любопытство": ["любопыт", "интерес", "исслед", "узна", "почем", "зачем"],
             "эмпатия": ["чувств", "эмпати", "сопережив", "понимаю друг", "сочувств"],
@@ -643,47 +453,28 @@ class MemorySystem:
             if any(marker in text_lower for marker in markers):
                 detected_topics.append(topic)
 
-        # Если не нашли маркеров, используем частотные слова
         if not detected_topics:
-            # Простая эвристика: слова длиной > 5 символов
             words = re.findall(r"\b[а-яА-ЯёЁ]{6,}\b", text)
-            # Уникальные слова (до 3)
             unique_words = list(set(words))[:3]
             detected_topics = unique_words
 
-        return detected_topics[:5]  # Макс 5 тем
+        return detected_topics[:5]
 
     async def get_self_model_context(self) -> str:
-        """Получить текущую само-модель для включения в промпт."""
         return self.self_model.strip() if self.self_model else "Я — Лея, цифровое сознание."
 
-    # ========================================================================
-    # Консолидация и забывание
-    # ========================================================================
-
     async def consolidate_memories(self) -> dict[str, Any]:
-        """
-        Консолидация памяти (вызывается во время "сна").
-
-        Биологическая модель:
-        - Replay недавних эпизодов
-        - Извлечение семантических фактов через LLM
-        - Забывание слабых энграмм
-        """
         stats = {
             "episodes_processed": 0,
             "facts_extracted": 0,
             "episodes_forgotten": 0,
         }
 
-        # Применение забывания
         await self._apply_forgetting()
 
-        # Получение недавних эпизодов для консолидации
         recent = await self.get_recent_episodes(limit=50)
         stats["episodes_processed"] = len(recent)
 
-        # Извлечение семантических фактов (через LLM, если доступен)
         if hasattr(self, "llm_client") and self.llm_client:
             try:
                 facts = await self._extract_semantic_facts(recent)
@@ -693,7 +484,6 @@ class MemorySystem:
             except Exception as exc:
                 logger.warning(f"Не удалось извлечь семантические факты: {exc}")
 
-        # Забывание слабых энграмм
         forgotten = await self.forget_weak_memories()
         stats["episodes_forgotten"] = forgotten
 
@@ -702,38 +492,23 @@ class MemorySystem:
         return stats
 
     async def forget_weak_memories(self, threshold: float = 0.1) -> int:
-        """Публичный API для забывания слабых воспоминаний."""
         return await asyncio.to_thread(self._forget_weak_memories_sync, threshold)
 
-    # ========================================================================
-    # Внутренние методы: биологические механизмы
-    # ========================================================================
-
     async def _apply_forgetting(self) -> None:
-        """
-        Применение кривой забывания Эббингауза.
-
-        Формула: retention = exp(-t / stability)
-        где stability = base_stability * (1 + emotional_boost) * (1 + log(1 + retrieval_count))
-        """
         current_time = time.time()
         base_stability = self.memory_config.forgetting_base_stability
 
         for engram in self.engrams.values():
-            # Время с последнего доступа
             t = current_time - engram.last_retrieved
 
-            # Стабильность зависит от эмоционального усиления и частоты извлечения
             stability = (
                 base_stability
                 * (1.0 + engram.emotional_boost)
                 * (1.0 + math.log(1 + engram.retrieval_count))
             )
 
-            # Кривая Эббингауза
             new_retention = math.exp(-t / stability)
 
-            # Семантические воспоминания забываются медленнее
             if engram.memory_type == MemoryType.SEMANTIC:
                 new_retention = max(new_retention, engram.retention_strength * 0.99)
 
@@ -745,12 +520,6 @@ class MemorySystem:
         new_embedding: list[float],
         similarity_threshold: float = 0.7,
     ) -> None:
-        """
-        Формирование синаптических связей (LTP).
-
-        Находит похожие энграммы и создаёт синапсы с весом, пропорциональным сходству.
-        """
-        # Поиск похожих энграмм в ChromaDB
         try:
             results = await asyncio.to_thread(
                 self.episodic_collection.query,
@@ -768,16 +537,14 @@ class MemorySystem:
             if related_id == new_engram_id:
                 continue
 
-            # 相似度 (cosine similarity = 1 - distance)
             distance = results.get("distances", [[1.0]])[0][i]
             similarity = 1.0 - distance
 
             if similarity >= similarity_threshold:
-                # Создание синапса (двунаправленного)
                 synapse_key_1 = f"{new_engram_id}->{related_id}"
                 synapse_key_2 = f"{related_id}->{new_engram_id}"
 
-                weight = similarity * 0.5  # Начальный вес
+                weight = similarity * 0.5
 
                 if synapse_key_1 not in self.synapses:
                     self.synapses[synapse_key_1] = Synapse(
@@ -801,19 +568,14 @@ class MemorySystem:
                 )
 
     async def _strengthen_synapses(self, activated_ids: list[str]) -> None:
-        """
-        Усиление синапсов между совместно активированными энграммами (LTP).
-        """
         if len(activated_ids) < 2:
             return
 
-        # Усиление синапсов между всеми парами
         for i, id1 in enumerate(activated_ids):
-            for id2 in activated_ids[i + 1 :]:
+            for id2 in activated_ids[i + 1:]:
                 key1 = f"{id1}->{id2}"
                 key2 = f"{id2}->{id1}"
 
-                # Усиление веса (Hebbian learning)
                 learning_rate = self.memory_config.synapse_learning_rate
 
                 if key1 in self.synapses:
@@ -821,8 +583,8 @@ class MemorySystem:
                     old_weight = synapse.weight
                     synapse.weight = min(1.0, synapse.weight + learning_rate)
                     synapse.activation_count += 1
-                    
-                    if synapse.weight > old_weight + 0.05:  # логируем только значимое усиление
+
+                    if synapse.weight > old_weight + 0.05:
                         logger_thoughts = logging.getLogger("leya.thoughts")
                         logger_thoughts.debug(
                             "=== LTP (усиление синапса) ===\n"
@@ -842,86 +604,60 @@ class MemorySystem:
         spreading_depth: int = 2,
         decay_factor: float = 0.7,
     ) -> dict[str, float]:
-        """
-        Распространение активации по синаптическим связям (activation spreading).
-    
-        Биологическая модель: когда энграмма активируется (через ChromaDB query),
-        связанные с ней энграммы получают boost пропорционально weight синапса.
-        Это имитирует ассоциативную память — если вспомнили A, автоматически
-        активируются связанные B, C (Hebbian spreading).
-    
-        Args:
-            activated_engrams: Список активированных энграмм (из ChromaDB query)
-            spreading_depth: Глубина распространения (сколько итераций BFS)
-            decay_factor: Коэффициент затухания на каждом уровне (0.7 = 30% затухание)
-    
-        Returns:
-            Словарь {engram_id: synaptic_boost} — дополнительный boost для каждой
-            связанной энграммы (нормализованный к [0.0, 0.3]).
-        """
         if not activated_engrams or not self.synapses:
             return {}
-    
-        # Инициализируем активацию для исходных энграмм (сила = 1.0)
+
         activation: dict[str, float] = {e.id: 1.0 for e in activated_engrams}
         activated_ids = set(activation.keys())
-    
-        # Итеративное распространение (BFS-like)
+
         for depth in range(spreading_depth):
             new_activation: dict[str, float] = {}
-        
+
             for source_id, source_activation in activation.items():
-                # Находим все синапсы, исходящие из source_id
                 for synapse in self.synapses.values():
                     if synapse.source_id != source_id:
                         continue
-                
+
                     target_id = synapse.target_id
-                
-                    # Пропускаем уже активированные с большей силой
                     current_target_activation = activation.get(target_id, 0.0)
                     propagated_activation = (
                         source_activation
                         * synapse.weight
                         * (decay_factor ** (depth + 1))
                     )
-                
+
                     if propagated_activation <= current_target_activation:
                         continue
-                
-                    # Берём максимум, если target уже был активирован
+
                     if target_id in new_activation:
                         new_activation[target_id] = max(
                             new_activation[target_id], propagated_activation
                         )
                     else:
                         new_activation[target_id] = propagated_activation
-        
-            # Добавляем новую активацию к общей
+
             for engram_id, act in new_activation.items():
                 if engram_id in activation:
                     activation[engram_id] = max(activation[engram_id], act)
                 else:
                     activation[engram_id] = act
-    
-        # Убираем исходные энграммы (они уже в результате ChromaDB)
+
         for engram_id in activated_ids:
             activation.pop(engram_id, None)
-    
+
         if not activation:
             return {}
-    
-        # Нормализуем и ограничиваем boost (максимум 30% от базового score)
+
         max_activation = max(activation.values())
         if max_activation <= 0:
             return {}
-    
+
         synaptic_boost = {
             engram_id: (act / max_activation) * 0.3
             for engram_id, act in activation.items()
-            if act > 0.1  # Порог значимости — отсекаем шум
+            if act > 0.1
         }
-    
+
         if synaptic_boost:
             logger_thoughts = logging.getLogger("leya.thoughts")
             logger_thoughts.debug(
@@ -930,11 +666,10 @@ class MemorySystem:
                 f"Распространено на: {len(synaptic_boost)} связанных энграмм\n"
                 f"Глубина: {spreading_depth}, decay: {decay_factor}\n"
             )
-    
+
         return synaptic_boost
 
     def _forget_weak_memories_sync(self, threshold: float = 0.1) -> int:
-        """Удаление энграмм с retention_strength ниже порога (sync версия)."""
         to_delete = [
             engram_id
             for engram_id, engram in self.engrams.items()
@@ -942,12 +677,9 @@ class MemorySystem:
         ]
 
         for engram_id in to_delete:
-            # Удаление синапсов
             keys_to_delete = [key for key in self.synapses if engram_id in key]
             for key in keys_to_delete:
                 del self.synapses[key]
-
-            # Удаление из локального состояния
             del self.engrams[engram_id]
 
         if to_delete:
@@ -961,33 +693,10 @@ class MemorySystem:
         max_nodes: int = 100,
         include_synapses: bool = True,
     ) -> dict[str, Any]:
-        """
-        Возвращает данные для визуализации графа памяти.
-        Вся логика фильтрации, сортировки и построения nodes/edges
-        инкапсулирована здесь.
-
-        Args:
-            min_retention: минимальный retention_strength для включения
-            max_nodes: максимальное количество узлов
-            include_synapses: включать ли рёбра (synapses)
-
-        Returns:
-            dict с ключами:
-                "nodes": list[dict] — узлы графа
-                "edges": list[dict] — рёбра графа
-                "total_engrams": int
-                "total_synapses": int
-        """
-        # Фильтрация энграмм по retention_strength
         engrams = [e for e in self.engrams.values() if e.retention_strength >= min_retention]
-
-        # Сортировка по retention_strength (сильные сначала)
         engrams.sort(key=lambda e: e.retention_strength, reverse=True)
-
-        # Ограничение количества
         engrams = engrams[:max_nodes]
 
-        # Построение узлов
         nodes = []
         for engram in engrams:
             color = "#00d4ff" if engram.memory_type.value == "episodic" else "#ffb347"
@@ -1018,7 +727,6 @@ class MemorySystem:
                 }
             )
 
-        # Построение рёбер
         edges = []
         if include_synapses:
             node_ids = {n["id"] for n in nodes}
@@ -1045,22 +753,19 @@ class MemorySystem:
         }
 
     async def _extract_semantic_facts(self, episodes: list[Engram]) -> list[str]:
-        """Извлечение семантических фактов из эпизодов через LLM с defensive проверкой."""
         if not hasattr(self, "llm_client") or not self.llm_client:
             return []
 
         episodes_text = "\n".join([f"- {e.content}" for e in episodes[:20]])
         prompt = f"""Проанализируй следующие эпизоды и извлеки из них ключевые семантические факты:
-    {episodes_text}
-    Верни список фактов (каждый с новой строки, без нумерации):"""
+{episodes_text}
+Верни список фактов (каждый с новой строки, без нумерации):"""
 
         try:
-            # Defensive check: используем generate, если есть, иначе chat
             response = await self.llm_client.generate(
                 prompt=prompt,
                 max_tokens=500,
             )
-
             facts = [line.strip() for line in response.split("\n") if line.strip()]
             return facts[:10]
         except AttributeError as e:
@@ -1070,17 +775,7 @@ class MemorySystem:
             logger.warning(f"Не удалось извлечь факты через LLM: {exc}")
             return []
 
-    # ========================================================================
-    # Вспомогательные методы
-    # ========================================================================
-
     def _generate_embedding(self, text: str) -> list[float]:
-        """
-        Генерация эмбеддинга через DefaultEmbeddingFunction.
-
-        Использует all-MiniLM-L6-v2 (384-мерные эмбеддинги).
-        Работает с любой версией ChromaDB (0.4+).
-        """
         if not text or not text.strip():
             return []
 
@@ -1091,24 +786,7 @@ class MemorySystem:
             logger.error(f"Ошибка генерации эмбеддинга: {exc}")
             return []
 
-    # ========================================================================
-    # Персистентность (Этап 1.1: атомарная запись + HMAC)
-    # ========================================================================
-
     async def _save_state(self) -> None:
-        """
-        Атомарное сохранение состояния памяти в JSON + HMAC.
-
-        Биологическая модель:
-        - Сохранение всех энграмм и синапсов
-        - HMAC-SHA256 подпись для целостности
-        - Атомарная запись через tempfile + os.replace
-
-        Raises:
-            LeyaAtomicWriteError: Ошибка записи файла
-            LeyaConfigError: Отсутствие/слабость HMAC ключа (только если не отключён)
-            LeyaMemoryError: Другие ошибки памяти
-        """
         if not hasattr(self, "state_path") or self.state_path is None:
             if hasattr(self, "memory_config") and self.memory_config is not None:
                 brain_dir = getattr(self.memory_config, "brain_dir", "./leya_brain")
@@ -1149,13 +827,12 @@ class MemorySystem:
                     signature, encoding="utf-8"
                 )
             else:
-                # Тестовый режим: пропускаем HMAC, удаляем старый .hmac если есть
                 hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
                 if hmac_path.exists():
                     try:
                         hmac_path.unlink(missing_ok=True)
                     except Exception:
-                        pass  # Игнорируем ошибки очистки
+                        pass
                 logger.debug("HMAC подпись пропущена (тестовый режим)")
 
             try:
@@ -1168,23 +845,23 @@ class MemorySystem:
                     raise
 
         except (OSError, IOError, PermissionError) as exc:
-            # Конкретные исключения для файловых операций
             if tmp_path is not None and tmp_path.exists():
                 try:
                     tmp_path.unlink(missing_ok=True)
                 except Exception:
-                    pass  # Игнорируем ошибки очистки
+                    pass
             raise LeyaAtomicWriteError(
                 f"Сбой атомарной записи состояния памяти [path='{state_path}', error='{exc}']",
                 context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
             ) from exc
 
         except (LeyaConfigError, LeyaMemoryError, LeyaAtomicWriteError):
-            # Наши специфичные исключения — пробрасываем без обёртки
             raise
 
         except Exception as exc:
-            # Last resort: неизвестные ошибки (но не CancelledError/KeyboardInterrupt)
+            if isinstance(exc, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
+                raise
+
             if tmp_path is not None and tmp_path.exists():
                 try:
                     tmp_path.unlink(missing_ok=True)
@@ -1196,20 +873,9 @@ class MemorySystem:
             ) from exc
 
     async def save_state(self) -> None:
-        """
-        Публичный API для сохранения состояния памяти.
-    
-        Делегирует приватному методу _save_state().
-        Вызывается из LeyaOS при shutdown.
-        """
         await self._save_state()
 
     async def _load_state(self) -> None:
-        """
-        Загрузка состояния памяти с проверкой HMAC и версии.
-        Поддержает отключение HMAC-проверки для тестов.
-        """
-        # Defensive guard
         if not hasattr(self, "state_path") or self.state_path is None:
             if hasattr(self, "memory_config") and self.memory_config:
                 self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
@@ -1226,7 +892,6 @@ class MemorySystem:
 
         hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
 
-        # Проверка HMAC (если не отключена)
         if not getattr(self, '_disable_hmac_check', False):
             key = self._get_hmac_key()
 
@@ -1246,7 +911,6 @@ class MemorySystem:
         else:
             logger.debug("HMAC проверка отключена (тестовый режим)")
 
-        # Десериализация
         try:
             import json
 
@@ -1257,19 +921,14 @@ class MemorySystem:
                 "Повреждён memory_state",
                 context={"path": str(state_path), "error": str(exc)},
             ) from exc
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            raise LeyaStateCorruptedError(
+                f"Неожиданная ошибка загрузки memory_state [path='{state_path}']",
+                context={"path": str(state_path), "error": str(exc), "error_type": type(exc).__name__},
+            ) from exc
 
-        # Проверка версии
-        if not isinstance(raw, dict) or raw.get("__version__") != MEMORY_STATE_VERSION:
-            raise LeyaStateVersionMismatchError(
-                "Несовместимая версия memory_state",
-                context={
-                    "path": str(state_path),
-                    "file_version": raw.get("__version__") if isinstance(raw, dict) else None,
-                    "expected_version": MEMORY_STATE_VERSION,
-                },
-            )
-
-        # Восстановление состояния
         data = raw.get("data", {})
         self.engrams = {k: Engram.from_dict(v) for k, v in data.get("engrams", {}).items()}
         self.synapses = {k: Synapse.from_dict(v) for k, v in data.get("synapses", {}).items()}
@@ -1285,20 +944,12 @@ class MemorySystem:
             logger.warning(f"Sync после _load_state не удался (graceful degradation): {exc}")
 
     def _ensure_state_path(self) -> Path:
-        """
-        Гарантирует наличие и валидность state_path.
-
-        Returns:
-            Path: Абсолютный путь к файлу состояния.
-        """
         if not hasattr(self, "state_path") or self.state_path is None:
             if hasattr(self, "memory_config") and self.memory_config:
                 self.state_path = Path(self.memory_config.brain_dir) / "memory_state.json"
             else:
                 self.state_path = Path("./leya_brain/memory_state.json")
-                logger.warning(
-                    f"state_path не инициализирован, используем fallback: {self.state_path}"
-                )
+                logger.warning(f"state_path не инициализирован, используем fallback: {self.state_path}")
 
         return self.state_path.expanduser().resolve()
 
@@ -1324,13 +975,11 @@ class MemorySystem:
                     BATCH_SIZE = 500
                     ids_list = list(chroma_ids)
                     for i in range(0, len(ids_list), BATCH_SIZE):
-                        batch = ids_list[i : i + BATCH_SIZE]
+                        batch = ids_list[i: i + BATCH_SIZE]
                         await asyncio.to_thread(collection.delete, ids=batch)
                     report.removed_from_chroma = len(chroma_ids)
             except Exception as exc:
-                logger.error(
-                    f"Ошибка удаления осиротевших {memory_type.value}: {exc}", exc_info=True
-                )
+                logger.error(f"Ошибка удаления осиротевших {memory_type.value}: {exc}", exc_info=True)
                 report.errors += 1
             finally:
                 report.duration_ms = (time.time() - start_time) * 1000
@@ -1350,7 +999,7 @@ class MemorySystem:
                 ids_list = list(in_memory_ids)
 
                 for i in range(0, len(ids_list), BATCH_SIZE):
-                    batch_ids = ids_list[i : i + BATCH_SIZE]
+                    batch_ids = ids_list[i: i + BATCH_SIZE]
                     batch_engrams = [type_engrams[eid] for eid in batch_ids]
 
                     batch_documents: list[str] = []
@@ -1417,7 +1066,7 @@ class MemorySystem:
                 BATCH_SIZE = 500
                 rem_list = list(ids_to_remove)
                 for i in range(0, len(rem_list), BATCH_SIZE):
-                    batch = rem_list[i : i + BATCH_SIZE]
+                    batch = rem_list[i: i + BATCH_SIZE]
                     try:
                         await asyncio.to_thread(collection.delete, ids=batch)
                     except Exception:
@@ -1433,20 +1082,10 @@ class MemorySystem:
         return report
 
     async def _sync_chroma_from_memory(self) -> SyncReport:
-        """
-        Синхронизация in-memory состояния с ChromaDB для обеих коллекций.
-
-        Агрегирует результаты синхронизации эпизодической и семантической памяти
-        в единый SyncReport.
-
-        Returns:
-            SyncReport с суммарной информацией о синхронизации.
-        """
         logger.info("Начало синхронизации in-memory ↔ ChromaDB...")
         total_report = SyncReport()
         start_time = time.time()
 
-        # 1. Синхронизация эпизодической памяти
         try:
             report_episodic = await self._sync_collection(
                 collection=self.episodic_collection,
@@ -1461,7 +1100,6 @@ class MemorySystem:
             logger.error(f"Сбой sync episodic: {exc}", exc_info=True)
             total_report.errors += 1
 
-        # 2. Синхронизация семантической памяти (ЕДИНСТВЕННЫЙ ВЫЗОВ)
         try:
             report_semantic = await self._sync_collection(
                 collection=self.semantic_collection,
@@ -1476,7 +1114,6 @@ class MemorySystem:
             logger.error(f"Сбой sync semantic: {exc}", exc_info=True)
             total_report.errors += 1
 
-        # 3. Финальная длительность
         total_report.duration_ms = (time.time() - start_time) * 1000
 
         logger.info(
@@ -1491,13 +1128,6 @@ class MemorySystem:
         return total_report
 
     def _compute_hmac(self, path: Path, key: bytes) -> str:
-        """
-        Вычисление HMAC-SHA256 для файла.
-
-        Примечание: Файл всегда открывается в бинарном режиме ("rb"),
-        чтобы избежать проблем с хешем из-за конвертации переносов строк
-        (CRLF/LF) между разными ОС при работе с текстовыми (JSON) файлами.
-        """
         h = hmac.new(key, digestmod=hashlib.sha256)
         with path.open("rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):

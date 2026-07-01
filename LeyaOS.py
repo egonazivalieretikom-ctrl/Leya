@@ -614,8 +614,23 @@ class LeyaOS:
         if sys.platform != "win32":
             try:
                 loop = asyncio.get_running_loop()
+        
+                async def _signal_handler(sig):
+                    """Защищённый signal handler с таймаутом."""
+                    logger.info(f"📡 Получен сигнал {sig.name if hasattr(sig, 'name') else sig}")
+                    try:
+                        # Таймаут 5с на весь shutdown
+                        await asyncio.wait_for(self.shutdown(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        logger.error("⚠️ Shutdown превысил таймаут (5с), принудительный выход")
+                    except Exception as e:
+                        logger.error(f"Ошибка в signal handler: {e}", exc_info=True)
+                    finally:
+                        # Останавливаем event loop для гарантированного выхода
+                        loop.stop()
+        
                 for sig in (signal.SIGINT, signal.SIGTERM):
-                    loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self.shutdown()))
+                    loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(_signal_handler(s)))
             except NotImplementedError:
                 logger.warning(
                     "Signal handlers не поддерживаются на этой платформе. Используйте Ctrl+C."
@@ -645,8 +660,10 @@ class LeyaOS:
             await self.shutdown()
 
     async def _save_all_state(self) -> list[tuple[str, Exception]]:
-        """
-        Сохранение состояния всех компонентов при shutdown.
+        """Сохранение состояния всех компонентов при shutdown.
+
+        Каждый компонент имеет свой таймаут. Если компонент не укладывается —
+        логируем ошибку и продолжаем (остальные компоненты сохраняются).
 
         Returns:
             Список кортежей (component_name, exception) для каждой ошибки.
@@ -654,17 +671,19 @@ class LeyaOS:
         """
         errors: list[tuple[str, Exception]] = []
 
-        # 1. Память (через публичный API)
+        # 1. Память (таймаут 2с)
         try:
-            await self.memory.save_state()
+            await asyncio.wait_for(self.memory.save_state(), timeout=2.0)
             logger.info("✅ Состояние памяти сохранено")
+        except asyncio.TimeoutError:
+            logger.error("⚠️ Таймаут сохранения памяти (2с)")
+            errors.append(("memory", TimeoutError("memory save timeout")))
         except Exception as e:
             logger.error(f"Ошибка сохранения памяти при shutdown: {e}", exc_info=True)
             errors.append(("memory", e))
 
-        # 2. Драйвы + Гомеостаз + Workspace + Constitutional + Reflection
-        # через StatePersistence
-        if getattr(self, 'persistence', None) is not None:
+        # 2. Драйвы + Гомеостаз + Workspace + Constitutional + Reflection (таймаут 1с)
+        if getattr(self, "persistence", None) is not None:
             try:
                 state_data = {
                     "drives": (
@@ -701,8 +720,14 @@ class LeyaOS:
                 }
 
                 # StatePersistence.save_state() — синхронный метод
-                self.persistence.save_state(state_data)
+                await asyncio.wait_for(
+                    asyncio.to_thread(self.persistence.save_state, state_data),
+                    timeout=1.0,
+                )
                 logger.info("✅ Состояние всех компонентов сохранено")
+            except asyncio.TimeoutError:
+                logger.error("⚠️ Таймаут сохранения persistence (1с)")
+                errors.append(("persistence", TimeoutError("persistence save timeout")))
             except Exception as e:
                 logger.error(
                     f"Ошибка сохранения состояния persistence при shutdown: {e}",
@@ -715,6 +740,12 @@ class LeyaOS:
     async def shutdown(self) -> None:
         """Graceful shutdown: остановка задач + сохранение состояния.
 
+        Строгая последовательность с таймаутами:
+        1. Отмена фоновых задач (таймаут 2с)
+        2. Закрытие LLM-сессии (таймаут 1с)
+        3. Сохранение состояния памяти (таймаут 3с)
+        4. Сохранение состояния драйвов (таймаут 2с)
+    
         Ошибки при сохранении логируются с контекстом и возвращаются списком.
         Сам shutdown не падает, даже если все компоненты отказали.
         """
@@ -724,43 +755,71 @@ class LeyaOS:
         self._shutdown_event.set()
 
         logger.info("🛑 Начало graceful shutdown...")
-    
+        shutdown_start = time.time()
+
         # Явно устанавливаем состояние "sleeping" ПЕРЕД сохранением
         self.state = "sleeping"
 
-        # 1. Отменяем все фоновые задачи
-        tasks_to_cancel = [
-            t for t in self._background_tasks
-            if not t.done()
-        ]
+        # ===================================================================
+        # ЭТАП 1: Отмена фоновых задач (таймаут 2с)
+        # ===================================================================
+        tasks_to_cancel = [t for t in self._background_tasks if not t.done()]
         for task in tasks_to_cancel:
             task.cancel()
 
         if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-            logger.info(f"Отменено фоновых задач: {len(tasks_to_cancel)}")
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks_to_cancel, return_exceptions=True),
+                    timeout=2.0,
+                )
+                logger.info(f"Отменено фоновых задач: {len(tasks_to_cancel)}")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"⚠️ Таймаут отмены задач (2с). "
+                    f"Завершено: {sum(1 for t in tasks_to_cancel if t.done())}/{len(tasks_to_cancel)}"
+                )
 
-        # 2. Закрываем сессию LLM-клиента
+        # ===================================================================
+        # ЭТАП 2: Закрытие LLM-сессии (таймаут 1с)
+        # ===================================================================
         if hasattr(self, "llm_client") and self.llm_client is not None:
             try:
-                await self.llm_client.close()
+                await asyncio.wait_for(self.llm_client.close(), timeout=1.0)
+                logger.debug("LLM-сессия закрыта")
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ Таймаут закрытия LLM-сессии (1с)")
             except Exception as e:
                 logger.error(
                     f"Ошибка закрытия LLM-сессии: {e}",
                     exc_info=True,
-                    extra={"component": "llm_client"}
+                    extra={"component": "llm_client"},
                 )
 
-        # 3. Сохраняем состояние всех компонентов
-        save_errors = await self._save_all_state()
+        # ===================================================================
+        # ЭТАП 3: Сохранение состояния (таймаут 3с на весь _save_all_state)
+        # ===================================================================
+        save_errors: list[tuple[str, Exception]] = []
+        try:
+            save_errors = await asyncio.wait_for(self._save_all_state(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.error("⚠️ Таймаут сохранения состояния (3с)")
+            save_errors = [("timeout", TimeoutError("shutdown save timeout"))]
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка сохранения состояния: {e}", exc_info=True)
+            save_errors = [("unexpected", e)]
 
-        # 4. Финальный лог
+        # ===================================================================
+        # Финальный лог
+        # ===================================================================
+        elapsed = time.time() - shutdown_start
         if save_errors:
             logger.warning(
-                f"⚠️ Shutdown завершён с {len(save_errors)} ошибкой(ами) сохранения"
+                f"⚠️ Shutdown завершён с {len(save_errors)} ошибкой(ами) сохранения "
+                f"за {elapsed:.2f}с"
             )
         else:
-            logger.info("✅ Graceful shutdown завершён успешно")
+            logger.info(f"✅ Graceful shutdown завершён успешно за {elapsed:.2f}с")
 
         return save_errors
 
@@ -2679,7 +2738,6 @@ async def main() -> None:
             logging.StreamHandler(sys.stdout),
         ],
     )
-
     logging.getLogger("leya.thoughts").setLevel(logging.DEBUG)
     logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
@@ -2690,8 +2748,27 @@ async def main() -> None:
         await leya.run()
     except KeyboardInterrupt:
         logger.info("Получен сигнал остановки (KeyboardInterrupt)")
+        # На Windows signal handlers не работают, поэтому shutdown вызываем явно
+        if sys.platform == "win32":
+            try:
+                await asyncio.wait_for(leya.shutdown(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.error("⚠️ Shutdown timeout на Windows")
+    except SystemExit:
+        logger.info("Получен SystemExit")
+        try:
+            await asyncio.wait_for(leya.shutdown(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.error("⚠️ Shutdown timeout при SystemExit")
     finally:
-        await leya.shutdown()
+        # Защита от повторного shutdown (если уже вызван через signal handler)
+        if not leya._shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(leya.shutdown(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.error("⚠️ Shutdown timeout в finally")
+            except Exception as e:
+                logger.error(f"Ошибка shutdown в finally: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
@@ -2699,3 +2776,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Лея остановлена.")
+        sys.exit(0)
+    except SystemExit:
+        print("\n👋 Лея остановлена (SystemExit).")
+        raise
