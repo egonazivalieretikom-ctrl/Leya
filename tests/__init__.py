@@ -1,16 +1,16 @@
 """
-LeyaOS — Core package.
+tests/ — Unit, integration и property-based тесты для LeyaOS.
 
-Bootstrap: установка переменных окружения ДО импорта chromadb и других модулей.
+Структура:
+- unit/          — изолированные тесты отдельных модулей (memory, drives, thinker)
+- integration/   — тесты взаимодействия компонентов (LeyaOS, cognitive_loop)
+- property/      — property-based тесты (hypothesis) для edge cases
+- fake_backend.py — тестовый LLM-бэкенд (FakeLLMBackend)
+- conftest.py    — общие fixtures
+
+Запуск:
+    pytest tests/                    # все тесты
+    pytest tests/unit/               # только unit
+    pytest tests/property/           # только property-based
+    pytest --cov=leya_core tests/    # с покрытием
 """
-
-import os
-
-# Отключение телеметрии ChromaDB
-os.environ["ANONYMIZED_TELEMETRY"] = "false"
-os.environ["CHROMA_TELEMETRY_DISABLE"] = "true"
-
-# Отключение телеметрии sentence-transformers/HuggingFace
-os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.environ.get(
-    "SENTENCE_TRANSFORMERS_HOME", "./.cache/sentence_transformers"
-)

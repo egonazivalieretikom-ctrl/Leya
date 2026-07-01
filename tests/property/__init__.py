@@ -1,0 +1,1 @@
+"""Property-based тесты (hypothesis) для edge cases."""
