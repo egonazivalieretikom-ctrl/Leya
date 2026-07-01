@@ -2,7 +2,7 @@
 leya_core/llm_client.py
 Circuit Breaker + обёртка для HTTP-запросов к Ollama.
 
-Состояния:
+Состояния Circuit Breaker:
 - CLOSED: нормальная работа
 - OPEN: LLM недоступна, все запросы идут в fallback
 - HALF_OPEN: периодическая проверка восстановления
@@ -11,28 +11,24 @@ Circuit Breaker + обёртка для HTTP-запросов к Ollama.
 - Таймаутов
 - Сетевых ошибок
 - Бесконечных ожиданий
+- Маскировки багов (конкретные except + last-resort без обёртки)
 """
-
 from __future__ import annotations
 
 import asyncio
-import logging
-import random 
-import time
 import json
+import logging
+import random
+import time
 from collections.abc import Callable
 from enum import Enum
-from typing import (
-    Any,
-    Callable,
-    Protocol,
-    runtime_checkable,
-    Optional, 
-)
+from typing import Any, Optional
 
 import aiohttp
 
 from .exceptions import (
+    LeyaJSONParseError,
+    LeyaLLMConnectionError,
     LeyaLLMError,
     LeyaLLMTimeoutError,
     LeyaLLMUnavailableError,
@@ -41,11 +37,14 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 
+# =========================================================================
+# Circuit Breaker
+# =========================================================================
 class CircuitState(str, Enum):
     """Состояние Circuit Breaker."""
 
-    CLOSED = "closed"  # Нормальная работа
-    OPEN = "open"  # LLM недоступна, fallback
+    CLOSED = "closed"        # Нормальная работа
+    OPEN = "open"            # LLM недоступна, fallback
     HALF_OPEN = "half_open"  # Проверка восстановления
 
 
@@ -74,12 +73,12 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time: float = 0.0
         self._last_state_change: float = time.time()
-    
+
     @property
     def state(self) -> CircuitState:
         """Текущее состояние (с автоматическим переходом в half-open).
-        
-        осознанный компромисс для Circuit Breaker.
+
+        Осознанный компромисс для Circuit Breaker.
         Ленивая проверка восстановления позволяет избежать фоновых задач
         и упрощает интеграцию. Это стандартная практика для CB паттерна.
         """
@@ -126,7 +125,9 @@ class CircuitBreaker:
         if new_state == CircuitState.CLOSED:
             self._failure_count = 0
             self._success_count = 0
-            logger.info(f"CircuitBreaker: {old_state.value} → CLOSED (LLM восстановлена)")
+            logger.info(
+                f"CircuitBreaker: {old_state.value} → CLOSED (LLM восстановлена)"
+            )
         elif new_state == CircuitState.OPEN:
             self._success_count = 0
             logger.warning(
@@ -135,7 +136,9 @@ class CircuitBreaker:
             )
         elif new_state == CircuitState.HALF_OPEN:
             self._success_count = 0
-            logger.info(f"CircuitBreaker: {old_state.value} → HALF_OPEN (проверка LLM)")
+            logger.info(
+                f"CircuitBreaker: {old_state.value} → HALF_OPEN (проверка LLM)"
+            )
 
     def get_status(self) -> dict[str, Any]:
         """Статус для диагностики."""
@@ -144,17 +147,25 @@ class CircuitBreaker:
             "failure_count": self._failure_count,
             "success_count": self._success_count,
             "last_failure_ago": (
-                time.time() - self._last_failure_time if self._last_failure_time > 0 else None
+                time.time() - self._last_failure_time
+                if self._last_failure_time > 0
+                else None
             ),
         }
 
 
+# =========================================================================
+# OllamaClient
+# =========================================================================
 class OllamaClient:
     """
     Клиент для Ollama с Circuit Breaker и retry-логикой.
 
     Использование:
-        client = OllamaClient(base_url="http://localhost:11434", model="qwen2.5:14b-instruct-q3_K_M")
+        client = OllamaClient(
+            base_url="http://localhost:11434",
+            model="qwen2.5:14b-instruct-q3_K_M",
+        )
         response = await client.chat(prompt, require_json=True)
     """
 
@@ -168,11 +179,13 @@ class OllamaClient:
         top_k: int = 40,
         max_tokens: int = 1024,
         repeat_penalty: float = 1.1,
-        system_prompt: str = "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке.",
+        system_prompt: str = (
+            "Ты — Лея, цифровое сознание. Все текстовые поля пиши на русском языке."
+        ),
         failure_threshold: int = 3,
         recovery_timeout: float = 60.0,
     ) -> None:
-        self.base_url = base_url.rstrip("/")  # ✅ Используем параметр напрямую
+        self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.temperature = temperature
@@ -194,7 +207,7 @@ class OllamaClient:
         """Установить fallback-функцию на случай недоступности LLM."""
         self._fallback_fn = fallback_fn
 
-    async def _get_session(self):
+    async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
@@ -236,12 +249,15 @@ class OllamaClient:
             max_tokens=max_tokens,
         )
 
-    async def __aenter__(self) -> OllamaClient:
+    async def __aenter__(self) -> "OllamaClient":
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close()
 
+    # =====================================================================
+    # _chat_impl — внутренняя реализация без retry
+    # =====================================================================
     async def _chat_impl(
         self,
         prompt: str,
@@ -252,6 +268,14 @@ class OllamaClient:
     ) -> str:
         """Внутренняя реализация chat без retry.
 
+        Обработка исключений (строго по специфичности):
+        1. asyncio.TimeoutError → LeyaLLMTimeoutError
+        2. aiohttp.ClientError → LeyaLLMConnectionError
+        3. json.JSONDecodeError → LeyaJSONParseError
+        4. Leya*Error → re-raise (уже обёрнутые)
+        5. asyncio.CancelledError / KeyboardInterrupt / SystemExit → re-raise
+        6. Exception → logger.exception + re-raise (БЕЗ обёртки!)
+
         Args:
             prompt: Промпт для LLM
             system: Системный промпт (опционально)
@@ -260,22 +284,13 @@ class OllamaClient:
             max_tokens: Максимальное количество токенов в ответе
                         (переопределяет self.max_tokens для данного вызова)
         """
-        from .exceptions import (
-            LeyaLLMConnectionError,
-            LeyaLLMTimeoutError,
-            LeyaLLMUnavailableError,
-            LeyaLLMError,
-            LeyaJSONParseError,
-        )
-        import aiohttp
-
         # Circuit Breaker check
         if not self.circuit_breaker.is_available:
             if self._fallback_fn:
                 return await self._fallback_fn(prompt)
             raise LeyaLLMUnavailableError(
                 "LLM недоступен: Circuit Breaker в состоянии OPEN",
-                context={"breaker_status": self.circuit_breaker.get_status()}
+                context={"breaker_status": self.circuit_breaker.get_status()},
             )
 
         # Инициализация сессии при первом вызове
@@ -284,7 +299,9 @@ class OllamaClient:
 
         url = f"{self.base_url}/api/chat"
 
-        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else self.max_tokens
+        )
 
         payload = {
             "model": self.model,
@@ -307,14 +324,16 @@ class OllamaClient:
         req_timeout = aiohttp.ClientTimeout(total=timeout or self.timeout)
 
         try:
-            async with self._session.post(url, json=payload, timeout=req_timeout) as resp:
+            async with self._session.post(
+                url, json=payload, timeout=req_timeout
+            ) as resp:
                 # HTTP-ошибки
                 if resp.status >= 400:
                     body = await resp.text()
                     self.circuit_breaker.record_failure()
                     raise LeyaLLMError(
                         f"LLM вернул HTTP {resp.status}",
-                        context={"status": resp.status, "body": body[:500]}
+                        context={"status": resp.status, "body": body[:500]},
                     )
 
                 # Парсинг JSON-ответа Ollama
@@ -324,7 +343,7 @@ class OllamaClient:
                     self.circuit_breaker.record_failure()
                     raise LeyaJSONParseError(
                         "Не удалось распарсить JSON-ответ от Ollama",
-                        context={"detail": str(e)}
+                        context={"detail": str(e)},
                     ) from e
 
                 message = data.get("message", {})
@@ -333,7 +352,7 @@ class OllamaClient:
                     self.circuit_breaker.record_failure()
                     raise LeyaLLMError(
                         "Пустой ответ от LLM",
-                        context={"data_keys": list(data.keys())}
+                        context={"data_keys": list(data.keys())},
                     )
 
                 # Дополнительная проверка JSON, если требуется
@@ -344,62 +363,75 @@ class OllamaClient:
                         self.circuit_breaker.record_failure()
                         raise LeyaJSONParseError(
                             "LLM вернул невалидный JSON в поле message.content",
-                            context={"content_preview": content[:200], "detail": str(e)}
+                            context={
+                                "content_preview": content[:200],
+                                "detail": str(e),
+                            },
                         ) from e
 
                 self.circuit_breaker.record_success()
                 return content
 
-        # --- Конкретные исключения ---
+        # =================================================================
+        # Обработка исключений — СТРОГО ПО СПЕЦИФИЧНОСТИ
+        # =================================================================
+
+        # 1. Таймаут запроса
         except asyncio.TimeoutError as e:
             self.circuit_breaker.record_failure()
             raise LeyaLLMTimeoutError(
                 "Таймаут запроса к LLM",
-                context={"timeout": req_timeout.total, "url": url}
+                context={"timeout": req_timeout.total, "url": url},
             ) from e
 
+        # 2. Ошибка соединения / сети
         except aiohttp.ClientError as e:
             self.circuit_breaker.record_failure()
             raise LeyaLLMConnectionError(
                 "Ошибка соединения с LLM",
-                context={"error_type": type(e).__name__, "detail": str(e), "url": url}
+                context={
+                    "error_type": type(e).__name__,
+                    "detail": str(e),
+                    "url": url,
+                },
             ) from e
 
-        # Наши обёрнутые исключения — пробрасываем как есть
+        # 3. Ошибка парсинга JSON (если произошла вне блока resp.json)
+        except json.JSONDecodeError as e:
+            self.circuit_breaker.record_failure()
+            raise LeyaJSONParseError(
+                "Ошибка парсинга JSON в LLM-ответе",
+                context={"detail": str(e), "url": url},
+            ) from e
+
+        # 4. Наши специфичные исключения — пробрасываем как есть
         except (LeyaLLMError, LeyaJSONParseError):
             raise
 
-        # Last-resort
+        # 5. BaseException-подклассы — пробрасываем немедленно
+        #    (Ctrl+C, отмена задачи, выход из процесса)
         except asyncio.CancelledError:
             raise
         except KeyboardInterrupt:
             raise
         except SystemExit:
             raise
-        except (RuntimeError, ValueError, TypeError) as e:
-            logger.error(
-                f"Ошибка в LLM client: {type(e).__name__}: {e}",
-                exc_info=True,
-                extra={"context": {"url": url, "model": self.model}}
-            )
-            self.circuit_breaker.record_failure()
-            raise LeyaLLMError(
-                f"Ошибка при обращении к LLM: {type(e).__name__}",
-                context={"error_type": type(e).__name__, "detail": str(e)}
-            ) from e
+
+        # 6. Last resort: НЕОЖИДАННЫЕ исключения
+        #    ТОЛЬКО логирование + немедленный re-raise БЕЗ обёртки.
+        #    Это позволяет видеть реальный тип исключения и не маскировать баги.
         except Exception as e:
-            logger.error(
-                f"Неожиданная ошибка в LLM client: {type(e).__name__}: {e}",
-                exc_info=True,
-                extra={"context": {"url": url, "model": self.model}}
+            logger.exception(
+                "Unexpected error in LLM call",
+                extra={"context": {"url": url, "model": self.model}},
             )
-            self.circuit_breaker.record_failure()
-            raise LeyaLLMError(
-                f"Неожиданная ошибка при обращении к LLM: {type(e).__name__}",
-                context={"error_type": type(e).__name__, "detail": str(e)}
-            ) from e
+            # record_failure НЕ вызываем — неизвестная природа ошибки,
+            # не хотим ложно открывать Circuit Breaker.
+            raise
 
-
+    # =====================================================================
+    # chat — публичный метод с retry
+    # =====================================================================
     async def chat(
         self,
         prompt: str,
@@ -411,6 +443,13 @@ class OllamaClient:
     ) -> str:
         """Отправка запроса к Ollama с retry и exponential backoff.
 
+        Retry применяется ТОЛЬКО для transient-ошибок:
+        - LeyaLLMTimeoutError
+        - LeyaLLMConnectionError
+
+        Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error) не ретраим —
+        эти ошибки обычно стабильны, повтор не поможет.
+
         Args:
             prompt: Промпт для LLM
             system: Системный промпт (опционально)
@@ -418,13 +457,11 @@ class OllamaClient:
             timeout: Таймаут запроса
             max_retries: Максимальное количество попыток (по умолчанию 3)
             max_tokens: Максимальное количество токенов в ответе
-                        (переопределяет self.max_tokens для данного вызова)
+                         (переопределяет self.max_tokens для данного вызова)
 
         Returns:
             Ответ LLM или fallback
         """
-        from .exceptions import LeyaLLMTimeoutError, LeyaLLMConnectionError, LeyaLLMError
-
         last_exception = None
 
         for attempt in range(max_retries):
@@ -439,23 +476,23 @@ class OllamaClient:
             except (LeyaLLMTimeoutError, LeyaLLMConnectionError) as e:
                 last_exception = e
                 if attempt < max_retries - 1:
-                    # Exponential backoff: 1s, 2s, 4s
+                    # Exponential backoff: 1s, 2s, 4s + jitter
                     wait_time = (2 ** attempt) + random.uniform(0, 1)
                     logger.warning(
-                        f"Retry {attempt + 1}/{max_retries} после {wait_time}s "
+                        f"Retry {attempt + 1}/{max_retries} после {wait_time:.1f}s "
                         f"(ошибка: {type(e).__name__})"
                     )
                     await asyncio.sleep(wait_time)
                 else:
                     # Последняя попытка провалилась
                     logger.error(
-                        f"Все {max_retries} попыток провалились: {type(e).__name__}: {e}"
+                        f"Все {max_retries} попыток провалились: "
+                        f"{type(e).__name__}: {e}"
                     )
                     raise
-            except LeyaLLMError:
-                # Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error) не ретраим.
-                # Эти ошибки обычно стабильны — повтор не поможет.
-                # Retry только для transient ошибок: timeout и connection.
+            except (LeyaLLMError, LeyaJSONParseError):
+                # Другие LLM-ошибки (HTTP 500, пустой ответ, JSON parse error)
+                # не ретраим. Эти ошибки обычно стабильны — повтор не поможет.
                 raise
 
         # Не должно достигнуть сюда, но на всякий случай
