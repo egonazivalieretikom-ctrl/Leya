@@ -1,9 +1,7 @@
-"""
+r"""
 leya_core/thinker.py — Когнитивный планировщик Леи.
-
 Этап 1.5: Pydantic модель, улучшенный repair_json, реальный токенизатор,
 relevance-based truncation, structured error при failure.
-
 Шаг 1.3: repair_json улучшен:
 - Early return для валидного JSON (не трогаем оригинал)
 - Лимит длины 100KB (защита от DoS)
@@ -129,7 +127,7 @@ REPAIR_JSON_MAX_DEPTH: int = 1000
 
 
 def repair_json(raw: str) -> str:
-    """Улучшенный repair_json для обработки malformed JSON от LLM.
+    r"""Улучшенный repair_json для обработки malformed JSON от LLM.
 
     Этап 1.5: repair_json теперь вспомогательный (не основной путь).
     Основной путь — Pydantic валидация. repair_json используется как fallback.
@@ -140,7 +138,7 @@ def repair_json(raw: str) -> str:
     - Лимит глубины вложенности 1000 (защита от stack overflow)
     - Корректная обработка всех escape-последовательностей:
       \\, \", \/, \b, \f, \n, \r, \t, \uXXXX, \UXXXXXXXX
-    - Защита от одиночного \\ в конце строки
+    - Защита от одиночного \ в конце строки
 
     Обрабатывает:
     - Markdown code blocks (```json ... ```)
