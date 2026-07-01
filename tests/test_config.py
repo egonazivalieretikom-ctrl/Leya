@@ -141,3 +141,146 @@ def test_explicit_error_on_invalid_env():
     env = {"OLLAMA_TIMEOUT": "not_a_number"}
     with patch.dict(os.environ, env, clear=True), pytest.raises(LeyaConfigError):
         LeyaConfig.from_env()
+
+# =================================================================================
+# HMAC VALIDATION TESTS
+# =================================================================================
+class TestHMACValidation:
+    """Тесты валидации HMAC-ключа в MemoryConfig."""
+
+    def test_short_hmac_key_raises_error(self, tmp_path):
+        """Короткий HMAC-ключ (< 32 символов) → LeyaConfigError."""
+        from leya_core.config import MemoryConfig
+        from leya_core.exceptions import LeyaConfigError
+
+        with pytest.raises(LeyaConfigError) as exc_info:
+            MemoryConfig(
+                brain_dir=str(tmp_path),
+                hmac_key="short_key",  # < 32 символов
+                unsafe_mode=False,
+            )
+        assert "HMAC_KEY" in str(exc_info.value) or "короче 32" in str(exc_info.value)
+
+    def test_empty_hmac_key_raises_error(self, tmp_path):
+        """Пустой HMAC-ключ → LeyaConfigError (без unsafe_mode)."""
+        from leya_core.config import MemoryConfig
+        from leya_core.exceptions import LeyaConfigError
+
+        with pytest.raises(LeyaConfigError):
+            MemoryConfig(
+                brain_dir=str(tmp_path),
+                hmac_key="",
+                unsafe_mode=False,
+            )
+
+    def test_strong_hmac_key_accepted(self, tmp_path):
+        """Сильный HMAC-ключ (≥32 символов) → OK."""
+        from leya_core.config import MemoryConfig
+
+        config = MemoryConfig(
+            brain_dir=str(tmp_path),
+            hmac_key="a" * 32,  # Ровно 32 символа
+            unsafe_mode=False,
+        )
+        assert config.hmac_key == "a" * 32
+
+    def test_unsafe_mode_allows_empty_key(self, tmp_path):
+        """unsafe_mode=True разрешает пустой ключ (warning, но не ошибка)."""
+        from leya_core.config import MemoryConfig
+
+        config = MemoryConfig(
+            brain_dir=str(tmp_path),
+            hmac_key="",
+            unsafe_mode=True,
+        )
+        assert config.hmac_key == ""
+
+
+# =================================================================================
+# INT/FLOAT PARSING TESTS
+# =================================================================================
+class TestIntFloatParsing:
+    """Тесты парсинга int и float в config.py."""
+
+    def test_parse_int_valid(self):
+        """Валидный int → корректное значение."""
+        from leya_core.config import _parse_int
+
+        assert _parse_int("42", 0, "test_field") == 42
+        assert _parse_int("0", 10, "test_field") == 0
+        assert _parse_int("-5", 0, "test_field") == -5
+
+    def test_parse_int_none_returns_default(self):
+        """None → default значение."""
+        from leya_core.config import _parse_int
+
+        assert _parse_int(None, 100, "test_field") == 100
+
+    def test_parse_int_invalid_raises_error(self):
+        """Невалидный int → LeyaConfigError."""
+        from leya_core.config import _parse_int
+        from leya_core.exceptions import LeyaConfigError
+
+        with pytest.raises(LeyaConfigError) as exc_info:
+            _parse_int("not_a_number", 0, "OLLAMA_TIMEOUT")
+        assert "целое число" in str(exc_info.value)
+
+    def test_parse_float_valid(self):
+        """Валидный float → корректное значение."""
+        from leya_core.config import _parse_float
+
+        assert _parse_float("3.14", 0.0, "test_field") == 3.14
+        assert _parse_float("0.5", 1.0, "test_field") == 0.5
+        assert _parse_float("-2.7", 0.0, "test_field") == -2.7
+
+    def test_parse_float_none_returns_default(self):
+        """None → default значение."""
+        from leya_core.config import _parse_float
+
+        assert _parse_float(None, 2.5, "test_field") == 2.5
+
+    def test_parse_float_invalid_raises_error(self):
+        """Невалидный float → LeyaConfigError."""
+        from leya_core.config import _parse_float
+        from leya_core.exceptions import LeyaConfigError
+
+        with pytest.raises(LeyaConfigError) as exc_info:
+            _parse_float("not_a_number", 0.0, "OLLAMA_TEMPERATURE")
+        assert "число" in str(exc_info.value)
+
+
+# =================================================================================
+# ENV LOADING EDGE CASES
+# =================================================================================
+class TestEnvLoadingEdgeCases:
+    """Тесты загрузки конфигурации из .env с edge cases."""
+
+    def test_missing_env_uses_defaults(self, monkeypatch):
+        """Отсутствующие переменные окружения → default значения."""
+        from leya_core.config import LeyaConfig
+
+        # Очищаем все переменные окружения Leya
+        for key in list(os.environ.keys()):
+            if key.startswith("LEYA_") or key.startswith("OLLAMA_"):
+                monkeypatch.delenv(key, raising=False)
+
+        # Устанавливаем unsafe_mode, чтобы избежать ошибки HMAC
+        monkeypatch.setenv("LEYA_UNSAFE_MODE", "1")
+
+        config = LeyaConfig.from_env()
+        assert config.ollama.model == "qwen2.5:14b-instruct-q3_K_M"
+        assert config.memory.embedding_model == "all-MiniLM-L6-v2"
+
+    def test_partial_env_loading(self, monkeypatch, tmp_path):
+        """Частичная загрузка: некоторые переменные заданы, другие — default."""
+        from leya_core.config import LeyaConfig
+
+        monkeypatch.setenv("LEYA_UNSAFE_MODE", "1")
+        monkeypatch.setenv("OLLAMA_TEMPERATURE", "0.9")
+        monkeypatch.setenv("LEYA_BRAIN_DIR", str(tmp_path))
+
+        config = LeyaConfig.from_env()
+        assert config.ollama.temperature == 0.9
+        assert config.memory.brain_dir == str(tmp_path)
+        # Остальные поля — default
+        assert config.ollama.timeout == 180
