@@ -584,7 +584,14 @@ class MetaCognition(IMetaCognition):
 
 CRITICAL: Return ONLY valid JSON. No text before or after. No markdown blocks.
 """
-
+        try:
+            response = await self._call_llm(prompt)
+        except LeyaLLMError as e:
+            logger.warning(f"Existential inquiry: LLM error: {e}")
+            return
+        except Exception as e:
+            logger.warning(f"Existential inquiry: unexpected error: {e}")
+            return
         try:
             response = await self._call_llm(prompt)
             cleaned = repair_json(response)
