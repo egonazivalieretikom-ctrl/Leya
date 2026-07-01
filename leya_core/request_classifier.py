@@ -91,11 +91,12 @@ HEURISTIC_PATTERNS: dict[UserIntent, list[tuple[str, float]]] = {
     UserIntent.PERSONAL: [
         (r"\b(ты\s+кто|расскажи\s+о\s+себе|твоё\s+имя|сколько\s+тебе\s+лет|ты\s+живая)\b", 0.85),
     ],
-     UserIntent.STATUS: [
+    # В HEURISTIC_PATTERNS для UserIntent.STATUS заменить:
+    UserIntent.STATUS: [
         (r"как\s+(ты\s+)?себя\s+чувствуешь", 0.95),
         (r"какое\s+(у\s+тебя\s+)?состояние", 0.95),
         (r"что\s+ты\s+(сейчас\s+)?делаешь", 0.95),
-        (r"\b(дела|настроение|состояние|чувствуешь)\b", 0.6),
+        (r"\b(делаешь|дела|настроение|состояние|чувствуешь)\b", 0.6), 
     ],
 }
 
@@ -345,40 +346,44 @@ class RequestClassifier:
         return None
 
     def _extract_distance(self, item) -> float | None:
-        """Извлечение distance из Engram или dict.
-    
-        Поддерживает оба формата:
-        - distance (ChromaDB)
-        - similarity (mock в тестах)
-        """
+        """Извлечение distance из Engram или dict."""
         # Вариант 1: Engram с атрибутом distance
         if hasattr(item, "distance"):
             distance = item.distance
             if isinstance(distance, (int, float)):
                 return float(distance)
-    
+
         # Вариант 2: metadata внутри Engram
         if hasattr(item, "metadata") and isinstance(item.metadata, dict):
             distance = item.metadata.get("distance")
             if isinstance(distance, (int, float)):
                 return float(distance)
         
-            # Поддержка similarity (конвертация в distance)
             similarity = item.metadata.get("similarity")
             if isinstance(similarity, (int, float)):
                 return 1.0 - float(similarity)
-    
+
         # Вариант 3: item — это dict
         if isinstance(item, dict):
             distance = item.get("distance")
             if isinstance(distance, (int, float)):
                 return float(distance)
         
-            # Поддержка similarity (конвертация в distance)
             similarity = item.get("similarity")
             if isinstance(similarity, (int, float)):
                 return 1.0 - float(similarity)
-    
+        
+            # НОВОЕ: Проверяем metadata внутри dict
+            metadata = item.get("metadata")
+            if isinstance(metadata, dict):
+                distance = metadata.get("distance")
+                if isinstance(distance, (int, float)):
+                    return float(distance)
+            
+                similarity = metadata.get("similarity")
+                if isinstance(similarity, (int, float)):
+                    return 1.0 - float(similarity)
+
         return None
 
     async def _llm_classify(self, user_input: str) -> IntentClassification:

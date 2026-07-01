@@ -183,11 +183,6 @@ class TestRepairJsonPropertyBased:
             # Допустимо для невалидного ввода
             pass
 
-    @pytest.mark.xfail(
-        reason="Hypothesis нашёл edge case: ',}' — это невалидный JSON (trailing comma), "
-        "и repair_json правильно его чинит. Тест ожидает, что repair_json не изменит "
-        "валидный JSON, но ',}' невалиден. Требует пересмотра теста."
-    )
     @given(
         response=st.text(min_size=0, max_size=100),
         monologue=st.text(min_size=0, max_size=100),
