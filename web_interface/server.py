@@ -406,8 +406,9 @@ def create_app(web_environment) -> FastAPI:
         if not web_environment.leya:
             return {}
         try:
-            if hasattr(web_environment, "soul_manager"):
-                return web_environment.soul_manager.get_all_contents()
+            if hasattr(web_environment, "soul_manager") and web_environment.soul_manager is not None:
+                # ✅ ИСПРАВЛЕНО: используем метод из ISoulManager Protocol
+                return web_environment.soul_manager.load_all()
             return {}
         except LeyaSoulError as exc:
             logger.error(f"Ошибка души: {exc}", exc_info=True)
@@ -426,12 +427,13 @@ def create_app(web_environment) -> FastAPI:
             content = request.get("content", "")
             if not filename:
                 return JSONResponse({"error": "filename не указан"}, status_code=400)
-            if hasattr(web_environment, "soul_manager"):
-                result = web_environment.soul_manager.write_file(filename, content)
+            if hasattr(web_environment, "soul_manager") and web_environment.soul_manager is not None:
+                # ✅ ИСПРАВЛЕНО: используем метод из ISoulManager Protocol
+                web_environment.soul_manager.update_file(filename, content)
                 await web_environment.broadcast_soul_update(
-                    web_environment.soul_manager.get_all_contents()
+                    web_environment.soul_manager.load_all()
                 )
-                return {"status": "ok", "result": result}
+                return {"status": "ok", "filename": filename}
             return JSONResponse({"error": "SoulManager не доступен"}, status_code=500)
         except LeyaSoulError as exc:
             logger.error(f"Ошибка обновления души: {exc}", exc_info=True)

@@ -213,12 +213,27 @@ class OllamaClient:
         require_json: bool = False,
         timeout: float | None = None,
     ) -> str:
-        """Обёртка для обратной совместимости с memory.py."""
+        """Обёртка для обратной совместимости с memory.py.
+
+        Полностью делегирует chat(), корректно передавая ВСЕ параметры,
+        включая max_tokens (ранее игнорировался).
+
+        Args:
+            prompt: Промпт для генерации
+            system: Системный промпт (опционально)
+            max_tokens: Максимальное количество токенов в ответе
+            require_json: Требовать JSON-формат
+            timeout: Таймаут запроса
+
+        Returns:
+            Сгенерированный текст
+        """
         return await self.chat(
             prompt=prompt,
             system=system,
             require_json=require_json,
             timeout=timeout,
+            max_tokens=max_tokens,
         )
 
     async def __aenter__(self) -> OllamaClient:
@@ -233,8 +248,18 @@ class OllamaClient:
         system: str | None = None,
         require_json: bool = False,
         timeout: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        """Внутренняя реализация chat без retry."""
+        """Внутренняя реализация chat без retry.
+
+        Args:
+            prompt: Промпт для LLM
+            system: Системный промпт (опционально)
+            require_json: Требовать JSON-формат ответа
+            timeout: Таймаут запроса (переопределяет self.timeout)
+            max_tokens: Максимальное количество токенов в ответе
+                        (переопределяет self.max_tokens для данного вызова)
+        """
         from .exceptions import (
             LeyaLLMConnectionError,
             LeyaLLMTimeoutError,
@@ -258,6 +283,9 @@ class OllamaClient:
             self._session = aiohttp.ClientSession()
 
         url = f"{self.base_url}/api/chat"
+
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+
         payload = {
             "model": self.model,
             "stream": False,
@@ -265,7 +293,7 @@ class OllamaClient:
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
-                "num_predict": self.max_tokens,
+                "num_predict": effective_max_tokens,
                 "repeat_penalty": self.repeat_penalty,
             },
             "messages": [],
@@ -379,6 +407,7 @@ class OllamaClient:
         require_json: bool = False,
         timeout: float | None = None,
         max_retries: int = 3,
+        max_tokens: int | None = None,
     ) -> str:
         """Отправка запроса к Ollama с retry и exponential backoff.
 
@@ -388,6 +417,8 @@ class OllamaClient:
             require_json: Требовать JSON-формат
             timeout: Таймаут запроса
             max_retries: Максимальное количество попыток (по умолчанию 3)
+            max_tokens: Максимальное количество токенов в ответе
+                        (переопределяет self.max_tokens для данного вызова)
 
         Returns:
             Ответ LLM или fallback
@@ -395,7 +426,7 @@ class OllamaClient:
         from .exceptions import LeyaLLMTimeoutError, LeyaLLMConnectionError, LeyaLLMError
 
         last_exception = None
-    
+
         for attempt in range(max_retries):
             try:
                 return await self._chat_impl(
@@ -403,6 +434,7 @@ class OllamaClient:
                     system=system,
                     require_json=require_json,
                     timeout=timeout,
+                    max_tokens=max_tokens,
                 )
             except (LeyaLLMTimeoutError, LeyaLLMConnectionError) as e:
                 last_exception = e

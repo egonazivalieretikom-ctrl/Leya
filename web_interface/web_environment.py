@@ -102,9 +102,28 @@ class WebEnvironment(Environment):
         self.message_queue = asyncio.Queue()
         self.input_queue = self.message_queue
         self.connected_clients: set[WebSocket] = set()
+        self._broadcast_lock = asyncio.Lock()
         self.message_history: list[dict] = []
         self.max_history = 100
         self._heartbeat_tasks: dict[WebSocket, asyncio.Task] = {}
+
+        # ✅ ИСПРАВЛЕНО: проброс soul_manager из LeyaOS через публичный атрибут.
+        # WebEnvironment не создаёт SoulCryptoManager сам — это нарушало бы
+        # single source of truth. LeyaOS владеет менеджером, web получает ссылку.
+        # Это соответствует ISoulManager Protocol (load_all / update_file).
+        self.soul_manager = None
+        if hasattr(leya_os, "soul_crypto_manager") and leya_os.soul_crypto_manager is not None:
+            self.soul_manager = leya_os.soul_crypto_manager
+            logger.info(
+                "WebEnvironment: soul_manager проброшен из LeyaOS "
+                "(тип=%s)",
+                type(self.soul_manager).__name__,
+            )
+        else:
+            logger.warning(
+                "WebEnvironment: soul_crypto_manager недоступен в LeyaOS, "
+                "эндпоинты /api/soul будут возвращать пустой ответ"
+            )
 
     async def connect(self, websocket: WebSocket):
         """Подключение нового клиента. Единственный способ подключения."""
