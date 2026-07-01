@@ -395,7 +395,7 @@ def _safe_parse_json(raw: str) -> CognitiveOutput:
                 context={
                     "raw_preview": raw[:200],
                     "action_intent": (
-                        parsed.action_intent.value if parsed.action_intent else None
+                        parsed.action_intent if parsed.action_intent else None
                     ),
                 },
             )
