@@ -31,7 +31,8 @@ def test_from_env_all_fields():
         "SYNAPSE_LEARNING_RATE": "0.1",
         "SYNAPSE_MAX_WEIGHT": "0.9",
         "MAX_SELF_MODEL_LENGTH": "6000",
-        "HMAC_KEY": "secret_key_123",
+        # ✅ ИСПРАВЛЕНО (Этап 3.2): Правильное имя переменной и длина ≥32
+        "LEYA_STATE_HMAC_KEY": "a" * 40,  # Было: "HMAC_KEY": "secret_key_123"
         "STATE_VERSION": "2",
         # Drives
         "METABOLISM_INTERVAL": "120",
@@ -87,7 +88,6 @@ def test_from_env_all_fields():
         "LOG_FILE": "custom.log",
         "LOG_FORMAT": "custom_format",
     }
-
     with patch.dict(os.environ, env_vars, clear=True):
         config = LeyaConfig.from_env()
 
@@ -99,7 +99,7 @@ def test_from_env_all_fields():
     # Memory (проверяем новые и ранее скрытые поля)
     assert config.memory.forgetting_threshold == 0.2
     assert config.memory.synapse_learning_rate == 0.1
-    assert config.memory.hmac_key == "secret_key_123"
+    assert config.memory.hmac_key == "a" * 40  # Было: "secret_key_123"
     assert config.memory.state_version == 2
 
     # Homeostasis (проверяем thresholds)

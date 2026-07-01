@@ -136,7 +136,7 @@ def memory_with_fake_chroma(tmp_path):
     """Создаёт MemorySystem с мокнутым Chroma-клиентом."""
     from leya_core.config import MemoryConfig
 
-    cfg = MemoryConfig(brain_dir=str(tmp_path), hmac_key="test_key")
+    cfg = MemoryConfig(brain_dir=str(tmp_path), hmac_key="YURPm_zimc0fThT-YxV-wtBM383uh7TTkwk6SbJimh8")
 
     with patch("chromadb.PersistentClient") as mock_client_cls:
         fake_client = FakeChromaClient()

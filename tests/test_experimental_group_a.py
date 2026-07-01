@@ -1,34 +1,36 @@
 """Тесты Группы A: DecisionEngine + EmotionalSupport.
-
 Проверяем:
-- Protocol compliance
-- Parametrized тесты на 20+ сценариев
-- Feature flags (включено/выключено)
-- Graceful degradation
-- Integration with LeyaOS
+Protocol compliance
+Parametrized тесты на 20+ сценариев
+Feature flags (включено/выключено)
+Graceful degradation
+Integration with LeyaOS
 """
-
 from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-
-from leya_core.config import LeyaConfig
+from leya_core.config import LeyaConfig, MemoryConfig
 from leya_core.drives import DriveType
 from leya_core.experimental.decision_engine import Decision, DecisionEngine
 from leya_core.experimental.emotional_support import EmotionalSupport, EmotionState
 from leya_core.interfaces import IDecisionEngine
 
-# =================================================================================
+# Тестовый HMAC-ключ (≥32 символов)
+TEST_HMAC_KEY = "YURPm_zimc0fThT-YxV-wtBM383uh7TTkwk6SbJimh8" + "x" * 10
+
+# =========================================================================
 # DECISION ENGINE TESTS
-# =================================================================================
-
-
+# =========================================================================
 class TestDecisionEngine:
     """Тесты DecisionEngine."""
 
     @pytest.fixture
     def config(self):
-        cfg = LeyaConfig()
+        cfg = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         cfg.experimental.enable_decision_engine = True
         return cfg
 
@@ -37,12 +39,14 @@ class TestDecisionEngine:
         return DecisionEngine(config)
 
     def test_protocol_compliance(self):
-        from leya_core.config import LeyaConfig
-        from leya_core.experimental.decision_engine import DecisionEngine
-
-        config = LeyaConfig()
-        engine = DecisionEngine(config=config.experimental)
         """Проверка Protocol compliance."""
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
+        engine = DecisionEngine(config=config.experimental)
         assert engine is not None
 
     @pytest.mark.asyncio
@@ -109,18 +113,20 @@ class TestDecisionEngine:
         assert "tools_used" in stats
         assert "last_confidence" in stats
 
-
-# =================================================================================
+# =========================================================================
 # EMOTIONAL SUPPORT TESTS
-# =================================================================================
-
-
+# =========================================================================
 class TestEmotionalSupport:
     """Тесты EmotionalSupport."""
 
     @pytest.fixture
     def config(self):
-        cfg = LeyaConfig()
+        cfg = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         cfg.experimental.enable_emotional_support = True
         return cfg
 
@@ -130,10 +136,13 @@ class TestEmotionalSupport:
         return EmotionalSupport(config, memory)
 
     def test_protocol_compliance(self):
-        from leya_core.config import LeyaConfig
-        from leya_core.experimental.decision_engine import DecisionEngine
-
-        config = LeyaConfig()
+        """Проверка Protocol compliance."""
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         engine = DecisionEngine(config=config)
         assert isinstance(engine, IDecisionEngine)
 
@@ -282,54 +291,73 @@ class TestEmotionalSupport:
         assert "mood_distribution" in stats
         assert "history_size" in stats
 
-
-# =================================================================================
+# =========================================================================
 # FEATURE FLAG TESTS
-# =================================================================================
-
-
+# =========================================================================
 class TestFeatureFlags:
     """Тесты feature flags."""
 
     @pytest.mark.asyncio
     async def test_decision_engine_disabled_by_default(self):
         """DecisionEngine выключен по умолчанию."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         assert config.experimental.enable_decision_engine is False
 
     @pytest.mark.asyncio
     async def test_emotional_support_disabled_by_default(self):
         """EmotionalSupport выключен по умолчанию."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         assert config.experimental.enable_emotional_support is False
 
     @pytest.mark.asyncio
     async def test_decision_engine_can_be_enabled(self):
         """DecisionEngine можно включить."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         config.experimental.enable_decision_engine = True
         assert config.experimental.enable_decision_engine is True
 
     @pytest.mark.asyncio
     async def test_emotional_support_can_be_enabled(self):
         """EmotionalSupport можно включить."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         config.experimental.enable_emotional_support = True
         assert config.experimental.enable_emotional_support is True
 
-
-# =================================================================================
+# =========================================================================
 # GRACEFUL DEGRADATION TESTS
-# =================================================================================
-
-
+# =========================================================================
 class TestGracefulDegradation:
     """Тесты graceful degradation."""
 
     @pytest.mark.asyncio
     async def test_decision_engine_survives_invalid_drive_state(self):
         """DecisionEngine не падает на невалидном drive_state."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         engine = DecisionEngine(config)
 
         # Невалидный drive_state
@@ -340,7 +368,12 @@ class TestGracefulDegradation:
     @pytest.mark.asyncio
     async def test_emotional_support_survives_empty_text(self):
         """EmotionalSupport не падает на пустом тексте."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         support = EmotionalSupport(config, None)
 
         state = await support.analyze_user_state("")
@@ -350,7 +383,12 @@ class TestGracefulDegradation:
     @pytest.mark.asyncio
     async def test_emotional_support_survives_no_memory(self):
         """EmotionalSupport работает без memory."""
-        config = LeyaConfig()
+        config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key=TEST_HMAC_KEY,  # ✅ Передаём валидный ключ
+            )
+        )
         support = EmotionalSupport(config, None)
 
         state = await support.analyze_user_state("привет")

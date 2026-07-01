@@ -23,7 +23,14 @@ def temp_brain_dir():
 @pytest.fixture
 def memory_system(temp_brain_dir):
     """Инициализация MemorySystem для тестов с моком эмбеддингов."""
-    config = MemoryConfig(brain_dir=str(temp_brain_dir))
+    from leya_core.config import MemoryConfig
+    from leya_core.memory import MemorySystem
+    
+    config = MemoryConfig(
+        brain_dir=temp_brain_dir,
+        embedding_model="all-MiniLM-L6-v2",
+        hmac_key="test_hmac_key_for_tests_" + "x" * 10,  # ✅ 33 символа
+    )
 
     # Мокаем ChromaDB и эмбеддинги
     with (

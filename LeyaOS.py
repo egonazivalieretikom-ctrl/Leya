@@ -220,35 +220,28 @@ class LeyaOS:
             raise
 
         # ===================================================================
-        # ✅ Полная проверка Protocol-интерфейсов — ПОСЛЕ создания всех компонентов
+        # ✅ Проверка Protocol-интерфейсов — ПОСЛЕ создания всех компонентов
         # ===================================================================
-        # Если проверка не прошла — вызываем cleanup и поднимаем TypeError.
-        # Это гарантирует, что все компоненты соответствуют контракту до начала работы.
-        # Используем isinstance (не issubclass) — проверяем экземпляр, а не класс.
-
-        _protocol_checks: list[tuple[str, Any, type]] = [
-            ("memory", self.memory, IMemorySystem),
-            ("drives", self.drives, IDriveSystem),
-            ("workspace", self.workspace, IGlobalWorkspace),
-            ("constitutional", self.constitutional, IConstitutionalLayer),
-            ("homeostasis", self.homeostasis, IHomeostasisEngine),
-            ("thinker", self.thinker, ICoreThinker),
-            ("reflection", self.reflection, IMetaCognition),
-            ("llm_client", self.llm_client, ILLMClient),
-            ("env", self.env, IEnvironment),
+        _protocol_checks = [
+            ("memory", getattr(self, 'memory', None), IMemorySystem),
+            ("drives", getattr(self, 'drives', None), IDriveSystem),
+            ("workspace", getattr(self, 'workspace', None), IGlobalWorkspace),
+            ("constitutional", getattr(self, 'constitutional', None), IConstitutionalLayer),
+            ("homeostasis", getattr(self, 'homeostasis', None), IHomeostasisEngine),
+            ("thinker", getattr(self, 'thinker', None), ICoreThinker),
+            ("reflection", getattr(self, 'reflection', None), IMetaCognition),
+            ("llm_client", getattr(self, 'llm_client', None), ILLMClient),
+            ("env", getattr(self, 'env', None), IEnvironment),
         ]
 
-        # SoulCryptoManager — опционален (может быть None при ошибке инициализации)
-        if self.soul_crypto_manager is not None:
-            _protocol_checks.append(("soul_crypto_manager", self.soul_crypto_manager, ISoulManager))
-
         for component_name, component, protocol in _protocol_checks:
+            if component is None:
+                continue  # Компонент не был создан (ошибка инициализации)
             if not isinstance(component, protocol):
                 self._cleanup_resources()
                 raise TypeError(
                     f"Компонент '{component_name}' (тип {type(component).__name__}) "
-                    f"не реализует Protocol {protocol.__name__}. "
-                    f"Проверьте сигнатуры методов и аннотации типов."
+                    f"не реализует Protocol {protocol.__name__}."
                 )
 
         logger.info(

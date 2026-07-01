@@ -29,10 +29,15 @@ class TestProtocolCompliance:
     """Тесты соответствия Protocol-интерфейсам."""
 
     def test_memory_system_implements_protocol(self, tmp_path):
+        """MemorySystem реализует IMemorySystem Protocol."""
         from leya_core.config import MemoryConfig
+        from leya_core.memory import MemorySystem
 
-        config = MemoryConfig(brain_dir=str(tmp_path / "brain"))
-        memory = MemorySystem(config=config)
+        config = MemoryConfig(
+            brain_dir=str(tmp_path / "brain"),
+            hmac_key="YURPm_zimc0fThT-YxV-wtBM383uh7TTkwk6SbJimh8" + "x" * 10,  # ✅ Добавлено
+        )
+        memory = MemorySystem(config)
         assert isinstance(memory, IMemorySystem)
 
     def test_drive_system_implements_protocol(self, test_drives_config):

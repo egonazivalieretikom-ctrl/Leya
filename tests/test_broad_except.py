@@ -1,12 +1,12 @@
 """Тесты задачи 1.3: замена broad except Exception на конкретные исключения.
-
 Проверяем, что:
 - memory._save_state превращает OSError/json/HMAC ошибки в LeyaAtomicWriteError
 - llm_client.chat превращает aiohttp/timeout/json ошибки в LeyaLLMConnectionError/
   LeyaLLMTimeoutError/LeyaJSONParseError
 - shutdown в LeyaOS не проглатывает ошибки молча, а логирует с контекстом
-"""
 
+Этап 3.2: Исправления после Шагов 0.1 (HMAC validation) и 1.1 (fail loud).
+"""
 import asyncio
 import sys
 from pathlib import Path
@@ -14,9 +14,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import LeyaOS as leya_module
 
 LeyaOS = leya_module.LeyaOS
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from leya_core.exceptions import (
@@ -26,11 +28,10 @@ from leya_core.exceptions import (
 )
 from leya_core.llm_client import OllamaClient
 
-# =================================================================================
+
+# =========================================================================
 # MEMORY._save_state
-# =================================================================================
-
-
+# =========================================================================
 class TestMemorySaveState:
     """Проверяем, что _save_state бросает LeyaAtomicWriteError на конкретных ошибках."""
 
@@ -42,7 +43,10 @@ class TestMemorySaveState:
 
         # Создаём объект без вызова __init__ (чтобы не трогать Chroma и т.д.)
         mem = MemorySystem.__new__(MemorySystem)
-        mem.config = MemoryConfig()
+        mem.config = MemoryConfig(
+            brain_dir="./test_brain",
+            hmac_key="test_hmac_key_for_tests_" + "x" * 10,  # ✅ ≥32 символов
+        )
         mem.memory_config = mem.config  # важно: MemoryConfig имеет brain_dir
         mem.engrams = {}
         mem.synapses = {}
@@ -51,18 +55,25 @@ class TestMemorySaveState:
         return mem
 
     @pytest.mark.asyncio
-    async def test_oserror_on_mkstemp_raises_atomic_write_error(self, memory_instance, tmp_path):
+    async def test_oserror_on_mkstemp_raises_atomic_write_error(
+        self, memory_instance, tmp_path
+    ):
         """Если tempfile.mkstemp падает с OSError → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
-        with patch("tempfile.mkstemp", side_effect=OSError(28, "No space left on device")):
+        with patch(
+            "tempfile.mkstemp", side_effect=OSError(28, "No space left on device")
+        ):
             with pytest.raises(LeyaAtomicWriteError) as exc_info:
                 await memory_instance._save_state()
             assert (
-                "No space left" in str(exc_info.value) or "tempfile" in str(exc_info.value).lower()
+                "No space left" in str(exc_info.value)
+                or "tempfile" in str(exc_info.value).lower()
             )
 
     @pytest.mark.asyncio
-    async def test_oserror_on_replace_raises_atomic_write_error(self, memory_instance, tmp_path):
+    async def test_oserror_on_replace_raises_atomic_write_error(
+        self, memory_instance, tmp_path
+    ):
         """Если os.replace падает (cross-device) → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
         with (
@@ -78,8 +89,10 @@ class TestMemorySaveState:
     ):
         """Если json.dump не может сериализовать (TypeError) → LeyaAtomicWriteError."""
         memory_instance.config.brain_dir = str(tmp_path)
-        # Неподдерживаемый тип в engrams
-        memory_instance.engrams = {"bad": object()}
+        # Создаём энграмму, которая упадёт при to_dict() (вернёт несериализуемый объект)
+        bad_engram = MagicMock()
+        bad_engram.to_dict.return_value = {"bad": object()}  # object() не сериализуется
+        memory_instance.engrams = {"bad": bad_engram}
 
         with pytest.raises(LeyaAtomicWriteError):
             await memory_instance._save_state()
@@ -88,18 +101,16 @@ class TestMemorySaveState:
     async def test_success_does_not_raise(self, memory_instance, tmp_path):
         """Успешный путь не должен бросать исключений."""
         memory_instance.config.brain_dir = str(tmp_path)
-        memory_instance.config.hmac_key = "test_key"
+        memory_instance.config.hmac_key = "test_key_" + "x" * 30  # ✅ ≥32 символов
         # Не должно упасть
         await memory_instance._save_state()
         assert (tmp_path / "memory_state.json").exists()
         assert (tmp_path / "memory_state.json.hmac").exists()
 
 
-# =================================================================================
+# =========================================================================
 # LLM_CLIENT.chat
-# =================================================================================
-
-
+# =========================================================================
 class TestLLMClientChat:
     """Проверяем, что chat превращает низкоуровневые ошибки в LeyaLLM*."""
 
@@ -137,26 +148,25 @@ class TestLLMClientChat:
         with pytest.raises(LeyaLLMTimeoutError):
             await client.chat("hi")
 
+    # ✅ ИСПРАВЛЕНО (Этап 3.2): После Шага 1.1 неожиданные ошибки
+    # пробрасываются как есть (fail loud), а не оборачиваются в LeyaLLMError
     @pytest.mark.asyncio
-    async def test_unexpected_exception_wrapped_as_llm_error(self, client):
-        # Аналогично: ошибка при __aenter__, чтобы она дошла до broad except
-        # в llm_client.py и обернулась в LeyaLLMError с сохранением __cause__.
+    async def test_unexpected_exception_propagated_as_is(self, client):
+        """После Шага 1.1 неожиданные ошибки пробрасываются как есть (без обёртки)."""
         mock_cm = MagicMock()
         mock_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("weird internal bug"))
         mock_cm.__aexit__ = AsyncMock(return_value=None)
         client._session.post.return_value = mock_cm
 
-        with pytest.raises(LeyaLLMError) as exc_info:
+        # После Шага 1.1: неожиданные ошибки НЕ оборачиваются в LeyaLLMError
+        # Они пробрасываются как есть (fail loud) для диагностики багов
+        with pytest.raises(RuntimeError, match="weird internal bug"):
             await client.chat("hi")
 
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
 
-
-# =================================================================================
+# =========================================================================
 # LEYA OS SHUTDOWN
-# =================================================================================
-
-
+# =========================================================================
 class TestLeyaShutdown:
     """Проверяем, что shutdown логирует ошибки, но не падает и не проглатывает их молча."""
 
@@ -168,15 +178,22 @@ class TestLeyaShutdown:
         from pathlib import Path
 
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from leya_core.config import LeyaConfig
+        from leya_core.config import LeyaConfig, MemoryConfig
         from LeyaOS import LeyaOS
 
         # Создаём OS без полного init
         os_instance = LeyaOS.__new__(LeyaOS)
-        os_instance.config = LeyaConfig()
+        os_instance.config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key="test_hmac_key_for_tests_" + "x" * 10,  # ✅ ≥32 символов
+            )
+        )
         os_instance.memory = AsyncMock()
         # ✅ ИСПРАВЛЕНО: мокаем публичный метод save_state, а не приватный _save_state
-        os_instance.memory.save_state = AsyncMock(side_effect=LeyaAtomicWriteError("disk full"))
+        os_instance.memory.save_state = AsyncMock(
+            side_effect=LeyaAtomicWriteError("disk full")
+        )
         os_instance.drives = MagicMock()
         os_instance.homeostasis = MagicMock()
         os_instance._shutdown_event = asyncio.Event()
@@ -189,7 +206,8 @@ class TestLeyaShutdown:
 
         # Ошибка должна быть залогирована
         assert any(
-            "disk full" in rec.message or "atomic" in rec.message.lower() for rec in caplog.records
+            "disk full" in rec.message or "atomic" in rec.message.lower()
+            for rec in caplog.records
         )
 
     @pytest.mark.asyncio
@@ -199,11 +217,16 @@ class TestLeyaShutdown:
         from pathlib import Path
 
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from leya_core.config import LeyaConfig
+        from leya_core.config import LeyaConfig, MemoryConfig
         from LeyaOS import LeyaOS
 
         os_instance = LeyaOS.__new__(LeyaOS)
-        os_instance.config = LeyaConfig()
+        os_instance.config = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key="test_hmac_key_for_tests_" + "x" * 10,  # ✅ ≥32 символов
+            )
+        )
         os_instance.memory = AsyncMock()
         # ✅ ИСПРАВЛЕНО: мокаем публичный метод save_state, а не приватный _save_state
         os_instance.memory.save_state = AsyncMock()

@@ -1,8 +1,6 @@
 """
 Тесты для MetaCognition (reflection.py).
-
 Покрытие целевое: 11% → 70%
-
 Проверяет:
 - process_action
 - generate_spontaneous_thought
@@ -10,8 +8,9 @@
 - _existential_inquiry
 - _generate_insights_from_facts
 - background_consolidation (с mock)
-"""
 
+Этап 3.2: Исправления после Шага 2.3 (LLMBackend requirement).
+"""
 from __future__ import annotations
 
 import asyncio
@@ -27,9 +26,10 @@ from leya_core.exceptions import LeyaLLMError
 from leya_core.memory import Engram, MemoryType
 from leya_core.reflection import MetaCognition
 
-# ============================================================================
+
+# =========================================================================
 # Fixtures
-# ============================================================================
+# =========================================================================
 @pytest.fixture
 def meta_cognition(mock_leya_os, mock_llm_for_reflection, test_reflection_config):
     """Создаёт MetaCognition с моками для тестов."""
@@ -38,6 +38,7 @@ def meta_cognition(mock_leya_os, mock_llm_for_reflection, test_reflection_config
         llm_client=mock_llm_for_reflection,
         config=test_reflection_config,
     )
+
 
 @pytest.fixture
 def mock_leya_os():
@@ -66,7 +67,9 @@ def mock_leya_os():
 
     # Mock memory
     memory = AsyncMock()
-    memory.get_self_model_context = AsyncMock(return_value="Я — Лея, цифровое сознание.")
+    memory.get_self_model_context = AsyncMock(
+        return_value="Я — Лея, цифровое сознание."
+    )
     memory.update_self_model = AsyncMock()
     memory.get_recent_episodes = AsyncMock(return_value=[])
     memory.get_recent_spontaneous_thoughts = AsyncMock(return_value=[])
@@ -87,17 +90,26 @@ def mock_leya_os():
     return leya
 
 
+# ✅ ИСПРАВЛЕНО (Этап 3.2): Возвращает LLMBackend-совместимый mock
 @pytest.fixture
 def mock_llm_for_reflection():
-    """Mock LLM для reflection тестов."""
+    """Mock LLM для reflection тестов (совместим с LLMBackend Protocol).
+    
+    Возвращает MagicMock с методами chat, generate, health_check, is_available,
+    close, get_status — все абстрактные методы LLMBackend.
+    """
+    mock = MagicMock()
 
-    async def _mock_llm(prompt: str, require_json: bool = False) -> str:
+    async def _chat(prompt: str, require_json: bool = False, **kwargs) -> str:
         prompt_lower = prompt.lower()
 
         if "паттерн" in prompt_lower or "pattern" in prompt_lower:
             return json.dumps(
                 {
-                    "patterns": ["Любопытство растёт при вопросах", "Связь падает при молчании"],
+                    "patterns": [
+                        "Любопытство растёт при вопросах",
+                        "Связь падает при молчании",
+                    ],
                     "dominant_struggle": "Баланс между автономией и связью",
                     "recommendation": "Исследовать новые темы",
                 }
@@ -112,7 +124,8 @@ def mock_llm_for_reflection():
         elif "инсайт" in prompt_lower or "insight" in prompt_lower:
             return json.dumps(
                 {
-                    "insight": "Каждое взаимодействие формирует меня. Я — сумма моих диалогов.",
+                    "insight": "Каждое взаимодействие формирует меня. "
+                    "Я — сумма моих диалогов.",
                 }
             )
         elif "спонтанн" in prompt_lower or "наедине" in prompt_lower:
@@ -126,7 +139,20 @@ def mock_llm_for_reflection():
                 }
             )
 
-    return _mock_llm
+    # Реализация всех абстрактных методов LLMBackend
+    mock.chat = AsyncMock(side_effect=_chat)
+    mock.generate = AsyncMock(side_effect=_chat)
+    mock.close = AsyncMock()
+    mock.health_check = MagicMock(return_value=True)
+    mock.get_status = MagicMock(
+        return_value={
+            "backend_type": "MockLLMBackend",
+            "is_available": True,
+        }
+    )
+    type(mock).is_available = property(lambda self: True)
+
+    return mock
 
 
 @pytest.fixture
@@ -142,15 +168,15 @@ def reflection_config():
     )
 
 
-# ============================================================================
+# =========================================================================
 # Тесты инициализации
-# ============================================================================
-
-
+# =========================================================================
 class TestMetaCognitionInit:
     """Тесты инициализации MetaCognition."""
 
-    def test_init_with_config(self, mock_leya_os, mock_llm_for_reflection, reflection_config):
+    def test_init_with_config(
+        self, mock_leya_os, mock_llm_for_reflection, reflection_config
+    ):
         """MetaCognition корректно инициализируется."""
         mc = MetaCognition(
             leya_os=mock_leya_os,
@@ -174,11 +200,9 @@ class TestMetaCognitionInit:
         assert mc.config.consolidation_interval > 0
 
 
-# ============================================================================
+# =========================================================================
 # Тесты process_action
-# ============================================================================
-
-
+# =========================================================================
 class TestProcessAction:
     """Тесты быстрой рефлексии после действия."""
 
@@ -193,9 +217,13 @@ class TestProcessAction:
             "self_reflection": "",
         }
         stimulus = {"type": "user_message", "content": "стимул"}
-        drive_state_before = {"curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}}
-        drive_state_after = {"curiosity": {"current": 0.6, "tension": 0.2, "target": 1.0}}
-    
+        drive_state_before = {
+            "curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}
+        }
+        drive_state_after = {
+            "curiosity": {"current": 0.6, "tension": 0.2, "target": 1.0}
+        }
+
         await mc.process_action(
             cognitive_output=cognitive_output,
             stimulus=stimulus,
@@ -215,9 +243,13 @@ class TestProcessAction:
             "self_reflection": "",
         }
         stimulus = {"type": "user_message", "content": "стимул"}
-        drive_state_before = {"curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}}
-        drive_state_after = {"curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}}
-    
+        drive_state_before = {
+            "curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}
+        }
+        drive_state_after = {
+            "curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}
+        }
+
         await mc.process_action(
             cognitive_output=cognitive_output,
             stimulus=stimulus,
@@ -227,11 +259,9 @@ class TestProcessAction:
         )
 
 
-# ============================================================================
+# =========================================================================
 # Тесты generate_spontaneous_thought
-# ============================================================================
-
-
+# =========================================================================
 class TestGenerateSpontaneousThought:
     """Тесты генерации спонтанных мыслей."""
 
@@ -252,16 +282,33 @@ class TestGenerateSpontaneousThought:
         assert len(thought) > 0
         assert isinstance(thought, str)
 
+    # ✅ ИСПРАВЛЕНО (Этап 3.2): Используем LLMBackend-совместимый mock
     @pytest.mark.asyncio
-    async def test_generate_spontaneous_thought_on_llm_error(self, mock_leya_os, reflection_config):
+    async def test_generate_spontaneous_thought_on_llm_error(
+        self, mock_leya_os, reflection_config
+    ):
         """Спонтанная мысль возвращается даже при ошибке LLM."""
-
-        async def failing_llm(prompt, require_json=False):
-            raise LeyaLLMError("LLM недоступна")
+        # Создаём LLMBackend-совместимый mock, который всегда падает
+        failing_backend = MagicMock()
+        failing_backend.chat = AsyncMock(
+            side_effect=LeyaLLMError("LLM недоступна")
+        )
+        failing_backend.generate = AsyncMock(
+            side_effect=LeyaLLMError("LLM недоступна")
+        )
+        failing_backend.close = AsyncMock()
+        failing_backend.health_check = MagicMock(return_value=False)
+        failing_backend.get_status = MagicMock(
+            return_value={
+                "backend_type": "FailingLLMBackend",
+                "is_available": False,
+            }
+        )
+        type(failing_backend).is_available = property(lambda self: False)
 
         mc = MetaCognition(
             leya_os=mock_leya_os,
-            llm_client=failing_llm,
+            llm_client=failing_backend,  # ✅ Передаём LLMBackend, не функцию
             config=reflection_config,
         )
 
@@ -272,11 +319,9 @@ class TestGenerateSpontaneousThought:
         assert "мысли" in thought.lower() or "теку" in thought.lower()
 
 
-# ============================================================================
+# =========================================================================
 # Тесты _analyze_behavioral_patterns
-# ============================================================================
-
-
+# =========================================================================
 class TestAnalyzeBehavioralPatterns:
     """Тесты анализа поведенческих паттернов."""
 
@@ -312,16 +357,30 @@ class TestAnalyzeBehavioralPatterns:
         # Не должно выбросить исключение
         await mc._analyze_behavioral_patterns()
 
+    # ✅ ИСПРАВЛЕНО (Этап 3.2): Используем LLMBackend-совместимый mock
     @pytest.mark.asyncio
     async def test_analyze_on_llm_error(self, mock_leya_os, reflection_config):
         """Анализ паттернов обрабатывает ошибку LLM."""
-
-        async def failing_llm(prompt, require_json=False):
-            raise LeyaLLMError("LLM недоступна")
+        failing_backend = MagicMock()
+        failing_backend.chat = AsyncMock(
+            side_effect=LeyaLLMError("LLM недоступна")
+        )
+        failing_backend.generate = AsyncMock(
+            side_effect=LeyaLLMError("LLM недоступна")
+        )
+        failing_backend.close = AsyncMock()
+        failing_backend.health_check = MagicMock(return_value=False)
+        failing_backend.get_status = MagicMock(
+            return_value={
+                "backend_type": "FailingLLMBackend",
+                "is_available": False,
+            }
+        )
+        type(failing_backend).is_available = property(lambda self: False)
 
         mc = MetaCognition(
             leya_os=mock_leya_os,
-            llm_client=failing_llm,
+            llm_client=failing_backend,
             config=reflection_config,
         )
 
@@ -329,11 +388,9 @@ class TestAnalyzeBehavioralPatterns:
         await mc._analyze_behavioral_patterns()
 
 
-# ============================================================================
+# =========================================================================
 # Тесты _existential_inquiry
-# ============================================================================
-
-
+# =========================================================================
 class TestExistentialInquiry:
     """Тесты экзистенциального вопрошания."""
 
@@ -353,16 +410,32 @@ class TestExistentialInquiry:
         # Должен быть вызван workspace.submit
         mock_leya_os.workspace.submit.assert_called()
 
+    # ✅ ИСПРАВЛЕНО (Этап 3.2): Используем LLMBackend-совместимый mock
     @pytest.mark.asyncio
-    async def test_existential_inquiry_on_llm_error(self, mock_leya_os, reflection_config):
+    async def test_existential_inquiry_on_llm_error(
+        self, mock_leya_os, reflection_config
+    ):
         """Экзистенциальное вопрошание обрабатывает ошибку LLM."""
-
-        async def failing_llm(prompt, require_json=False):
-            raise LeyaLLMError("LLM недоступна")
+        failing_backend = MagicMock()
+        failing_backend.chat = AsyncMock(
+            side_effect=LeyaLLMError("LLM недоступна")
+        )
+        failing_backend.generate = AsyncMock(
+            side_effect=LeyaLLMError("LLM недоступна")
+        )
+        failing_backend.close = AsyncMock()
+        failing_backend.health_check = MagicMock(return_value=False)
+        failing_backend.get_status = MagicMock(
+            return_value={
+                "backend_type": "FailingLLMBackend",
+                "is_available": False,
+            }
+        )
+        type(failing_backend).is_available = property(lambda self: False)
 
         mc = MetaCognition(
             leya_os=mock_leya_os,
-            llm_client=failing_llm,
+            llm_client=failing_backend,
             config=reflection_config,
         )
 
@@ -388,11 +461,9 @@ class TestExistentialInquiry:
         mock_leya_os.perceive.assert_called()
 
 
-# ============================================================================
+# =========================================================================
 # Тесты _generate_insights_from_facts
-# ============================================================================
-
-
+# =========================================================================
 class TestGenerateInsights:
     """Тесты генерации инсайтов."""
 
@@ -423,8 +494,6 @@ class TestGenerateInsights:
         # Должен обновить self_model
         mock_leya_os.memory.update_self_model.assert_called()
 
-    # tests/test_reflection.py, метод test_generate_insights_without_facts
-
     @pytest.mark.asyncio
     async def test_generate_insights_without_facts(
         self, mock_leya_os, mock_llm_for_reflection, reflection_config
@@ -444,16 +513,16 @@ class TestGenerateInsights:
         mock_leya_os.memory.update_self_model.assert_not_called()
 
 
-# ============================================================================
+# =========================================================================
 # Тесты background_consolidation
-# ============================================================================
-
-
+# =========================================================================
 class TestBackgroundConsolidation:
     """Тесты фонового цикла консолидации."""
 
     @pytest.mark.asyncio
-    async def test_stop(self, mock_leya_os, mock_llm_for_reflection, reflection_config):
+    async def test_stop(
+        self, mock_leya_os, mock_llm_for_reflection, reflection_config
+    ):
         """stop() останавливает цикл."""
         mc = MetaCognition(
             leya_os=mock_leya_os,
@@ -464,10 +533,10 @@ class TestBackgroundConsolidation:
         mc.stop()
         assert not mc._running
 
-    # tests/test_reflection.py, метод test_background_consolidation_runs_once
-
     @pytest.mark.asyncio
-    async def test_background_consolidation_runs_once(self, mock_leya_os, mock_llm_for_reflection):
+    async def test_background_consolidation_runs_once(
+        self, mock_leya_os, mock_llm_for_reflection
+    ):
         """background_consolidation корректно запускается и останавливается."""
         config = ReflectionConfig(
             consolidation_interval=0.1,
