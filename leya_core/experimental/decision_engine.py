@@ -228,6 +228,8 @@ class DecisionEngine(IDecisionEngine):
             confidence=0.85,  # Высокая уверенность для абстрактных запросов
         )
 
+    # В leya_core/experimental/decision_engine.py заменить _check_knowledge_seeking:
+
     def _check_knowledge_seeking(self, stimulus: str) -> Decision | None:
         """Проверка запроса на знание."""
         knowledge_patterns = [
@@ -248,6 +250,18 @@ class DecisionEngine(IDecisionEngine):
         topics = self._extract_topic(stimulus)
         has_knowledge_pattern = any(re.search(p, stimulus) for p in knowledge_patterns)
 
+        # ПРИОРИТЕТ 1: Вопрос с "?" → DuckDuckGo (быстрый поиск)
+        if "?" in stimulus and topics:
+            topic = " ".join(topics[:3])
+            return Decision(
+                use_tool=True,
+                tool_name="duckduckgo_search",
+                tool_parameters={"query": topic},
+                reasoning=f"Вопрос о '{topic}' → DuckDuckGo",
+                confidence=0.85,  # ✅ Увеличено с 0.70
+            )
+
+        # ПРИОРИТЕТ 2: Knowledge pattern + topics
         if has_knowledge_pattern and topics:
             topic = " ".join(topics[:3])
 
@@ -260,7 +274,7 @@ class DecisionEngine(IDecisionEngine):
                         "repo": topic,
                     },
                     reasoning=f"Техническая тема '{topic}' → GitHub",
-                    confidence=0.75,
+                    confidence=0.85,  # ✅ Увеличено с 0.75
                 )
             else:
                 return Decision(
@@ -268,18 +282,8 @@ class DecisionEngine(IDecisionEngine):
                     tool_name="wikipedia_search",
                     tool_parameters={"query": topic, "lang": "ru"},
                     reasoning=f"Тема '{topic}' → Wikipedia",
-                    confidence=0.80,
+                    confidence=0.85,  # ✅ Увеличено с 0.80
                 )
-
-        if "?" in stimulus and topics:
-            topic = " ".join(topics[:3])
-            return Decision(
-                use_tool=True,
-                tool_name="duckduckgo_search",
-                tool_parameters={"query": topic},
-                reasoning=f"Вопрос о '{topic}' → DuckDuckGo",
-                confidence=0.70,
-            )
 
         return Decision(use_tool=False, confidence=0.0)
 
@@ -304,7 +308,7 @@ class DecisionEngine(IDecisionEngine):
                 tool_name="reddit_posts",
                 tool_parameters={"subreddit": subreddit, "sort": "hot", "limit": 5},
                 reasoning=f"Социальный интерес → r/{subreddit}",
-                confidence=0.75,
+                confidence=0.85,  # ✅ Увеличено с 0.75
             )
 
         return Decision(use_tool=False, confidence=0.0)

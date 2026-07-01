@@ -76,33 +76,38 @@ class SoulCryptoManager:
     - values.txt — ценности
     """
 
-    def __init__(self, config: SoulConfig):
-        self.config = config
-        self.soul_dir = Path(config.soul_dir)
+    # В leya_core/soul_crypto_manager.py заменить __init__:
+
+    def __init__(self, config):
+        # Поддержка как LeyaConfig, так и SoulConfig
+        if hasattr(config, "soul"):
+            # Это LeyaConfig — извлекаем soul конфиг
+            self.config = config.soul
+        else:
+            # Это SoulConfig
+            self.config = config
     
+        self.soul_dir = Path(self.config.soul_dir)
+
         # Инициализация HMAC ключа
-        hmac_key_value = config.hmac_key
+        hmac_key_value = self.config.hmac_key
         self._hmac_key = hmac_key_value.encode("utf-8") if hmac_key_value else b""
-    
-        # Версионирование (ОДИН РАЗ!)
-        self._enable_versioning = (
-            getattr(config, "enable_versioning", False)
-            or getattr(getattr(config, "soul", None), "enable_versioning", False)
-            or getattr(getattr(config, "experimental", None), "enable_versioning", False)
-        )
-    
+
+        # Версионирование
+        self._enable_versioning = getattr(self.config, "enable_versioning", False)
+
         # Создание директории
         try:
             self.soul_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Не удалось создать soul_dir {self.soul_dir}: {e}")
             raise
-    
+
         # История версий
         self._history: list[SoulVersion] = []
         self._history_file = self.soul_dir / ".soul_history.json"
         self._load_history()
-    
+
         # Статистика
         self._stats = {
             "loads": 0,
@@ -110,7 +115,7 @@ class SoulCryptoManager:
             "tamper_attempts": 0,
             "rollbacks": 0,
         }
-    
+
         logger.info(
             f"✅ SoulCryptoManager инициализирован: "
             f"hmac={'enabled' if self._hmac_key else 'disabled'}, "

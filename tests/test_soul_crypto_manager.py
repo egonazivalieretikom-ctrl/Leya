@@ -14,14 +14,10 @@ import time
 
 import pytest
 
-from leya_core.config import LeyaConfig
+from leya_core.config import LeyaConfig, MemoryConfig
 from leya_core.soul_crypto_manager import (
     SoulCryptoManager,
     SoulTamperError,
-)
-
-pytestmark = pytest.mark.xfail(
-    reason="soul_crypto.py — orphaned experimental модуль, требует ADR и интеграции"
 )
 
 
@@ -47,29 +43,38 @@ def soul_dir(tmp_path):
 @pytest.fixture
 def config_with_hmac(soul_dir):
     """Конфигурация с сильным HMAC ключом."""
-    cfg = LeyaConfig()
+    cfg = LeyaConfig(
+        memory=MemoryConfig(
+            brain_dir="./test_brain",
+            hmac_key="test-strong-secret-key-32-chars!!",  # ✅ Валидный ключ
+            unsafe_mode=True,  # ✅ Передаём в MemoryConfig
+        )
+    )
     cfg.soul.soul_dir = str(soul_dir)
     cfg.soul.hmac_key = "test-strong-secret-key-32-chars!!"
     cfg.soul.enable_versioning = True
     cfg.soul.max_history_size = 10
     return cfg
 
-
 @pytest.fixture
 def config_without_hmac(soul_dir):
     """Конфигурация без HMAC ключа (disabled)."""
-    cfg = LeyaConfig()
+    cfg = LeyaConfig(
+        memory=MemoryConfig(
+            brain_dir="./test_brain",
+            hmac_key="",  # Пустой ключ
+            unsafe_mode=True,  # ✅ Передаём в MemoryConfig
+        )
+    )
     cfg.soul.soul_dir = str(soul_dir)
     cfg.soul.hmac_key = ""
     cfg.soul.enable_versioning = False
     return cfg
 
-
 @pytest.fixture
 def manager(config_with_hmac):
     """SoulCryptoManager с HMAC."""
     return SoulCryptoManager(config_with_hmac)
-
 
 @pytest.fixture
 def manager_no_hmac(config_without_hmac):
@@ -287,13 +292,23 @@ class TestFeatureFlags:
     """Тесты feature flags."""
 
     def test_hmac_disabled_by_default(self):
-        """HMAC protection выключена по умолчанию."""
-        cfg = LeyaConfig()
+        cfg = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key="",
+                unsafe_mode=True,
+            )
+        )
         assert cfg.soul.hmac_key == ""
 
     def test_versioning_disabled_by_default(self):
-        """Versioning выключен по умолчанию."""
-        cfg = LeyaConfig()
+        cfg = LeyaConfig(
+            memory=MemoryConfig(
+                brain_dir="./test_brain",
+                hmac_key="",
+                unsafe_mode=True,
+            )
+        )
         assert cfg.soul.enable_versioning is False
 
     def test_can_enable_hmac(self, config_with_hmac):

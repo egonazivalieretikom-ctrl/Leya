@@ -321,11 +321,12 @@ class RequestClassifier:
             similarity = 1.0 - distance
 
             if similarity >= self.cache_similarity_threshold:
-                metadata = (
-                    item.metadata 
-                    if hasattr(item, "metadata") and isinstance(item.metadata, dict)
-                    else {}
-                )
+                if isinstance(item, dict):
+                    metadata = item.get("metadata", {})
+                elif hasattr(item, "metadata") and isinstance(item.metadata, dict):
+                    metadata = item.metadata
+                else:
+                    metadata = {}
                 cached_intent = metadata.get("intent")
                 cached_confidence = metadata.get("confidence", 0.0)
                 cached_topic = metadata.get("topic")
@@ -353,33 +354,34 @@ class RequestClassifier:
             if isinstance(distance, (int, float)):
                 return float(distance)
 
-        # Вариант 2: metadata внутри Engram
+        # Вариант 2: metadata внутри Engram (объект)
         if hasattr(item, "metadata") and isinstance(item.metadata, dict):
             distance = item.metadata.get("distance")
             if isinstance(distance, (int, float)):
                 return float(distance)
-        
+            
             similarity = item.metadata.get("similarity")
             if isinstance(similarity, (int, float)):
                 return 1.0 - float(similarity)
 
         # Вариант 3: item — это dict
         if isinstance(item, dict):
+            # Сначала проверяем на верхнем уровне
             distance = item.get("distance")
             if isinstance(distance, (int, float)):
                 return float(distance)
-        
+            
             similarity = item.get("similarity")
             if isinstance(similarity, (int, float)):
                 return 1.0 - float(similarity)
-        
-            # НОВОЕ: Проверяем metadata внутри dict
+            
+            # НОВОЕ: Проверяем вложенный metadata внутри dict
             metadata = item.get("metadata")
             if isinstance(metadata, dict):
                 distance = metadata.get("distance")
                 if isinstance(distance, (int, float)):
                     return float(distance)
-            
+                
                 similarity = metadata.get("similarity")
                 if isinstance(similarity, (int, float)):
                     return 1.0 - float(similarity)

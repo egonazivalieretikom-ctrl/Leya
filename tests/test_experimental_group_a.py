@@ -69,9 +69,8 @@ class TestDecisionEngine:
             ("улучши себя", {DriveType.AUTONOMY: 0.7}, "read_soul_file"),
         ],
     )
-    @pytest.mark.xfail(reason="DecisionEngine: экспериментальный модуль, требует улучшения логики")
     async def test_decision_scenarios(
-        self, engine, stimulus, tension, drive_tension, expected_tool
+        self, engine, stimulus, drive_tension, expected_tool
     ):
         """Parametrized тесты на 20+ сценариев."""
         decision = await engine.make_decision(stimulus, drive_tension)

@@ -36,7 +36,7 @@ class SoulTamperError(LeyaError):
     pass
 
 
-class SoulVersionError(LeyaError):  # ← ДОБАВЛЕНО
+class SoulVersionError(LeyaError, ValueError):
     """Ошибка работы с версиями soul (откат, история, несовместимость формата)."""
 
 
