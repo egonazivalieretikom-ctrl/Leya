@@ -41,6 +41,7 @@ from .exceptions import (
 from .interfaces import IMetaCognition
 from .thinker import repair_json
 from .memory import MemoryType
+from .exceptions import LeyaLLMError
 
 
 logger = logging.getLogger(__name__)
@@ -281,7 +282,14 @@ class MetaCognition(IMetaCognition):
     }}
     """
         
-            response = await self.llm_client(prompt)
+            try:
+                response = await self.llm_client(prompt)
+            except LeyaLLMError as e:
+                logger.warning(f"Existential inquiry: LLM error: {e}")
+                return
+            except Exception as e:
+                logger.warning(f"Existential inquiry: unexpected error: {e}")
+                return
             cleaned = repair_json(response)
             analysis = json.loads(cleaned) if cleaned != "{}" else {}
         

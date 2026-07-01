@@ -180,11 +180,9 @@ class RequestClassifier:
 
         # Уровень 2: Быстрая эвристика
         heuristic_result = self._heuristic_classify(user_input)
-        if heuristic_result.confidence >= self.use_llm_threshold:
-            logger.debug(
-                f"Эвристика уверена: {heuristic_result.intent} "
-                f"(confidence={heuristic_result.confidence:.2f})"
-            )
+        if heuristic_result and heuristic_result.confidence >= self.use_llm_threshold:
+            # Сохраняем в cache
+            asyncio.create_task(self.save_to_cache(heuristic_result))
             return heuristic_result
 
         # Уровень 3: LLM (с graceful degradation)
@@ -471,3 +469,34 @@ class RequestClassifier:
             logger.debug(f"Классификация сохранена в cache: {classification.intent}")
         except Exception as e:
             logger.warning(f"Ошибка сохранения в cache: {e}", exc_info=True)
+
+    async def _get_from_cache(self, user_input: str) -> Optional[IntentClassification]:
+        """Ищет похожий запрос в кеше."""
+        if not hasattr(self, '_cache_collection') or self._cache_collection is None:
+            return None
+    
+        try:
+            query_embedding = await asyncio.to_thread(self._embedding_fn, [user_input])
+            results = await asyncio.to_thread(
+                self._cache_collection.query,
+                query_embeddings=query_embedding,
+                n_results=1,
+            )
+        
+            if results and results.get('ids') and results['ids'][0]:
+                distance = results.get('distances', [[1.0]])[0][0]
+                similarity = 1.0 - distance
+            
+                if similarity >= self.cache_similarity_threshold:
+                    metadata = results['metadatas'][0][0]
+                    return IntentClassification(
+                        intent=UserIntent(metadata['intent']),
+                        confidence=metadata['confidence'],
+                        raw_input=user_input,
+                        topic=metadata.get('topic') or None,
+                        source="cache",  # ← ВАЖНО: source должен быть "cache"
+                    )
+        except Exception as e:
+            logger.warning(f"Ошибка поиска в cache: {e}")
+    
+        return None

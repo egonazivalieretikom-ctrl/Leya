@@ -252,22 +252,14 @@ class TestSafeParseJson:
         assert output.response == "test"
 
     def test_parse_invalid_json_raises_error(self):
-        """Невалидный JSON должен возвращать дефолтный CognitiveOutput."""
         invalid_json = "not json at all"
-    
-        # repair_json возвращает "{}", Pydantic принимает с дефолтами
-        result = _safe_parse_json(invalid_json)
-        assert result.response == ""
-        assert result.action_intent == ActionIntent.RESPOND
+        with pytest.raises(LeyaJSONParseError):
+            _safe_parse_json(invalid_json)
 
     def test_parse_valid_json_but_invalid_pydantic_raises_error(self):
-        """Валидный JSON, но не соответствующий схеме, должен возвращать дефолт."""
         valid_json_but_wrong_schema = '{"foo": "bar"}'
-    
-        # repair_json возвращает "{}", Pydantic принимает с дефолтами
-        result = _safe_parse_json(valid_json_but_wrong_schema)
-        assert result.response == ""
-        assert result.action_intent == ActionIntent.RESPOND
+        with pytest.raises(LeyaJSONParseError):
+            _safe_parse_json(valid_json_but_wrong_schema)
 
 
 # =================================================================================

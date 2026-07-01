@@ -664,7 +664,7 @@ class LeyaOS:
 
         # 2. Драйвы + Гомеостаз + Workspace + Constitutional + Reflection
         # через StatePersistence
-        if self.persistence is not None:
+        if getattr(self, 'persistence', None) is not None:
             try:
                 state_data = {
                     "drives": (
@@ -2601,7 +2601,7 @@ class LeyaOS:
                     break
 
                 # Сохраняем состояние драйвов через StatePersistence
-                if self.persistence is not None:
+                if getattr(self, 'persistence', None) is not None:
                     try:
                         state_data = {
                             "drives": (

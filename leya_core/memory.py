@@ -1142,7 +1142,7 @@ class MemorySystem:
                 f.flush()
                 os.fsync(f.fileno())
 
-            if not self._disable_hmac_check:
+            if not getattr(self, '_disable_hmac_check', False):
                 key = self._get_hmac_key()
                 signature = self._compute_hmac(tmp_path, key)
                 (state_path.with_suffix(state_path.suffix + ".hmac")).write_text(
@@ -1227,7 +1227,7 @@ class MemorySystem:
         hmac_path = state_path.with_suffix(state_path.suffix + ".hmac")
 
         # Проверка HMAC (если не отключена)
-        if not self._disable_hmac_check:
+        if not getattr(self, '_disable_hmac_check', False):
             key = self._get_hmac_key()
 
             if hmac_path.exists():

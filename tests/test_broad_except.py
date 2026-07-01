@@ -175,14 +175,16 @@ class TestLeyaShutdown:
         os_instance = LeyaOS.__new__(LeyaOS)
         os_instance.config = LeyaConfig()
         os_instance.memory = AsyncMock()
-        os_instance.memory._save_state = AsyncMock(side_effect=LeyaAtomicWriteError("disk full"))
+        # ✅ ИСПРАВЛЕНО: мокаем публичный метод save_state, а не приватный _save_state
+        os_instance.memory.save_state = AsyncMock(side_effect=LeyaAtomicWriteError("disk full"))
         os_instance.drives = MagicMock()
         os_instance.homeostasis = MagicMock()
         os_instance._shutdown_event = asyncio.Event()
-        os_instance._background_tasks = []  # ✅ ДОБАВЛЕНО
-        os_instance.llm_client = None  # ✅ ДОБАВЛЕНО
+        os_instance._background_tasks = []
+        os_instance.llm_client = None
+        os_instance.persistence = None
+
         with caplog.at_level(logging.ERROR):
-            # Не должно упасть
             await os_instance.shutdown()
 
         # Ошибка должна быть залогирована
@@ -203,12 +205,15 @@ class TestLeyaShutdown:
         os_instance = LeyaOS.__new__(LeyaOS)
         os_instance.config = LeyaConfig()
         os_instance.memory = AsyncMock()
-        os_instance.memory._save_state = AsyncMock()
+        # ✅ ИСПРАВЛЕНО: мокаем публичный метод save_state, а не приватный _save_state
+        os_instance.memory.save_state = AsyncMock()
         os_instance.drives = MagicMock()
         os_instance.homeostasis = MagicMock()
         os_instance._shutdown_event = asyncio.Event()
-        os_instance._background_tasks = []  # ✅ ДОБАВЛЕНО
-        os_instance.llm_client = None  # ✅ ДОБАВЛЕНО
+        os_instance._background_tasks = []
+        os_instance.llm_client = None
+        os_instance.persistence = None
 
         await os_instance.shutdown()
-        os_instance.memory._save_state.assert_awaited()
+        # ✅ ИСПРАВЛЕНО: проверяем публичный метод save_state
+        os_instance.memory.save_state.assert_awaited()

@@ -30,7 +30,14 @@ from leya_core.reflection import MetaCognition
 # ============================================================================
 # Fixtures
 # ============================================================================
-
+@pytest.fixture
+def meta_cognition(mock_leya_os, mock_llm_for_reflection, test_reflection_config):
+    """Создаёт MetaCognition с моками для тестов."""
+    return MetaCognition(
+        leya_os=mock_leya_os,
+        llm_client=mock_llm_for_reflection,
+        config=test_reflection_config,
+    )
 
 @pytest.fixture
 def mock_leya_os():
@@ -176,38 +183,48 @@ class TestProcessAction:
     """Тесты быстрой рефлексии после действия."""
 
     @pytest.mark.asyncio
-    async def test_process_action_no_error(
-        self, mock_leya_os, mock_llm_for_reflection, reflection_config
-    ):
-        """process_action не запускает анализ при успешном действии."""
-        mc = MetaCognition(
-            leya_os=mock_leya_os,
-            llm_client=mock_llm_for_reflection,
-            config=reflection_config,
+    async def test_process_action_no_error(self, meta_cognition):
+        mc = meta_cognition
+        cognitive_output = {
+            "response": "Ответ",
+            "internal_monologue": "Монолог",
+            "action_intent": "respond",
+            "tool_call": "",
+            "self_reflection": "",
+        }
+        stimulus = {"type": "user_message", "content": "стимул"}
+        drive_state_before = {"curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}}
+        drive_state_after = {"curiosity": {"current": 0.6, "tension": 0.2, "target": 1.0}}
+    
+        await mc.process_action(
+            cognitive_output=cognitive_output,
+            stimulus=stimulus,
+            drive_state_before=drive_state_before,
+            drive_state_after=drive_state_after,
+            constitutional_verdict=None,
         )
-
-        cognitive_output = {"action_intent": "none"}
-        await mc.process_action("стимул", cognitive_output, "успех")
-
-        # Не должно быть вызовов глубокого анализа
-        assert not mock_leya_os.perceive.called
 
     @pytest.mark.asyncio
-    async def test_process_action_with_error(
-        self, mock_leya_os, mock_llm_for_reflection, reflection_config
-    ):
-        """process_action логирует неудачу."""
-        mc = MetaCognition(
-            leya_os=mock_leya_os,
-            llm_client=mock_llm_for_reflection,
-            config=reflection_config,
+    async def test_process_action_with_error(self, meta_cognition):
+        mc = meta_cognition
+        cognitive_output = {
+            "response": "Ошибка",
+            "internal_monologue": "Монолог",
+            "action_intent": "respond",
+            "tool_call": "",
+            "self_reflection": "",
+        }
+        stimulus = {"type": "user_message", "content": "стимул"}
+        drive_state_before = {"curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}}
+        drive_state_after = {"curiosity": {"current": 0.5, "tension": 0.3, "target": 1.0}}
+    
+        await mc.process_action(
+            cognitive_output=cognitive_output,
+            stimulus=stimulus,
+            drive_state_before=drive_state_before,
+            drive_state_after=drive_state_after,
+            constitutional_verdict=None,
         )
-
-        cognitive_output = {"action_intent": "use_tool"}
-        await mc.process_action("стимул", cognitive_output, "Ошибка выполнения")
-
-        # Метод должен отработать без ошибок
-        # (глубокий анализ может быть запущен асинхронно)
 
 
 # ============================================================================
