@@ -85,8 +85,10 @@ from leya_core.interfaces import (
     IEnvironment,
     IGlobalWorkspace,
     IHomeostasisEngine,
+    ILLMClient,
     IMemorySystem,
     IMetaCognition,
+    ISoulManager,
 )
 
 from leya_core.llm_client import OllamaBackend
@@ -141,17 +143,6 @@ class LeyaOS:
                     raise LeyaConfigError(f"config.{section} отсутствует или равен None")
             
             self.config = config
-
-        # Предварительная проверка типов (до создания ресурсов)
-        if not issubclass(DriveSystem, IDriveSystem):
-            raise TypeError("DriveSystem должен реализовывать IDriveSystem")
-        if not issubclass(GlobalWorkspace, IGlobalWorkspace):
-            raise TypeError("GlobalWorkspace должен реализовывать IGlobalWorkspace")
-        if not issubclass(ConstitutionalLayer, IConstitutionalLayer):
-            raise TypeError("ConstitutionalLayer должен реализовывать IConstitutionalLayer")
-        if not issubclass(MemorySystem, IMemorySystem):
-            raise TypeError("MemorySystem должен реализовывать IMemorySystem")
-
     
         # Конституционный слой
         self.constitutional = ConstitutionalLayer(
@@ -229,20 +220,48 @@ class LeyaOS:
             raise
 
         # ===================================================================
-        # ✅ Проверка Protocol-интерфейсов — ТОЛЬКО ПОСЛЕ создания всех компонентов!
+        # ✅ Полная проверка Protocol-интерфейсов — ПОСЛЕ создания всех компонентов
         # ===================================================================
-        if not isinstance(self.memory, IMemorySystem):
-            self._cleanup_resources()
-            raise TypeError("memory должен реализовывать IMemorySystem")
-        if not isinstance(self.drives, IDriveSystem):
-            self._cleanup_resources()
-            raise TypeError("drives должен реализовывать IDriveSystem")
-        if not isinstance(self.workspace, IGlobalWorkspace):
-            self._cleanup_resources()
-            raise TypeError("workspace должен реализовывать IGlobalWorkspace")
-        if not isinstance(self.constitutional, IConstitutionalLayer):
-            self._cleanup_resources()
-            raise TypeError("constitutional должен реализовывать IConstitutionalLayer")
+        # Если проверка не прошла — вызываем cleanup и поднимаем TypeError.
+        # Это гарантирует, что все компоненты соответствуют контракту до начала работы.
+        # Используем isinstance (не issubclass) — проверяем экземпляр, а не класс.
+
+        _protocol_checks: list[tuple[str, Any, type]] = [
+            ("memory", self.memory, IMemorySystem),
+            ("drives", self.drives, IDriveSystem),
+            ("workspace", self.workspace, IGlobalWorkspace),
+            ("constitutional", self.constitutional, IConstitutionalLayer),
+            ("homeostasis", self.homeostasis, IHomeostasisEngine),
+            ("thinker", self.thinker, ICoreThinker),
+            ("reflection", self.reflection, IMetaCognition),
+            ("llm_client", self.llm_client, ILLMClient),
+            ("env", self.env, IEnvironment),
+        ]
+
+        # SoulCryptoManager — опционален (может быть None при ошибке инициализации)
+        if self.soul_crypto_manager is not None:
+            _protocol_checks.append(("soul_crypto_manager", self.soul_crypto_manager, ISoulManager))
+
+        for component_name, component, protocol in _protocol_checks:
+            if not isinstance(component, protocol):
+                self._cleanup_resources()
+                raise TypeError(
+                    f"Компонент '{component_name}' (тип {type(component).__name__}) "
+                    f"не реализует Protocol {protocol.__name__}. "
+                    f"Проверьте сигнатуры методов и аннотации типов."
+                )
+
+        logger.info(
+            f"✅ Все {len(_protocol_checks)} компонентов прошли Protocol-проверки"
+        )
+
+        # ToolGenerator — опционален (может быть None), но если создан — проверяем
+        if self.tool_generator is not None and not hasattr(self.tool_generator, "analyze_and_generate"):
+            logger.warning(
+                f"tool_generator ({type(self.tool_generator).__name__}) "
+                f"не имеет метода analyze_and_generate. Генерация инструментов отключена."
+            )
+            self.tool_generator = None
 
         # Thinker — передаём абстрактный LLMBackend напрямую
         self.thinker = CoreThinker(

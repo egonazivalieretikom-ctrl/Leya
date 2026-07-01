@@ -277,31 +277,65 @@ class ICoreThinker(IThinker, Protocol):
 # =============================================================================
 @runtime_checkable
 class IReflection(Protocol):
-    """Интерфейс мета-когниции (рефлексии)."""
+    """Интерфейс мета-когниции (рефлексии).
+    
+    Синхронизирован с MetaCognition (reflection.py) на 1 июля 2026.
+    """
 
     async def process_action(
-        self, stimulus: str, cognitive_output: Any, result: str
+        self,
+        cognitive_output: Any,
+        stimulus: dict[str, Any],
+        drive_state_before: dict[str, Any],
+        drive_state_after: dict[str, Any],
+        constitutional_verdict: Any = None,
     ) -> None:
-        """Обрабатывает выполненное действие и генерирует рефлексию."""
+        """Быстрая рефлексия после каждого акта мышления.
+        
+        Анализирует изменение драйвов, конституциональную проверку,
+        успешность действия. При неудаче запускает глубокий анализ.
+        
+        Args:
+            cognitive_output: Результат мышления (dict с response, action_intent и т.д.)
+            stimulus: Исходный стимул (dict)
+            drive_state_before: Состояние драйвов ДО действия
+            drive_state_after: Состояние драйвов ПОСЛЕ действия
+            constitutional_verdict: Результат конституциональной проверки (опционально)
+        """
         ...
 
     async def generate_spontaneous_thought(self) -> str | None:
-        """Генерирует спонтанную мысль."""
+        """Генерация спонтанной мысли (аналог потока сознания).
+        
+        Returns:
+            Текст спонтанной мысли или None
+        """
         ...
 
     async def background_consolidation(self) -> None:
-        """Фоновая консолидация."""
+        """Фоновая консолидация (аналог сна).
+        
+        Запускается периодически, анализирует паттерны поведения,
+        генерирует инсайты, задаёт экзистенциальные вопросы.
+        """
         ...
 
     @property
     def is_sleeping(self) -> bool:
-        """Флаг: находится ли Лея в состоянии "сна"."""
+        """Флаг: находится ли Лея в состоянии "сна" (рефлексии).
+        
+        Read-only для внешних потребителей.
+        """
         ...
 
 
 @runtime_checkable
 class IMetaCognition(IReflection, Protocol):
-    """Альтернативное имя для IReflection."""
+    """Альтернативное имя для IReflection (для обратной совместимости).
+    
+    Исторически MetaCognition и Reflection — один и тот же класс.
+    Этот алиас сохранён для совместимости с кодом, использующим имя IMetaCognition.
+    """
     ...
 
 
@@ -326,8 +360,16 @@ class IEnvironment(Protocol):
 # LLM Client Interface
 # =============================================================================
 @runtime_checkable
+@runtime_checkable
 class ILLMClient(Protocol):
-    """Интерфейс клиента LLM (синхронизирован с OllamaClient)."""
+    """Интерфейс клиента LLM.
+    
+    Синхронизирован с OllamaBackend (бывший OllamaClient) на 1 июля 2026.
+    
+    Структурная типизация (Protocol): любой объект с этими методами
+    считается ILLMClient, даже без явного наследования.
+    Это позволяет использовать mock-объекты в тестах.
+    """
 
     async def chat(
         self,
@@ -335,8 +377,22 @@ class ILLMClient(Protocol):
         system: str | None = None,
         require_json: bool = False,
         timeout: float | None = None,
+        max_retries: int = 3,
+        max_tokens: int | None = None,
     ) -> str:
-        """Отправляет запрос к LLM."""
+        """Отправка запроса к LLM с retry-логикой.
+        
+        Args:
+            prompt: Промпт для LLM
+            system: Системный промпт (опционально)
+            require_json: Требовать JSON-формат ответа
+            timeout: Таймаут запроса (переопределяет дефолт бэкенда)
+            max_retries: Максимальное количество попыток
+            max_tokens: Максимальное количество токенов в ответе
+            
+        Returns:
+            Текстовый ответ LLM
+        """
         ...
 
     async def generate(
@@ -345,13 +401,45 @@ class ILLMClient(Protocol):
         system: str | None = None,
         max_tokens: int | None = None,
         require_json: bool = False,
+        timeout: float | None = None,
     ) -> str:
-        """Генерация текста (обёртка для обратной совместимости)."""
+        """Упрощённая генерация текста (обёртка над chat).
+        
+        Используется для задач, где не требуется retry-логика
+        (например, извлечение семантических фактов в MemorySystem).
+        """
+        ...
+
+    async def close(self) -> None:
+        """Закрытие ресурсов (HTTP-сессии, соединения).
+        
+        Вызывается из LeyaOS.shutdown() при graceful shutdown.
+        """
         ...
 
     @property
     def is_available(self) -> bool:
-        """Доступен ли LLM (circuit breaker закрыт)."""
+        """Доступен ли LLM для запросов прямо сейчас.
+        
+        True если Circuit Breaker в состоянии CLOSED или HALF_OPEN,
+        False если OPEN.
+        """
+        ...
+
+    def health_check(self) -> bool:
+        """Быстрая синхронная проверка доступности LLM.
+        
+        Не делает реальный запрос — достаточно проверки состояния
+        Circuit Breaker.
+        """
+        ...
+
+    def get_status(self) -> dict[str, Any]:
+        """Диагностическая информация о состоянии бэкенда.
+        
+        Returns:
+            dict с информацией о Circuit Breaker, модели, URL и т.д.
+        """
         ...
 
 
