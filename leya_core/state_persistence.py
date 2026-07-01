@@ -49,8 +49,8 @@ class StatePersistence:
                 os.makedirs(directory, exist_ok=True)
             except OSError as exc:
                 raise LeyaPersistenceError(
-                    f"Не удалось создать директорию: {directory}",
-                    context={"path": directory, "error": str(exc)},
+                    f"Сбой сохранения состояния: {exc}",
+                    context={"path": self.state_file, "error": str(exc)},
                 ) from exc
 
     def _get_hmac_key(self) -> bytes:
@@ -96,7 +96,7 @@ class StatePersistence:
                     with contextlib.suppress(OSError):
                         os.remove(tmp_path)
                 raise LeyaPersistenceError(
-                    f"Не удалось сохранить состояние: {exc}",
+                    f"Сбой сохранения состояния: {exc}",
                     context={"path": self.state_file, "error": str(exc)},
                 ) from exc
 
@@ -106,7 +106,7 @@ class StatePersistence:
             raise
         except Exception as exc:
             raise LeyaPersistenceError(
-                f"Неожиданная ошибка при сохранении состояния: {exc}",
+                f"Сбой сохранения состояния: {exc}",
                 context={"path": self.state_file, "error": str(exc)},
             ) from exc
     
@@ -151,6 +151,6 @@ class StatePersistence:
             raise
         except Exception as exc:
             raise LeyaPersistenceError(
-                f"Неожиданная ошибка при загрузке состояния: {exc}",
+                f"Сбой сохранения состояния: {exc}",
                 context={"path": self.state_file, "error": str(exc)},
             ) from exc
